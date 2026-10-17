@@ -544,7 +544,12 @@ function App() {
         delete next[saved.id];
         return next;
       });
-      closeForm();
+      if (selectedProfileId === saved.id && editingProfile) {
+        setEditingProfile(saved);
+        setDraft(draftFor(saved));
+      } else {
+        closeForm();
+      }
     } catch (error) {
       setFormError(errorText(error));
     } finally {
@@ -742,9 +747,11 @@ function App() {
                   {isTestingConnection ? "Testing SSH…" : "Test SSH"}
                 </button>
               )}
-              <button className="button button-quiet" type="button" onClick={closeForm} disabled={isSaving}>
-                Cancel
-              </button>
+              {!selectedProfileId && (
+                <button className="button button-quiet" type="button" onClick={closeForm} disabled={isSaving}>
+                  Cancel
+                </button>
+              )}
               {editingProfile && (
                 <button className="button button-danger-quiet" type="button" onClick={() => setRemovingId(editingProfile.id)} disabled={isSaving || isRemoving || profileRemovalDisabled} title={profileRemovalDisabled ? "Stop the server before removing its profile." : undefined}>
                   Delete profile
@@ -794,12 +801,12 @@ function App() {
 
         return (
           <aside className="sidebar server-page-sidebar" aria-label={`${selectedProfile.name} navigation`}>
-            <Link className="brand" to="/" aria-label="Back to ServerCrafter servers">
+            <Link className="brand" to="/" aria-label="Back to ServerCrafter servers" onClick={closeForm}>
               <span className="brand-mark" aria-hidden="true">S</span>
               <span>ServerCrafter</span>
             </Link>
             <div className="server-page-context">
-              <button className="back-link" onClick={() => navigate("/")}>
+              <button className="back-link" onClick={() => { closeForm(); navigate("/"); }}>
                 <ArrowLeft size={15} aria-hidden="true" /> All servers
               </button>
               <h1 id="page-title">{selectedProfile.name}</h1>
@@ -824,13 +831,13 @@ function App() {
               </div>
             </section>
             <nav className="server-tab-list" aria-label="Server sections">
-              <button className={`server-tab${activeServerTab === "console" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "console" ? "page" : undefined} disabled={isFormOpen} onClick={() => { setActiveServerTab("console"); if (consoleProfileId !== selectedProfile.id) toggleConsole(selectedProfile); }}>
+              <button className={`server-tab${activeServerTab === "console" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "console" ? "page" : undefined} onClick={() => { setActiveServerTab("console"); if (consoleProfileId !== selectedProfile.id) toggleConsole(selectedProfile); }}>
                 <Terminal size={16} aria-hidden="true" /> Console
               </button>
-              <button className={`server-tab${activeServerTab === "files" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "files" ? "page" : undefined} disabled={isFormOpen} onClick={() => { setActiveServerTab("files"); if (filesProfileId !== selectedProfile.id) toggleFiles(selectedProfile); }}>
+              <button className={`server-tab${activeServerTab === "files" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "files" ? "page" : undefined} onClick={() => { setActiveServerTab("files"); if (filesProfileId !== selectedProfile.id) toggleFiles(selectedProfile); }}>
                 <FolderOpen size={16} aria-hidden="true" /> Files
               </button>
-              <button className={`server-tab${activeServerTab === "properties" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "properties" ? "page" : undefined} disabled={isFormOpen} onClick={() => { setActiveServerTab("properties"); setPropertiesProfileId(selectedProfile.id); }}>
+              <button className={`server-tab${activeServerTab === "properties" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "properties" ? "page" : undefined} onClick={() => { setActiveServerTab("properties"); setPropertiesProfileId(selectedProfile.id); }}>
                 <SlidersHorizontal size={16} aria-hidden="true" /> Properties
               </button>
               <button className={`server-tab${activeServerTab === "settings" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "settings" ? "page" : undefined} onClick={() => {
@@ -1040,24 +1047,10 @@ function App() {
                         </section>
                         <section className={`server-tab-panel server-settings-panel${isFormOpen && editingProfile?.id === profile.id ? " server-settings-editing" : ""}`} hidden={activeServerTab !== "settings"} aria-label="Server settings">
                           {isFormOpen && editingProfile?.id === profile.id ? renderProfileForm() : (
-                            <>
+                            <div className="server-tab-empty">
                               <h2>Server settings</h2>
-                              <p>Update this profile or remove it from the saved server list.</p>
-                              {removingId === profile.id ? (
-                                <div className="remove-confirm" role="group" aria-label={`Remove ${profile.name}`}>
-                                  <span>Remove profile? Server files stay untouched.</span>
-                                  <button className="button button-danger-quiet" onClick={() => void removeProfile(profile.id)} disabled={isRemoving}>
-                                    {isRemoving ? "Removing…" : "Remove profile"}
-                                  </button>
-                                  <button className="button button-quiet" onClick={() => setRemovingId(null)} disabled={isRemoving}>Cancel</button>
-                                </div>
-                              ) : (
-                                <div className="row-actions">
-                                  <button className="button button-secondary" onClick={() => openEditProfile(profile)} disabled={!isLocal && (remoteState === "running" || remoteState === "stopping" || remoteState === "unmanaged")} title={!isLocal && (remoteState === "running" || remoteState === "stopping" || remoteState === "unmanaged") ? "Stop the server before changing its connection or launch settings." : undefined}>Edit server</button>
-                                  <button className="button button-danger-quiet" onClick={() => setRemovingId(profile.id)} disabled={isLocal ? state !== "stopped" : remoteState === "running" || remoteState === "stopping" || remoteState === "unmanaged"} title={(isLocal && state !== "stopped") || remoteState === "running" || remoteState === "stopping" || remoteState === "unmanaged" ? "Stop the server before removing its profile." : undefined}>Remove profile</button>
-                                </div>
-                              )}
-                            </>
+                              <p>Stop the server before editing its profile.</p>
+                            </div>
                           )}
                         </section>
                       </div>
