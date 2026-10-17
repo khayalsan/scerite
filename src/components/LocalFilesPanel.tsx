@@ -1,19 +1,14 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { File, FilePlus2, Folder, Save, X } from "lucide-react";
-
-interface ServerFileEntry {
-  name: string;
-  path: string;
-  directory: boolean;
-  size: number;
-}
+import { serverFiles } from "../lib/serverFiles";
+import type { ServerFileEntry } from "../lib/serverFiles";
 
 interface LocalFilesPanelProps {
   profileId: string;
   serverName: string;
   canEdit: boolean;
+  remote?: boolean;
   onClose: () => void;
 }
 
@@ -27,7 +22,7 @@ function formatSize(size: number) {
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export function LocalFilesPanel({ profileId, serverName, canEdit, onClose }: LocalFilesPanelProps) {
+export function LocalFilesPanel({ profileId, serverName, canEdit, remote = false, onClose }: LocalFilesPanelProps) {
   const [directory, setDirectory] = useState("");
   const [entries, setEntries] = useState<ServerFileEntry[]>([]);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -43,12 +38,12 @@ export function LocalFilesPanel({ profileId, serverName, canEdit, onClose }: Loc
     let active = true;
     setIsLoading(true);
     setError(null);
-    void invoke<ServerFileEntry[]>("list_local_server_files", { profileId, relativePath: directory })
+    void serverFiles.list(remote, profileId, directory)
       .then((files) => { if (active) setEntries(files); })
       .catch((reason: unknown) => { if (active) setError(errorText(reason)); })
       .finally(() => { if (active) setIsLoading(false); });
     return () => { active = false; };
-  }, [directory, profileId]);
+  }, [directory, profileId, remote]);
 
   async function openFile(entry: ServerFileEntry) {
     if (entry.directory) {
@@ -63,7 +58,7 @@ export function LocalFilesPanel({ profileId, serverName, canEdit, onClose }: Loc
     if (hasUnsavedChanges && !window.confirm("Discard unsaved changes?")) return;
     setError(null);
     try {
-      const text = await invoke<string>("read_local_server_file", { profileId, relativePath: entry.path });
+      const text = await serverFiles.read(remote, profileId, entry.path);
       setSelectedPath(entry.path);
       setContent(text);
       setOriginalContent(text);
@@ -107,16 +102,11 @@ export function LocalFilesPanel({ profileId, serverName, canEdit, onClose }: Loc
     setIsSaving(true);
     setError(null);
     try {
-      await invoke("write_local_server_file", {
-        profileId,
-        relativePath: targetPath,
-        content,
-        overwrite: exists,
-      });
+      await serverFiles.write(remote, profileId, targetPath, content, exists);
       setSelectedPath(targetPath);
       setFileName(name);
       setOriginalContent(content);
-      const updated = await invoke<ServerFileEntry[]>("list_local_server_files", { profileId, relativePath: directory });
+      const updated = await serverFiles.list(remote, profileId, directory);
       setEntries(updated);
     } catch (reason) {
       setError(errorText(reason));

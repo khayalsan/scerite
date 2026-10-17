@@ -23,6 +23,10 @@ pub enum ServerTarget {
         username: String,
         #[serde(rename = "identityFile", default)]
         identity_file: Option<String>,
+        #[serde(default)]
+        directory: String,
+        #[serde(default)]
+        launch: LocalLaunchConfig,
     },
 }
 
@@ -43,7 +47,11 @@ impl ServerTarget {
                 if launch.executable.trim().is_empty() {
                     return Err("Enter a launch executable.".into());
                 }
-                if launch.arguments.iter().any(|argument| argument.contains('\0')) {
+                if launch
+                    .arguments
+                    .iter()
+                    .any(|argument| argument.contains('\0'))
+                {
                     return Err("Launch arguments cannot contain null characters.".into());
                 }
                 Ok(())
@@ -53,10 +61,14 @@ impl ServerTarget {
                 port,
                 username,
                 identity_file,
+                directory,
+                launch,
             } => {
                 if host.trim().is_empty()
                     || host.starts_with('-')
-                    || host.chars().any(|character| character.is_whitespace() || matches!(character, '@' | '/' | '\\' | '\0'))
+                    || host.chars().any(|character| {
+                        character.is_whitespace() || matches!(character, '@' | '/' | '\\' | '\0')
+                    })
                 {
                     return Err("Enter a remote host name or address.".into());
                 }
@@ -65,12 +77,39 @@ impl ServerTarget {
                 }
                 if username.trim().is_empty()
                     || username.starts_with('-')
-                    || !username.chars().all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '.' | '-'))
+                    || !username.chars().all(|character| {
+                        character.is_ascii_alphanumeric() || matches!(character, '_' | '.' | '-')
+                    })
                 {
                     return Err("Enter an SSH user name.".into());
                 }
-                if identity_file.as_ref().is_some_and(|path| path.contains('\0')) {
+                if identity_file
+                    .as_ref()
+                    .is_some_and(|path| path.contains('\0'))
+                {
                     return Err("The SSH identity path is invalid.".into());
+                }
+                let trimmed_directory = directory.trim().trim_end_matches('/');
+                if !directory.trim().is_empty()
+                    && (trimmed_directory.is_empty()
+                        || !directory.starts_with('/')
+                        || directory.chars().any(char::is_control)
+                        || trimmed_directory[1..]
+                            .split('/')
+                            .any(|part| part.is_empty() || matches!(part, "." | "..")))
+                {
+                    return Err(
+                        "Enter an absolute remote server directory without parent traversal."
+                            .into(),
+                    );
+                }
+                if launch.executable.contains('\0')
+                    || launch
+                        .arguments
+                        .iter()
+                        .any(|argument| argument.contains('\0'))
+                {
+                    return Err("Remote launch details cannot contain null characters.".into());
                 }
                 Ok(())
             }
@@ -91,6 +130,8 @@ impl ServerTarget {
                 port,
                 username,
                 identity_file,
+                directory,
+                launch,
             } => Self::Remote {
                 host: host.trim().to_owned(),
                 port,
@@ -99,6 +140,18 @@ impl ServerTarget {
                     let path = path.trim().to_owned();
                     (!path.is_empty()).then_some(path)
                 }),
+                directory: {
+                    let directory = directory.trim();
+                    if directory.len() > 1 {
+                        directory.trim_end_matches('/').to_owned()
+                    } else {
+                        directory.to_owned()
+                    }
+                },
+                launch: LocalLaunchConfig {
+                    executable: launch.executable.trim().to_owned(),
+                    arguments: launch.arguments,
+                },
             },
         }
     }

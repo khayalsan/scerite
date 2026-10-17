@@ -5,7 +5,7 @@ import { HardDrive, Network, Plus, X } from "lucide-react";
 import { serverProfiles } from "./lib/serverProfiles";
 import type { ServerProfile, ServerTarget } from "./lib/serverProfiles";
 import { serverSessions } from "./lib/serverSessions";
-import type { LocalServerStatus } from "./lib/serverSessions";
+import type { LocalServerStatus, RemoteServerStatus } from "./lib/serverSessions";
 import { LocalFilesPanel } from "./components/LocalFilesPanel";
 import "./App.css";
 
@@ -41,6 +41,11 @@ function targetFor(draft: ProfileDraft): ServerTarget {
       port: Number(draft.port),
       username: draft.username.trim(),
       identityFile: draft.identityFile.trim() || null,
+      directory: draft.directory.trim(),
+      launch: {
+        executable: draft.executable.trim(),
+        arguments: draft.arguments.split(/\r?\n/).filter((argument) => argument.trim().length > 0),
+      },
     };
   }
 
@@ -64,6 +69,9 @@ function draftFor(profile: ServerProfile): ProfileDraft {
       port: String(profile.target.port),
       username: profile.target.username,
       identityFile: profile.target.identityFile ?? "",
+      directory: profile.target.directory,
+      executable: profile.target.launch.executable,
+      arguments: profile.target.launch.arguments.join("\n"),
     };
   }
 
@@ -87,6 +95,7 @@ function App() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [statuses, setStatuses] = useState<Record<string, LocalServerStatus>>({});
+  const [remoteStatuses, setRemoteStatuses] = useState<Record<string, RemoteServerStatus | { state: "unreachable" }>>({});
   const [busySessionId, setBusySessionId] = useState<string | null>(null);
   const [connectedRemotes, setConnectedRemotes] = useState<Record<string, boolean>>({});
   const [consoleProfileId, setConsoleProfileId] = useState<string | null>(null);
@@ -172,15 +181,133 @@ function App() {
     try {
       await invoke<void>("test_remote_connection", { profileId });
       setConnectedRemotes((current) => ({ ...current, [profileId]: true }));
+      await refreshRemoteStatus(profileId);
     } catch (error) {
       setSessionError(errorText(error));
+      setRemoteStatuses((current) => ({ ...current, [profileId]: { state: "unreachable" } }));
     } finally {
       setBusySessionId(null);
     }
   }
 
+  async function refreshRemoteStatus(profileId: string) {
+    try {
+      const status = await serverSessions.remoteStatus(profileId);
+      setRemoteStatuses((current) => ({ ...current, [profileId]: status }));
+      setConnectedRemotes((current) => ({ ...current, [profileId]: true }));
+      return status;
+    } catch (error) {
+      setRemoteStatuses((current) => ({ ...current, [profileId]: { state: "unreachable" } }));
+      setConnectedRemotes((current) => ({ ...current, [profileId]: false }));
+      throw error;
+    }
+  }
+
+  function toggleConsole(profile: ServerProfile) {
+    if (consoleProfileId === profile.id) {
+      setConsoleProfileId(null);
+      return;
+    }
+    setConsoleInput("");
+    setConsoleProfileId(profile.id);
+    if (profile.target.kind === "remote") {
+      void refreshRemoteStatus(profile.id).catch((error) => setSessionError(errorText(error)));
+    }
+  }
+
+  function toggleFiles(profile: ServerProfile) {
+    if (filesProfileId === profile.id) {
+      setFilesProfileId(null);
+      return;
+    }
+    setFilesProfileId(profile.id);
+    if (profile.target.kind === "remote") {
+      void refreshRemoteStatus(profile.id).catch((error) => setSessionError(errorText(error)));
+    }
+  }
+
+  async function controlRemoteServer(profileId: string, action: "start" | "stop") {
+    setBusySessionId(profileId);
+    setSessionError(null);
+    try {
+      if (action === "start" && consoleProfileId === profileId) setConsoleOutput("");
+      const status = await serverSessions[action === "start" ? "startRemote" : "stopRemote"](profileId);
+      setRemoteStatuses((current) => ({ ...current, [profileId]: status }));
+      setConnectedRemotes((current) => ({ ...current, [profileId]: true }));
+    } catch (error) {
+      setSessionError(errorText(error));
+      setRemoteStatuses((current) => ({ ...current, [profileId]: { state: "unreachable" } }));
+    } finally {
+      setBusySessionId(null);
+    }
+  }
+
+  const remoteMonitorIds = profiles
+    .filter((profile) => profile.target.kind === "remote" && ["running", "stopping"].includes(remoteStatuses[profile.id]?.state ?? ""))
+    .map((profile) => profile.id);
+  const remoteMonitorKey = remoteMonitorIds.join("|");
+  const consoleRemoteState = consoleProfileId ? remoteStatuses[consoleProfileId]?.state : undefined;
+
+  useEffect(() => {
+    if (!remoteMonitorKey) return;
+    let active = true;
+    const refresh = async () => {
+      const results = await Promise.allSettled(remoteMonitorIds.map(async (id) => [id, await serverSessions.remoteStatus(id)] as const));
+      if (!active) return;
+      setRemoteStatuses((current) => {
+        let changed = false;
+        const next = { ...current };
+        for (const result of results) {
+          if (result.status === "fulfilled") {
+            const [id, status] = result.value;
+            if (next[id]?.state !== status.state) { next[id] = status; changed = true; }
+          } else {
+            const id = remoteMonitorIds[results.indexOf(result)];
+            if (id && next[id]?.state !== "unreachable") { next[id] = { state: "unreachable" }; changed = true; }
+          }
+        }
+        return changed ? next : current;
+      });
+      results.forEach((result, index) => {
+        if (result.status === "rejected") {
+          const id = remoteMonitorIds[index];
+          if (id) setConnectedRemotes((current) => current[id] ? { ...current, [id]: false } : current);
+        }
+      });
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 4000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [remoteMonitorKey]);
+
   useEffect(() => {
     if (!consoleProfileId) return;
+    const profile = profiles.find((item) => item.id === consoleProfileId);
+    if (profile?.target.kind === "remote") {
+      if (consoleRemoteState !== "running" && consoleRemoteState !== "stopping") {
+        setConsoleOutput(consoleRemoteState === "stopped" ? "Server is stopped." : "SSH status is unavailable.");
+        return;
+      }
+      let active = true;
+      let timer: number | undefined;
+      const refresh = async () => {
+        try {
+          const snapshot = await serverSessions.remoteConsole(consoleProfileId);
+          if (active) setConsoleOutput(snapshot.lines.slice(-1000).join("\n"));
+        } catch (error) {
+          if (active) {
+            setSessionError(errorText(error));
+            setRemoteStatuses((current) => ({ ...current, [consoleProfileId]: { state: "unreachable" } }));
+            setConnectedRemotes((current) => ({ ...current, [consoleProfileId]: false }));
+          }
+        } finally {
+          if (active) timer = window.setTimeout(() => void refresh(), 2000);
+        }
+      };
+      setConsoleOutput("");
+      void refresh();
+      return () => { active = false; if (timer !== undefined) window.clearTimeout(timer); };
+    }
     let active = true;
     let timer: number | undefined;
 
@@ -206,7 +333,7 @@ function App() {
       active = false;
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [consoleProfileId]);
+  }, [consoleProfileId, profiles, consoleRemoteState]);
 
   useEffect(() => {
     if (consoleOutputRef.current) consoleOutputRef.current.scrollTop = consoleOutputRef.current.scrollHeight;
@@ -217,7 +344,9 @@ function App() {
     if (!consoleProfileId || !consoleInput.trim()) return;
     setSessionError(null);
     try {
-      await serverSessions.sendInput(consoleProfileId, consoleInput.trim());
+      const profile = profiles.find((item) => item.id === consoleProfileId);
+      if (profile?.target.kind === "remote") await serverSessions.sendRemoteInput(consoleProfileId, consoleInput.trim());
+      else await serverSessions.sendInput(consoleProfileId, consoleInput.trim());
       setConsoleInput("");
     } catch (error) {
       setSessionError(errorText(error));
@@ -266,6 +395,11 @@ function App() {
           ? current.map((profile) => (profile.id === saved.id ? saved : profile))
           : [...current, saved],
       );
+      setRemoteStatuses((current) => {
+        const next = { ...current };
+        delete next[saved.id];
+        return next;
+      });
       closeForm();
     } catch (error) {
       setFormError(errorText(error));
@@ -280,6 +414,11 @@ function App() {
     try {
       await serverProfiles.delete(id);
       setProfiles((current) => current.filter((profile) => profile.id !== id));
+      setRemoteStatuses((current) => {
+        const next = { ...current };
+        delete next[id];
+        return next;
+      });
       setRemovingId(null);
     } catch (error) {
       setActionError(errorText(error));
@@ -444,6 +583,33 @@ function App() {
                     />
                     <small>Leave blank to use your system SSH agent and default keys. Encrypted keys must be loaded into the agent. Host keys must already be trusted in known_hosts.</small>
                   </label>
+                  <label className="field field-wide">
+                    <span>Remote server folder <small>(needed for start and files)</small></span>
+                    <input
+                      value={draft.directory}
+                      onChange={(event) => setDraft({ ...draft, directory: event.currentTarget.value })}
+                      placeholder="/home/minecraft/survival"
+                    />
+                    <small>Use an absolute Linux path. File access stays inside this folder.</small>
+                  </label>
+                  <label className="field field-wide">
+                    <span>Launch executable <small>(needed to start)</small></span>
+                    <input
+                      value={draft.executable}
+                      onChange={(event) => setDraft({ ...draft, executable: event.currentTarget.value })}
+                      placeholder="java"
+                    />
+                  </label>
+                  <label className="field field-wide">
+                    <span>Launch arguments</span>
+                    <textarea
+                      value={draft.arguments}
+                      onChange={(event) => setDraft({ ...draft, arguments: event.currentTarget.value })}
+                      rows={4}
+                      placeholder={'-Xms2G\n-jar\nserver.jar\nnogui'}
+                    />
+                    <small>Enter one argument per line. Avoid passwords or tokens; arguments are saved with the profile.</small>
+                  </label>
                 </>
               )}
             </div>
@@ -513,9 +679,20 @@ function App() {
               const isLocal = target.kind === "local";
               const location = target.kind === "local"
                 ? target.directory
-                : `${target.username}@${target.host}:${target.port}`;
+                : `${target.username}@${target.host}:${target.port}${target.directory ? ` · ${target.directory}` : ""}`;
               const status = isLocal ? statuses[profile.id] : undefined;
+              const remoteStatus = !isLocal ? remoteStatuses[profile.id] : undefined;
               const state = status?.state ?? "checking";
+              const remoteState = remoteStatus?.state;
+              const serverRunning = isLocal ? state === "running" : remoteState === "running";
+              const remoteStateLabel = remoteState === "unreachable"
+                ? "SSH status unavailable"
+                : remoteState === "unmanaged"
+                  ? "Java process detected outside ServerCrafter"
+                : remoteStatus && !remoteStatus.tmuxAvailable
+                  ? "SSH reachable · tmux required"
+                  : remoteState ? `SSH reachable · ${remoteState}` : "SSH reachable";
+              const remoteStateTone = remoteState === "running" ? "running" : remoteState === "stopped" && remoteStatus?.tmuxAvailable ? "stopped" : "stopping";
               const isBusy = busySessionId === profile.id;
 
               return (
@@ -532,7 +709,7 @@ function App() {
                     </div>
                     <p title={location}>{location}</p>
                     {isLocal && <span className={`session-state session-state-${state}`}>{status ? state : "Checking status…"}</span>}
-                    {!isLocal && connectedRemotes[profile.id] && <span className="session-state session-state-running">SSH reachable</span>}
+                    {!isLocal && connectedRemotes[profile.id] && <span className={`session-state session-state-${remoteStateTone}`}>{remoteStateLabel}</span>}
                   </div>
                   {removingId === profile.id ? (
                     <div className="remove-confirm" role="group" aria-label={`Remove ${profile.name}`}>
@@ -547,27 +724,32 @@ function App() {
                       {isLocal && (!status || state === "stopped") && <button className="button button-primary" onClick={() => void controlServer(profile.id, "start")} disabled={isBusy || !target.launch.executable.trim()}>{isBusy ? "Starting…" : "Start"}</button>}
                       {isLocal && state === "running" && <button className="button button-secondary" onClick={() => void controlServer(profile.id, "stop")} disabled={isBusy}>{isBusy ? "Stopping…" : "Stop"}</button>}
                       {isLocal && state === "stopping" && <button className="button button-secondary" disabled>Stopping…</button>}
-                      {isLocal && <button className="button button-quiet" onClick={() => setConsoleProfileId((current) => current === profile.id ? null : profile.id)}>{consoleProfileId === profile.id ? "Close console" : "Console"}</button>}
-                      {isLocal && <button className="button button-quiet" onClick={() => setFilesProfileId((current) => current === profile.id ? null : profile.id)}>{filesProfileId === profile.id ? "Close files" : "Files"}</button>}
+                      {isLocal && <button className="button button-quiet" onClick={() => toggleConsole(profile)}>{consoleProfileId === profile.id ? "Close console" : "Console"}</button>}
+                      {isLocal && <button className="button button-quiet" onClick={() => toggleFiles(profile)}>{filesProfileId === profile.id ? "Close files" : "Files"}</button>}
                       {!isLocal && <button className="button button-secondary" onClick={() => void testRemoteConnection(profile.id)} disabled={isBusy}>{isBusy ? "Connecting…" : "Test SSH"}</button>}
-                      <button className="button button-quiet" onClick={() => openEditProfile(profile)}>Edit</button>
-                      <button className="button button-quiet" onClick={() => setRemovingId(profile.id)} disabled={isLocal && state !== "stopped"} title={isLocal && state !== "stopped" ? "Stop the server before removing its profile." : undefined}>Remove</button>
+                      {!isLocal && (!remoteState || remoteState === "stopped" || remoteState === "unreachable") && <button className="button button-primary" onClick={() => void controlRemoteServer(profile.id, "start")} disabled={isBusy || !target.directory || !target.launch.executable.trim() || remoteState === "stopped" && !remoteStatus?.tmuxAvailable} title={!target.directory || !target.launch.executable.trim() ? "Set the remote folder and launch executable in the profile." : remoteState === "stopped" && !remoteStatus?.tmuxAvailable ? "Install tmux on the remote server to start it." : undefined}>{isBusy ? "Starting…" : "Start"}</button>}
+                      {!isLocal && remoteState === "running" && <button className="button button-secondary" onClick={() => void controlRemoteServer(profile.id, "stop")} disabled={isBusy}>{isBusy ? "Stopping…" : "Stop"}</button>}
+                      {!isLocal && remoteState === "stopping" && <button className="button button-secondary" disabled>Stopping…</button>}
+                      {!isLocal && <button className="button button-quiet" onClick={() => toggleConsole(profile)}>{consoleProfileId === profile.id ? "Close console" : "Console"}</button>}
+                      {!isLocal && <button className="button button-quiet" onClick={() => toggleFiles(profile)}>{filesProfileId === profile.id ? "Close files" : "Files"}</button>}
+                      <button className="button button-quiet" onClick={() => openEditProfile(profile)} disabled={!isLocal && (remoteState === "running" || remoteState === "stopping" || remoteState === "unmanaged")} title={!isLocal && (remoteState === "running" || remoteState === "stopping" || remoteState === "unmanaged") ? "Stop the server before changing its connection or launch settings." : undefined}>Edit</button>
+                      <button className="button button-quiet" onClick={() => setRemovingId(profile.id)} disabled={isLocal ? state !== "stopped" : remoteState === "running" || remoteState === "stopping" || remoteState === "unmanaged"} title={(isLocal && state !== "stopped") || remoteState === "running" || remoteState === "stopping" || remoteState === "unmanaged" ? "Stop the server before removing its profile." : undefined}>Remove</button>
                     </div>
                   )}
-                  {isLocal && consoleProfileId === profile.id && (
+                  {consoleProfileId === profile.id && (
                     <section className="console-panel" aria-label={`${profile.name} console`}>
                       <div className="console-output" ref={consoleOutputRef} role="log" aria-live="polite">
                         <pre>{consoleOutput || "Console output will appear here."}</pre>
                       </div>
                       <form className="console-input-row" onSubmit={(event) => void sendConsoleInput(event)}>
                         <span aria-hidden="true">&gt;</span>
-                        <input aria-label="Console command" value={consoleInput} onChange={(event) => setConsoleInput(event.currentTarget.value)} placeholder="Enter a server command" disabled={state !== "running" || isBusy} />
-                        <button className="button button-primary" type="submit" disabled={state !== "running" || isBusy || !consoleInput.trim()}>Send</button>
+                        <input aria-label="Console command" value={consoleInput} onChange={(event) => setConsoleInput(event.currentTarget.value)} placeholder="Enter a server command" disabled={!serverRunning || isBusy} />
+                        <button className="button button-primary" type="submit" disabled={!serverRunning || isBusy || !consoleInput.trim()}>Send</button>
                       </form>
                     </section>
                   )}
-                  {isLocal && filesProfileId === profile.id && (
-                    <LocalFilesPanel profileId={profile.id} serverName={profile.name} canEdit={status?.state === "stopped"} onClose={() => setFilesProfileId(null)} />
+                  {filesProfileId === profile.id && (
+                    <LocalFilesPanel profileId={profile.id} serverName={profile.name} canEdit={isLocal ? status?.state === "stopped" : remoteState === "stopped" && !!remoteStatus?.tmuxAvailable} remote={!isLocal} onClose={() => setFilesProfileId(null)} />
                   )}
                 </article>
               );

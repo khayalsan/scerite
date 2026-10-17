@@ -4,7 +4,7 @@ export type LocalLaunchConfig = { executable: string; arguments: string[] };
 
 export type ServerTarget =
   | { kind: "local"; directory: string; launch: LocalLaunchConfig }
-  | { kind: "remote"; host: string; port: number; username: string; identityFile: string | null };
+  | { kind: "remote"; host: string; port: number; username: string; identityFile: string | null; directory: string; launch: LocalLaunchConfig };
 
 export interface ServerProfile {
   id: string;
