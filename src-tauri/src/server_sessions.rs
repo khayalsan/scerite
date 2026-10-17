@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     fs::{self, OpenOptions},
     io::{self, BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
@@ -27,6 +27,20 @@ const TOKEN_FILE: &str = "session-manager.token";
 pub struct LocalServerStatus {
     pub state: LocalServerState,
     pub process_id: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalConsoleLine {
+    pub sequence: u64,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalConsoleSnapshot {
+    pub lines: Vec<LocalConsoleLine>,
+    pub next_sequence: u64,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -152,6 +166,17 @@ impl LocalSessionManager {
             .status
             .ok_or_else(|| "The session manager returned no server status.".to_owned())
     }
+
+    pub fn console(&self, profile_id: Uuid, after_sequence: u64) -> Result<LocalConsoleSnapshot, String> {
+        self.request(ManagerRequest::Console { profile_id, after_sequence })?
+            .console
+            .ok_or_else(|| "The session manager returned no console output.".to_owned())
+    }
+
+    pub fn send_input(&self, profile_id: Uuid, input: String) -> Result<(), String> {
+        self.request(ManagerRequest::SendInput { profile_id, input })?;
+        Ok(())
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -170,6 +195,14 @@ enum ManagerRequest {
     Stop {
         profile_id: Uuid,
     },
+    Console {
+        profile_id: Uuid,
+        after_sequence: u64,
+    },
+    SendInput {
+        profile_id: Uuid,
+        input: String,
+    },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -181,6 +214,7 @@ struct ManagerEnvelope {
 #[derive(Serialize, Deserialize)]
 struct ManagerResponse {
     status: Option<LocalServerStatus>,
+    console: Option<LocalConsoleSnapshot>,
     error: Option<String>,
 }
 
@@ -188,6 +222,23 @@ impl ManagerResponse {
     fn status(status: LocalServerStatus) -> Self {
         Self {
             status: Some(status),
+            console: None,
+            error: None,
+        }
+    }
+
+    fn console(console: LocalConsoleSnapshot) -> Self {
+        Self {
+            status: None,
+            console: Some(console),
+            error: None,
+        }
+    }
+
+    fn ok() -> Self {
+        Self {
+            status: None,
+            console: None,
             error: None,
         }
     }
@@ -195,6 +246,7 @@ impl ManagerResponse {
     fn error(error: String) -> Self {
         Self {
             status: None,
+            console: None,
             error: Some(error),
         }
     }
@@ -204,6 +256,39 @@ struct ManagedSession {
     child: Child,
     stdin: ChildStdin,
     stopping: bool,
+    console: Arc<Mutex<ConsoleBuffer>>,
+}
+
+struct ConsoleBuffer {
+    lines: VecDeque<LocalConsoleLine>,
+    next_sequence: u64,
+    byte_count: usize,
+}
+
+impl ConsoleBuffer {
+    fn new() -> Self {
+        Self { lines: VecDeque::new(), next_sequence: 1, byte_count: 0 }
+    }
+
+    fn push(&mut self, text: String) {
+        const MAX_LINES: usize = 2_000;
+        const MAX_BYTES: usize = 512 * 1024;
+        self.byte_count += text.len();
+        self.lines.push_back(LocalConsoleLine { sequence: self.next_sequence, text });
+        self.next_sequence = self.next_sequence.saturating_add(1);
+        while self.lines.len() > MAX_LINES || self.byte_count > MAX_BYTES {
+            if let Some(line) = self.lines.pop_front() {
+                self.byte_count = self.byte_count.saturating_sub(line.text.len());
+            }
+        }
+    }
+
+    fn snapshot(&self, after_sequence: u64) -> LocalConsoleSnapshot {
+        LocalConsoleSnapshot {
+            lines: self.lines.iter().filter(|line| line.sequence > after_sequence).cloned().collect(),
+            next_sequence: self.next_sequence,
+        }
+    }
 }
 
 pub fn run_session_manager(app_data_dir: PathBuf) -> Result<(), String> {
@@ -286,6 +371,17 @@ fn handle_request(
             arguments,
         } => start_session(profile_id, directory, executable, arguments, sessions),
         ManagerRequest::Stop { profile_id } => stop_session(profile_id, sessions),
+        ManagerRequest::Console { profile_id, after_sequence } => {
+            let sessions = match sessions.lock() {
+                Ok(sessions) => sessions,
+                Err(_) => return ManagerResponse::error("Local session state is unavailable.".into()),
+            };
+            let snapshot = sessions.get(&profile_id)
+                .and_then(|session| session.console.lock().ok().map(|console| console.snapshot(after_sequence)))
+                .unwrap_or_else(|| ConsoleBuffer::new().snapshot(after_sequence));
+            ManagerResponse::console(snapshot)
+        }
+        ManagerRequest::SendInput { profile_id, input } => send_input(profile_id, input, sessions),
     }
 }
 
@@ -337,8 +433,9 @@ fn start_session(
         let _ = child.kill();
         return ManagerResponse::error("Could not connect to the server console.".into());
     };
-    drain(child.stdout.take());
-    drain(child.stderr.take());
+    let console = Arc::new(Mutex::new(ConsoleBuffer::new()));
+    drain(child.stdout.take(), Arc::clone(&console));
+    drain(child.stderr.take(), Arc::clone(&console));
     let status = LocalServerStatus {
         state: LocalServerState::Running,
         process_id: Some(child.id()),
@@ -349,6 +446,7 @@ fn start_session(
             child,
             stdin,
             stopping: false,
+            console,
         },
     );
     ManagerResponse::status(status)
@@ -385,11 +483,53 @@ fn stop_session(
     }
 }
 
-fn drain<R: Read + Send + 'static>(reader: Option<R>) {
+fn drain<R: Read + Send + 'static>(reader: Option<R>, console: Arc<Mutex<ConsoleBuffer>>) {
     if let Some(mut reader) = reader {
         thread::spawn(move || {
-            let _ = io::copy(&mut reader, &mut io::sink());
+            let mut reader = BufReader::new(&mut reader);
+            let mut line = Vec::new();
+            loop {
+                line.clear();
+                match reader.read_until(b'\n', &mut line) {
+                    Ok(0) => break,
+                    Ok(_) => {
+                        while matches!(line.last(), Some(b'\n' | b'\r')) { line.pop(); }
+                        if let Ok(mut console) = console.lock() {
+                            console.push(String::from_utf8_lossy(&line).into_owned());
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
         });
+    }
+}
+
+fn send_input(
+    profile_id: Uuid,
+    input: String,
+    sessions: &Arc<Mutex<HashMap<Uuid, ManagedSession>>>,
+) -> ManagerResponse {
+    if input.len() > 4096 || input.chars().any(|character| matches!(character, '\0' | '\r' | '\n')) {
+        return ManagerResponse::error("Enter one console command of at most 4096 bytes.".into());
+    }
+    let mut sessions = match sessions.lock() {
+        Ok(sessions) => sessions,
+        Err(_) => return ManagerResponse::error("Local session state is unavailable.".into()),
+    };
+    let Some(session) = sessions.get_mut(&profile_id) else {
+        return ManagerResponse::error("This server is not running.".into());
+    };
+    if session.stopping {
+        return ManagerResponse::error("The server is stopping and cannot accept commands.".into());
+    }
+    match session.child.try_wait() {
+        Ok(Some(_)) => ManagerResponse::error("This server is not running.".into()),
+        Ok(None) => match session.stdin.write_all(input.as_bytes()).and_then(|()| session.stdin.write_all(b"\n")).and_then(|()| session.stdin.flush()) {
+            Ok(()) => ManagerResponse::ok(),
+            Err(error) => ManagerResponse::error(format!("Could not send the console command: {error}")),
+        },
+        Err(error) => ManagerResponse::error(format!("Could not check the server process: {error}")),
     }
 }
 
@@ -497,6 +637,28 @@ pub mod commands {
     ) -> Result<LocalServerStatus, String> {
         require_local_profile(profile_id, &profiles)?;
         manager.stop(profile_id)
+    }
+
+    #[tauri::command]
+    pub fn local_server_console(
+        profile_id: Uuid,
+        after_sequence: u64,
+        profiles: State<'_, ServerProfileStore>,
+        manager: State<'_, LocalSessionManager>,
+    ) -> Result<LocalConsoleSnapshot, String> {
+        require_local_profile(profile_id, &profiles)?;
+        manager.console(profile_id, after_sequence)
+    }
+
+    #[tauri::command]
+    pub fn send_local_console_input(
+        profile_id: Uuid,
+        input: String,
+        profiles: State<'_, ServerProfileStore>,
+        manager: State<'_, LocalSessionManager>,
+    ) -> Result<(), String> {
+        require_local_profile(profile_id, &profiles)?;
+        manager.send_input(profile_id, input)
     }
 
     fn require_local_profile(

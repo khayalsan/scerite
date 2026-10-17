@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { HardDrive, Network, Plus, X } from "lucide-react";
 import { serverProfiles } from "./lib/serverProfiles";
@@ -82,6 +82,11 @@ function App() {
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [statuses, setStatuses] = useState<Record<string, LocalServerStatus>>({});
   const [busySessionId, setBusySessionId] = useState<string | null>(null);
+  const [consoleProfileId, setConsoleProfileId] = useState<string | null>(null);
+  const [consoleOutput, setConsoleOutput] = useState("");
+  const [consoleInput, setConsoleInput] = useState("");
+  const consoleCursor = useRef(0);
+  const consoleOutputRef = useRef<HTMLDivElement>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingProfile, setEditingProfile] = useState<ServerProfile | null>(null);
@@ -139,12 +144,61 @@ function App() {
     setBusySessionId(profileId);
     setSessionError(null);
     try {
+      if (action === "start" && consoleProfileId === profileId) {
+        consoleCursor.current = 0;
+        setConsoleOutput("");
+      }
       const status = await serverSessions[action](profileId);
       setStatuses((current) => ({ ...current, [profileId]: status }));
     } catch (error) {
       setSessionError(errorText(error));
     } finally {
       setBusySessionId(null);
+    }
+  }
+
+  useEffect(() => {
+    if (!consoleProfileId) return;
+    let active = true;
+    let timer: number | undefined;
+
+    const refresh = async () => {
+      try {
+        const snapshot = await serverSessions.console(consoleProfileId, consoleCursor.current);
+        if (!active) return;
+        consoleCursor.current = snapshot.nextSequence - 1;
+        if (snapshot.lines.length) {
+          setConsoleOutput((current) => [...current.split("\n"), ...snapshot.lines.map((line) => line.text)].slice(-1000).join("\n"));
+        }
+      } catch (error) {
+        if (active) setSessionError(errorText(error));
+      } finally {
+        if (active) timer = window.setTimeout(() => void refresh(), 500);
+      }
+    };
+
+    consoleCursor.current = 0;
+    setConsoleOutput("");
+    void refresh();
+    return () => {
+      active = false;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [consoleProfileId]);
+
+  useEffect(() => {
+    if (consoleOutputRef.current) consoleOutputRef.current.scrollTop = consoleOutputRef.current.scrollHeight;
+  }, [consoleOutput]);
+
+  async function sendConsoleInput(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!consoleProfileId || !consoleInput.trim()) return;
+    setSessionError(null);
+    try {
+      await serverSessions.sendInput(consoleProfileId, consoleInput.trim());
+      setConsoleInput("");
+    } catch (error) {
+      setSessionError(errorText(error));
     }
   }
 
@@ -455,9 +509,22 @@ function App() {
                       {isLocal && (!status || state === "stopped") && <button className="button button-primary" onClick={() => void controlServer(profile.id, "start")} disabled={isBusy || !target.launch.executable.trim()}>{isBusy ? "Starting…" : "Start"}</button>}
                       {isLocal && state === "running" && <button className="button button-secondary" onClick={() => void controlServer(profile.id, "stop")} disabled={isBusy}>{isBusy ? "Stopping…" : "Stop"}</button>}
                       {isLocal && state === "stopping" && <button className="button button-secondary" disabled>Stopping…</button>}
+                      {isLocal && <button className="button button-quiet" onClick={() => setConsoleProfileId((current) => current === profile.id ? null : profile.id)}>{consoleProfileId === profile.id ? "Close console" : "Console"}</button>}
                       <button className="button button-quiet" onClick={() => openEditProfile(profile)}>Edit</button>
                       <button className="button button-quiet" onClick={() => setRemovingId(profile.id)} disabled={isLocal && state !== "stopped"} title={isLocal && state !== "stopped" ? "Stop the server before removing its profile." : undefined}>Remove</button>
                     </div>
+                  )}
+                  {isLocal && consoleProfileId === profile.id && (
+                    <section className="console-panel" aria-label={`${profile.name} console`}>
+                      <div className="console-output" ref={consoleOutputRef} role="log" aria-live="polite">
+                        <pre>{consoleOutput || "Console output will appear here."}</pre>
+                      </div>
+                      <form className="console-input-row" onSubmit={(event) => void sendConsoleInput(event)}>
+                        <span aria-hidden="true">&gt;</span>
+                        <input aria-label="Console command" value={consoleInput} onChange={(event) => setConsoleInput(event.currentTarget.value)} placeholder="Enter a server command" disabled={state !== "running" || isBusy} />
+                        <button className="button button-primary" type="submit" disabled={state !== "running" || isBusy || !consoleInput.trim()}>Send</button>
+                      </form>
+                    </section>
                   )}
                 </article>
               );

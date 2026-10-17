@@ -32,6 +32,8 @@ pub fn run() {
             session_commands::local_server_status,
             session_commands::start_local_server,
             session_commands::stop_local_server,
+            session_commands::local_server_console,
+            session_commands::send_local_console_input,
         ])
         .run(tauri::generate_context!())
         .expect("error while running servercrafter");

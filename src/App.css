@@ -449,6 +449,7 @@
 
 .server-row {
   display: flex;
+  flex-wrap: wrap;
   min-height: 83px;
   align-items: center;
   gap: 15px;
@@ -550,6 +551,58 @@
 
 .session-state-stopping {
   color: #a86e1f;
+}
+
+.console-panel {
+  flex: 0 0 calc(100% - 53px);
+  min-width: 0;
+  margin: 0 0 16px 53px;
+  overflow: hidden;
+  border: 1px solid var(--app-line);
+  border-radius: 9px;
+  background: #15191b;
+}
+
+.console-output {
+  height: 220px;
+  overflow: auto;
+  padding: 13px 15px;
+  color: #d4e2dc;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  scrollbar-color: #58645e #202625;
+}
+
+.console-output pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.console-input-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 11px;
+  border-top: 1px solid #303936;
+  color: #7fc894;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.console-input-row input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  color: #e4eee8;
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+}
+
+.console-input-row input::placeholder {
+  color: #87928c;
 }
 
 .row-actions,
@@ -701,6 +754,11 @@
   .server-row {
     min-height: 80px;
     gap: 10px;
+  }
+
+  .console-panel {
+    flex-basis: calc(100% - 44px);
+    margin-left: 44px;
   }
 
   .server-icon {
