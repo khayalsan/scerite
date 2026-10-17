@@ -1,0 +1,14 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "overused-font",
+        "value": "geist",
+        "createdAt": "2026-10-17T17:05:03.983Z",
+        "reason": "Project baseline typography: the original stylesheet already imported Geist and assigned it to the global --font-sans token; this screen inherits that established app-wide token."
+      }
+    ]
+  }
+}

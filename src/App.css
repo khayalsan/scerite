@@ -15,7 +15,6 @@
   min-height: 100vh;
   color: var(--app-ink);
   background: var(--app-ground);
-  font-family: "Geist Variable", sans-serif;
   font-size: 14px;
   line-height: 1.5;
 }
