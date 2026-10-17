@@ -181,6 +181,11 @@ function App() {
   const [isRemoving, setIsRemoving] = useState(false);
   const [activeServerTab, setActiveServerTab] = useState<ServerTab>("console");
   const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId);
+  const profileRemovalDisabled = editingProfile
+    ? editingProfile.target.kind === "local"
+      ? statuses[editingProfile.id]?.state !== "stopped"
+      : ["running", "stopping", "unmanaged"].includes(remoteStatuses[editingProfile.id]?.state ?? "")
+    : true;
 
   useLayoutEffect(() => {
     const root = document.documentElement;
@@ -507,6 +512,7 @@ function App() {
   function closeForm() {
     setIsFormOpen(false);
     setEditingProfile(null);
+    setRemovingId(null);
     setFormError(null);
     setFormConnectionResult(null);
     setFormConnectionSucceeded(false);
@@ -558,6 +564,7 @@ function App() {
         return next;
       });
       setRemovingId(null);
+      if (editingProfile?.id === id) closeForm();
       if (selectedProfileId === id) navigate("/");
     } catch (error) {
       setActionError(errorText(error));
@@ -622,16 +629,22 @@ function App() {
               </div>
             </section>
             <nav className="server-tab-list" aria-label="Server sections">
-              <button className={`server-tab${activeServerTab === "console" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "console" ? "page" : undefined} onClick={() => { setActiveServerTab("console"); if (consoleProfileId !== selectedProfile.id) toggleConsole(selectedProfile); }}>
+              <button className={`server-tab${activeServerTab === "console" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "console" ? "page" : undefined} disabled={isFormOpen} onClick={() => { setActiveServerTab("console"); if (consoleProfileId !== selectedProfile.id) toggleConsole(selectedProfile); }}>
                 <Terminal size={16} aria-hidden="true" /> Console
               </button>
-              <button className={`server-tab${activeServerTab === "files" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "files" ? "page" : undefined} onClick={() => { setActiveServerTab("files"); if (filesProfileId !== selectedProfile.id) toggleFiles(selectedProfile); }}>
+              <button className={`server-tab${activeServerTab === "files" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "files" ? "page" : undefined} disabled={isFormOpen} onClick={() => { setActiveServerTab("files"); if (filesProfileId !== selectedProfile.id) toggleFiles(selectedProfile); }}>
                 <FolderOpen size={16} aria-hidden="true" /> Files
               </button>
-              <button className={`server-tab${activeServerTab === "properties" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "properties" ? "page" : undefined} onClick={() => { setActiveServerTab("properties"); setPropertiesProfileId(selectedProfile.id); }}>
+              <button className={`server-tab${activeServerTab === "properties" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "properties" ? "page" : undefined} disabled={isFormOpen} onClick={() => { setActiveServerTab("properties"); setPropertiesProfileId(selectedProfile.id); }}>
                 <SlidersHorizontal size={16} aria-hidden="true" /> Properties
               </button>
-              <button className={`server-tab${activeServerTab === "settings" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "settings" ? "page" : undefined} onClick={() => setActiveServerTab("settings")}>
+              <button className={`server-tab${activeServerTab === "settings" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "settings" ? "page" : undefined} onClick={() => {
+                setActiveServerTab("settings");
+                if (isFormOpen && editingProfile?.id === selectedProfile.id) return;
+                if (isLocal || !["running", "stopping", "unmanaged"].includes(remoteState ?? "")) {
+                  openEditProfile(selectedProfile);
+                }
+              }}>
                 <Settings size={16} aria-hidden="true" /> Settings
               </button>
             </nav>
@@ -853,10 +866,24 @@ function App() {
               <button className="button button-quiet" type="button" onClick={closeForm} disabled={isSaving}>
                 Cancel
               </button>
+              {editingProfile && (
+                <button className="button button-danger-quiet" type="button" onClick={() => setRemovingId(editingProfile.id)} disabled={isSaving || isRemoving || profileRemovalDisabled} title={profileRemovalDisabled ? "Stop the server before removing its profile." : undefined}>
+                  Delete profile
+                </button>
+              )}
               <button className="button button-primary" type="submit" disabled={isSaving}>
                 {isSaving ? "Saving…" : editingProfile ? "Save changes" : "Save server"}
               </button>
             </div>
+            {editingProfile && removingId === editingProfile.id && (
+              <div className="remove-confirm profile-form-remove-confirm" role="group" aria-label={`Delete ${editingProfile.name}`}>
+                <span>Delete this profile? Server files will stay untouched.</span>
+                <button className="button button-danger-quiet" type="button" onClick={() => void removeProfile(editingProfile.id)} disabled={isRemoving}>
+                  {isRemoving ? "Deleting…" : "Delete profile"}
+                </button>
+                <button className="button button-quiet" type="button" onClick={() => setRemovingId(null)} disabled={isRemoving}>Cancel</button>
+              </div>
+            )}
             {formConnectionResult && <p className={formConnectionSucceeded ? "form-connection-result form-connection-success" : "form-connection-result form-connection-error"} role="status">{formConnectionResult}</p>}
           </form>
         )}
@@ -907,7 +934,7 @@ function App() {
             <p>This server may have been removed.</p>
             <button className="button button-secondary" onClick={() => navigate("/")}>Back to servers</button>
           </div>
-        ) : profiles.length === 0 ? (
+        ) : selectedProfileId && isFormOpen ? null : profiles.length === 0 ? (
           <div className="empty-state">
             <div className="empty-mark" aria-hidden="true"><span /></div>
             <h3>No servers saved</h3>
