@@ -10,6 +10,7 @@ import { serverSessions } from "./lib/serverSessions";
 import type { LocalServerStatus, RemoteServerStatus } from "./lib/serverSessions";
 import { LocalFilesPanel } from "./components/LocalFilesPanel";
 import { ServerPropertiesPanel } from "./components/ServerPropertiesPanel";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select";
 import "./App.css";
 
 type ProfileDraft = {
@@ -613,6 +614,10 @@ function App() {
   async function saveProfile(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setFormError(null);
+    if (draft.kind === "remote" && !draft.environmentId) {
+      setFormError("Choose a remote environment.");
+      return;
+    }
     setIsSaving(true);
 
     try {
@@ -813,10 +818,21 @@ function App() {
                 <>
                   <label className="field field-wide">
                     <span>Remote environment</span>
-                    <select value={draft.environmentId} onChange={(event) => setDraft({ ...draft, environmentId: event.currentTarget.value })} required>
-                      <option value="">Choose an environment</option>
-                      {environments.map((environment) => <option key={environment.id} value={environment.id}>{environment.name} · {environment.username}@{environment.host}:{environment.port}</option>)}
-                    </select>
+                    <Select
+                      value={draft.environmentId || null}
+                      onValueChange={(environmentId) => setDraft({ ...draft, environmentId: environmentId ?? "" })}
+                    >
+                      <SelectTrigger aria-label="Remote environment" aria-required="true">
+                        <SelectValue placeholder="Choose an environment" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {environments.map((environment) => (
+                          <SelectItem key={environment.id} value={environment.id}>
+                            {environment.name} · {environment.username}@{environment.host}:{environment.port}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                     <small>SSH connection settings are saved once per environment and shared by its servers.</small>
                   </label>
                   <button className="button button-secondary" type="button" onClick={() => openNewEnvironment()}>
