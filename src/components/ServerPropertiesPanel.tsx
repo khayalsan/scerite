@@ -37,7 +37,7 @@ const propertyInfo: Record<string, PropertyInfo> = {
   "hide-online-players": { label: "Hide online players", description: "Do not show the player list in server status responses.", group: "Players" },
   difficulty: { label: "Difficulty", description: "The default difficulty for the world.", group: "Gameplay" },
   gamemode: { label: "Default game mode", description: "The game mode assigned to new players.", group: "Gameplay" },
-  pvp: { label: "Player versus player", description: "Allow players to damage one another.", group: "Gameplay" },
+  pvp: { label: "PVP", description: "Allow players to damage one another.", group: "Gameplay" },
   "allow-flight": { label: "Allow flight", description: "Allow players to fly with supported mods or permissions.", group: "Gameplay" },
   "allow-nether": { label: "Allow Nether", description: "Allow players to travel to the Nether.", group: "Gameplay" },
   "enable-command-block": { label: "Command blocks", description: "Allow command blocks to run commands.", group: "Gameplay" },
