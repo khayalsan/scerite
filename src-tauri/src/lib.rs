@@ -30,6 +30,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::get_local_install_root,
+            commands::set_local_install_root,
             commands::list_server_environments,
             commands::create_server_environment,
             commands::update_server_environment,
