@@ -823,7 +823,9 @@ function App() {
                       onValueChange={(environmentId) => setDraft({ ...draft, environmentId: environmentId ?? "" })}
                     >
                       <SelectTrigger aria-label="Remote environment" aria-required="true">
-                        <SelectValue placeholder="Choose an environment" />
+                        <SelectValue>
+                          {(selected) => environments.find((environment) => environment.id === selected)?.name ?? "Choose an environment"}
+                        </SelectValue>
                       </SelectTrigger>
                       <SelectContent>
                         {environments.map((environment) => (
