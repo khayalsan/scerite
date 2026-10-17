@@ -1017,14 +1017,16 @@
 
 .property-select-popup {
   z-index: 1000;
-  min-width: 160px;
+  box-sizing: border-box;
+  width: var(--anchor-width);
+  min-width: var(--anchor-width);
   max-height: min(280px, var(--available-height, 280px));
   overflow-y: auto;
   padding: 4px;
-  border: 1px solid var(--app-line);
+  border: 1px solid var(--border);
   border-radius: 8px;
-  color: var(--app-ink);
-  background: var(--app-ground);
+  color: var(--foreground);
+  background: var(--background);
   box-shadow: 0 12px 32px rgb(0 0 0 / 28%);
   outline: none;
 }
@@ -1043,8 +1045,8 @@
 }
 
 .property-select-item[data-highlighted] {
-  color: var(--app-ink);
-  background: color-mix(in srgb, var(--app-accent) 15%, var(--app-ground));
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--primary) 15%, var(--background));
 }
 
 .property-select-item[data-disabled] {
@@ -1054,7 +1056,7 @@
 
 .property-select-item-indicator {
   display: inline-flex;
-  color: var(--app-accent);
+  color: var(--primary);
 }
 
 .property-switch {
