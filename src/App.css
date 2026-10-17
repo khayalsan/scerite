@@ -38,6 +38,12 @@
   padding-bottom: 0;
 }
 
+.server-detail-shell {
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .server-page-context {
   display: grid;
   gap: 5px;
@@ -68,9 +74,14 @@
 }
 
 .server-detail-shell .workspace {
+  display: flex;
+  min-height: 0;
+  height: 100%;
+  flex-direction: column;
   width: 100%;
   max-width: none;
   margin: 0;
+  overflow: hidden;
 }
 
 .brand {
@@ -566,6 +577,12 @@
   display: grid;
 }
 
+.server-detail-shell .server-list {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
 .server-row {
   display: flex;
   flex-wrap: wrap;
@@ -585,6 +602,11 @@
   padding: 0;
   border: 0;
   background: transparent;
+}
+
+.server-detail-shell .server-row-detail {
+  min-height: 0;
+  flex: 1 1 auto;
 }
 
 .server-row-open {
@@ -613,6 +635,13 @@
 
 .server-detail-content {
   min-width: 0;
+}
+
+.server-detail-shell .server-detail-content {
+  display: flex;
+  min-height: 0;
+  height: 100%;
+  flex-direction: column;
 }
 
 .server-status-card {
@@ -712,6 +741,26 @@
 .server-tab-content {
   min-width: 0;
   min-height: 300px;
+}
+
+.server-detail-shell .server-tab-content {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+.server-detail-shell .server-tab-panel[aria-label="Server console"]:not([hidden]) {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+.server-detail-shell .server-tab-empty {
+  width: 100%;
+  min-height: 0;
+  flex: 1 1 auto;
 }
 
 .server-tab-panel[hidden] {
@@ -908,6 +957,21 @@
   font-size: 12px;
   line-height: 1.55;
   scrollbar-color: var(--terminal-scroll-thumb) var(--terminal-scroll-track);
+}
+
+.server-detail-shell .console-panel {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  width: 100%;
+  margin: 0;
+}
+
+.server-detail-shell .console-output {
+  height: auto;
+  min-height: 0;
+  flex: 1 1 auto;
 }
 
 .console-output pre {
@@ -1171,7 +1235,17 @@
   }
 
   .server-detail-shell {
+    display: flex;
+    height: 100dvh;
     padding-bottom: 0;
+    flex-direction: column;
+  }
+
+  .server-detail-shell .workspace {
+    height: auto;
+    min-height: 0;
+    flex: 1 1 auto;
+    padding: 18px;
   }
 
   .sidebar {
