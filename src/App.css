@@ -30,6 +30,20 @@
   border-right: 1px solid var(--app-line);
 }
 
+.server-detail-shell .server-page-sidebar {
+  gap: 18px;
+}
+
+.server-detail-shell .server-page-sidebar .brand {
+  padding-bottom: 10px;
+}
+
+.server-detail-shell .workspace {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+}
+
 .brand {
   display: flex;
   align-items: center;
@@ -537,12 +551,11 @@
 }
 
 .server-row-detail {
-  align-items: flex-start;
-  gap: 18px;
-  padding: 22px;
-  border: 1px solid var(--app-line);
-  border-radius: 12px;
-  background: var(--app-paper);
+  display: block;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
 }
 
 .server-row-open {
@@ -569,30 +582,7 @@
   color: var(--app-accent);
 }
 
-.server-row-detail .server-row-open {
-  flex: 1 0 100%;
-  padding: 0;
-  cursor: default;
-}
-
-.server-row-detail .row-actions,
-.server-row-detail .remove-confirm {
-  margin-left: 0;
-}
-
-.server-detail-layout {
-  display: grid;
-  min-width: 0;
-  flex: 1 0 calc(100% - 53px);
-  grid-template-columns: minmax(180px, 220px) minmax(0, 1fr);
-  gap: 22px;
-  margin-left: 53px;
-}
-
-.server-detail-sidebar {
-  display: grid;
-  align-content: start;
-  gap: 15px;
+.server-detail-content {
   min-width: 0;
 }
 
@@ -1090,10 +1080,24 @@
     grid-template-columns: 72px minmax(0, 1fr);
   }
 
+  .server-detail-shell {
+    grid-template-columns: 236px minmax(0, 1fr);
+  }
+
   .sidebar {
     align-items: center;
     padding-right: 10px;
     padding-left: 10px;
+  }
+
+  .server-detail-shell .server-page-sidebar {
+    align-items: stretch;
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .server-detail-shell .server-page-sidebar .brand > span:last-child {
+    display: inline;
   }
 
   .brand {
@@ -1129,16 +1133,16 @@
     padding-top: 40px;
   }
 
-  .server-detail-layout {
-    grid-template-columns: minmax(150px, 190px) minmax(0, 1fr);
-    gap: 14px;
-  }
 }
 
 @media (max-width: 560px) {
   .app-shell {
     display: block;
     padding-bottom: 58px;
+  }
+
+  .server-detail-shell {
+    padding-bottom: 0;
   }
 
   .sidebar {
@@ -1151,6 +1155,22 @@
     padding: 0 18px;
     border-top: 1px solid var(--app-line);
     border-right: 0;
+  }
+
+  .server-detail-shell .server-page-sidebar {
+    position: relative;
+    inset: auto;
+    height: auto;
+    flex-direction: column;
+    align-items: stretch;
+    padding: 12px 18px;
+    border-top: 0;
+    border-right: 0;
+    border-bottom: 1px solid var(--app-line);
+  }
+
+  .server-detail-shell .server-page-sidebar .brand {
+    display: none;
   }
 
   .brand,
@@ -1227,21 +1247,6 @@
     gap: 10px;
   }
 
-  .server-row-detail {
-    padding: 14px;
-  }
-
-  .server-row-detail .server-detail-layout {
-    flex-basis: 100%;
-    grid-template-columns: minmax(0, 1fr);
-    gap: 13px;
-    margin-left: 0;
-  }
-
-  .server-detail-sidebar {
-    gap: 10px;
-  }
-
   .server-status-card {
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
@@ -1256,7 +1261,7 @@
     grid-column: 1 / -1;
   }
 
-  .server-tab-list {
+  .server-detail-shell .server-tab-list {
     display: flex;
     overflow-x: auto;
     padding-bottom: 5px;

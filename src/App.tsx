@@ -565,24 +565,82 @@ function App() {
   }
 
   return (
-    <main className="app-shell">
-      <aside className="sidebar" aria-label="Main navigation">
-        <Link className="brand" to="/" aria-label="ServerCrafter home">
-          <span className="brand-mark" aria-hidden="true">S</span>
-          <span>ServerCrafter</span>
-        </Link>
-        <nav className="primary-nav">
-          <Link className="nav-link nav-link-active" to="/" aria-current={selectedProfileId ? undefined : "page"}>
-            <span className="nav-indicator" aria-hidden="true" />
-            Servers
-            <span className="nav-count">{profiles.length}</span>
+    <main className={`app-shell${selectedProfile ? " server-detail-shell" : ""}`}>
+      {selectedProfile ? (() => {
+        const target = selectedProfile.target;
+        const isLocal = target.kind === "local";
+        const status = isLocal ? statuses[selectedProfile.id] : undefined;
+        const remoteStatus = !isLocal ? remoteStatuses[selectedProfile.id] : undefined;
+        const state = status?.state ?? "checking";
+        const remoteState = remoteStatus?.state;
+        const isBusy = busySessionId === selectedProfile.id;
+        const statusLabel = isLocal
+          ? status ? state : "Checking status…"
+          : !remoteStatus
+            ? "Not checked"
+            : remoteState === "unreachable"
+              ? "SSH unavailable"
+              : remoteState === "unmanaged"
+                ? "Java process detected"
+                : !remoteStatus.tmuxAvailable
+                  ? "tmux required"
+                  : remoteState;
+        const statusTone = isLocal ? state : remoteState ?? "unknown";
+
+        return (
+          <aside className="sidebar server-page-sidebar" aria-label={`${selectedProfile.name} navigation`}>
+            <Link className="brand" to="/" aria-label="Back to ServerCrafter servers">
+              <span className="brand-mark" aria-hidden="true">S</span>
+              <span>ServerCrafter</span>
+            </Link>
+            <section className="server-status-card" aria-label="Server status">
+              <span className="server-status-label">Server status</span>
+              <span className={`server-status-value server-status-${statusTone}`}>
+                <span className="server-status-dot" aria-hidden="true" />
+                {statusLabel}
+              </span>
+              <div className="server-detail-actions">
+                {isLocal && (!status || state === "stopped") && <button className="button button-primary" onClick={() => void controlServer(selectedProfile.id, "start")} disabled={isBusy || !target.launch.executable.trim()}>{isBusy ? "Starting…" : "Start server"}</button>}
+                {isLocal && state === "running" && <button className="button button-secondary" onClick={() => void controlServer(selectedProfile.id, "stop")} disabled={isBusy}>{isBusy ? "Stopping…" : "Stop server"}</button>}
+                {isLocal && state === "stopping" && <button className="button button-secondary" disabled>Stopping…</button>}
+                {!isLocal && <button className="button button-secondary" onClick={() => void testRemoteConnection(selectedProfile.id)} disabled={isBusy}>{isBusy ? "Connecting…" : "Test SSH"}</button>}
+                {!isLocal && (!remoteState || remoteState === "stopped" || remoteState === "unreachable") && <button className="button button-primary" onClick={() => void controlRemoteServer(selectedProfile.id, "start")} disabled={isBusy || !target.directory || !target.launch.executable.trim() || remoteState === "stopped" && !remoteStatus?.tmuxAvailable} title={!target.directory || !target.launch.executable.trim() ? "Set the remote folder and launch executable in the profile." : remoteState === "stopped" && !remoteStatus?.tmuxAvailable ? "Install tmux on the remote server to start it." : undefined}>{isBusy ? "Starting…" : "Start server"}</button>}
+                {!isLocal && remoteState === "running" && <button className="button button-secondary" onClick={() => void controlRemoteServer(selectedProfile.id, "stop")} disabled={isBusy}>{isBusy ? "Stopping…" : "Stop server"}</button>}
+                {!isLocal && remoteState === "stopping" && <button className="button button-secondary" disabled>Stopping…</button>}
+              </div>
+            </section>
+            <nav className="server-tab-list" aria-label="Server sections">
+              <button className={`server-tab${activeServerTab === "console" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "console" ? "page" : undefined} onClick={() => { setActiveServerTab("console"); if (consoleProfileId !== selectedProfile.id) toggleConsole(selectedProfile); }}>
+                <Terminal size={16} aria-hidden="true" /> Console
+              </button>
+              <button className={`server-tab${activeServerTab === "files" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "files" ? "page" : undefined} onClick={() => { setActiveServerTab("files"); if (filesProfileId !== selectedProfile.id) toggleFiles(selectedProfile); }}>
+                <FolderOpen size={16} aria-hidden="true" /> Files
+              </button>
+              <button className={`server-tab${activeServerTab === "settings" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "settings" ? "page" : undefined} onClick={() => setActiveServerTab("settings")}>
+                <Settings size={16} aria-hidden="true" /> Settings
+              </button>
+            </nav>
+          </aside>
+        );
+      })() : (
+        <aside className="sidebar" aria-label="Main navigation">
+          <Link className="brand" to="/" aria-label="ServerCrafter home">
+            <span className="brand-mark" aria-hidden="true">S</span>
+            <span>ServerCrafter</span>
           </Link>
-        </nav>
-        <div className="sidebar-footer">
-          <span className="connection-dot" aria-hidden="true" />
-          <span>Desktop app</span>
-        </div>
-      </aside>
+          <nav className="primary-nav">
+            <Link className="nav-link nav-link-active" to="/" aria-current="page">
+              <span className="nav-indicator" aria-hidden="true" />
+              Servers
+              <span className="nav-count">{profiles.length}</span>
+            </Link>
+          </nav>
+          <div className="sidebar-footer">
+            <span className="connection-dot" aria-hidden="true" />
+            <span>Desktop app</span>
+          </div>
+        </aside>
+      )}
 
       <section className="workspace" id="servers" aria-labelledby="page-title">
         <header className="page-header">
@@ -819,10 +877,10 @@ function App() {
           </div>
         )}
 
-        <div className="list-heading">
-          <h2>{selectedProfileId ? "Server controls" : "Saved servers"}</h2>
-          {!selectedProfileId && !isLoading && <span>{profiles.length} {profiles.length === 1 ? "server" : "servers"}</span>}
-        </div>
+        {!selectedProfileId && <div className="list-heading">
+          <h2>Saved servers</h2>
+          {!isLoading && <span>{profiles.length} {profiles.length === 1 ? "server" : "servers"}</span>}
+        </div>}
 
         {isLoading ? (
           <p className="state-message" role="status">Loading saved servers…</p>
@@ -868,68 +926,28 @@ function App() {
               const remoteStateTone = remoteState === "running" ? "running" : remoteState === "stopped" && remoteStatus?.tmuxAvailable ? "stopped" : "stopping";
               const isBusy = busySessionId === profile.id;
               const isDetailPage = selectedProfileId === profile.id;
-              const serverStatusLabel = isLocal
-                ? status ? state : "Checking status…"
-                : !remoteStatus
-                  ? "Not checked"
-                  : remoteState === "unreachable"
-                    ? "SSH unavailable"
-                    : remoteState === "unmanaged"
-                      ? "Java process detected"
-                      : !remoteStatus.tmuxAvailable
-                        ? "tmux required"
-                        : remoteState;
-              const serverStatusTone = isLocal ? state : remoteState ?? "unknown";
-
               return (
                 <article className={`server-row${selectedProfileId === profile.id ? " server-row-detail" : ""}`} key={profile.id} hidden={!!selectedProfileId && selectedProfileId !== profile.id}>
-                  <Link className="server-row-open" to={`/servers/${profile.id}`} onClick={() => setActiveServerTab("console")} aria-label={`Open ${profile.name}`} aria-current={selectedProfileId === profile.id ? "page" : undefined}>
-                    <span className={isLocal ? "server-icon server-icon-local" : "server-icon server-icon-remote"} aria-hidden="true">
-                      {isLocal ? <HardDrive size={18} /> : <Network size={18} />}
-                    </span>
-                    <span className="server-main">
-                      <span className="server-name-line">
-                        <h3>{profile.name}</h3>
-                        <span className={isLocal ? "target-badge target-badge-local" : "target-badge target-badge-remote"}>
-                          {isLocal ? "Local" : "Remote"}
-                        </span>
+                  {!isDetailPage && (
+                    <Link className="server-row-open" to={`/servers/${profile.id}`} onClick={() => setActiveServerTab("console")} aria-label={`Open ${profile.name}`}>
+                      <span className={isLocal ? "server-icon server-icon-local" : "server-icon server-icon-remote"} aria-hidden="true">
+                        {isLocal ? <HardDrive size={18} /> : <Network size={18} />}
                       </span>
-                      <span className="server-location" title={location}>{location}</span>
-                      {isLocal && <span className={`session-state session-state-${state}`}>{status ? state : "Checking status…"}</span>}
-                      {!isLocal && connectedRemotes[profile.id] && <span className={`session-state session-state-${remoteStateTone}`}>{remoteStateLabel}</span>}
-                    </span>
-                  </Link>
-                  {isDetailPage ? (
-                    <div className="server-detail-layout">
-                      <aside className="server-detail-sidebar" aria-label={`${profile.name} controls`}>
-                        <section className="server-status-card" aria-label="Server status">
-                          <span className="server-status-label">Server status</span>
-                          <span className={`server-status-value server-status-${serverStatusTone}`}>
-                            <span className="server-status-dot" aria-hidden="true" />
-                            {serverStatusLabel}
+                      <span className="server-main">
+                        <span className="server-name-line">
+                          <h3>{profile.name}</h3>
+                          <span className={isLocal ? "target-badge target-badge-local" : "target-badge target-badge-remote"}>
+                            {isLocal ? "Local" : "Remote"}
                           </span>
-                          <div className="server-detail-actions">
-                            {isLocal && (!status || state === "stopped") && <button className="button button-primary" onClick={() => void controlServer(profile.id, "start")} disabled={isBusy || !target.launch.executable.trim()}>{isBusy ? "Starting…" : "Start server"}</button>}
-                            {isLocal && state === "running" && <button className="button button-secondary" onClick={() => void controlServer(profile.id, "stop")} disabled={isBusy}>{isBusy ? "Stopping…" : "Stop server"}</button>}
-                            {isLocal && state === "stopping" && <button className="button button-secondary" disabled>Stopping…</button>}
-                            {!isLocal && <button className="button button-secondary" onClick={() => void testRemoteConnection(profile.id)} disabled={isBusy}>{isBusy ? "Connecting…" : "Test SSH"}</button>}
-                            {!isLocal && (!remoteState || remoteState === "stopped" || remoteState === "unreachable") && <button className="button button-primary" onClick={() => void controlRemoteServer(profile.id, "start")} disabled={isBusy || !target.directory || !target.launch.executable.trim() || remoteState === "stopped" && !remoteStatus?.tmuxAvailable} title={!target.directory || !target.launch.executable.trim() ? "Set the remote folder and launch executable in the profile." : remoteState === "stopped" && !remoteStatus?.tmuxAvailable ? "Install tmux on the remote server to start it." : undefined}>{isBusy ? "Starting…" : "Start server"}</button>}
-                            {!isLocal && remoteState === "running" && <button className="button button-secondary" onClick={() => void controlRemoteServer(profile.id, "stop")} disabled={isBusy}>{isBusy ? "Stopping…" : "Stop server"}</button>}
-                            {!isLocal && remoteState === "stopping" && <button className="button button-secondary" disabled>Stopping…</button>}
-                          </div>
-                        </section>
-                        <nav className="server-tab-list" aria-label="Server sections">
-                          <button className={`server-tab${activeServerTab === "console" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "console" ? "page" : undefined} onClick={() => { setActiveServerTab("console"); if (consoleProfileId !== profile.id) toggleConsole(profile); }}>
-                            <Terminal size={16} aria-hidden="true" /> Console
-                          </button>
-                          <button className={`server-tab${activeServerTab === "files" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "files" ? "page" : undefined} onClick={() => { setActiveServerTab("files"); if (filesProfileId !== profile.id) toggleFiles(profile); }}>
-                            <FolderOpen size={16} aria-hidden="true" /> Files
-                          </button>
-                          <button className={`server-tab${activeServerTab === "settings" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "settings" ? "page" : undefined} onClick={() => setActiveServerTab("settings")}>
-                            <Settings size={16} aria-hidden="true" /> Settings
-                          </button>
-                        </nav>
-                      </aside>
+                        </span>
+                        <span className="server-location" title={location}>{location}</span>
+                        {isLocal && <span className={`session-state session-state-${state}`}>{status ? state : "Checking status…"}</span>}
+                        {!isLocal && connectedRemotes[profile.id] && <span className={`session-state session-state-${remoteStateTone}`}>{remoteStateLabel}</span>}
+                      </span>
+                    </Link>
+                  )}
+                  {isDetailPage ? (
+                    <div className="server-detail-content">
                       <div className="server-tab-content">
                         <section className="server-tab-panel" hidden={activeServerTab !== "console"} aria-label="Server console">
                           {consoleProfileId === profile.id ? (
