@@ -127,6 +127,51 @@
   margin-bottom: 38px;
 }
 
+.page-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.theme-picker {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border: 1px solid var(--app-line);
+  border-radius: 8px;
+  color: var(--app-muted);
+  background: var(--app-paper);
+  cursor: pointer;
+}
+
+.theme-picker:focus-within {
+  outline: 3px solid color-mix(in srgb, var(--app-accent) 32%, transparent);
+  outline-offset: 2px;
+}
+
+.theme-picker > span {
+  font-size: 12px;
+  font-weight: 550;
+}
+
+.theme-picker select {
+  max-width: 180px;
+  border: 0;
+  color: var(--app-ink);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+}
+
+.theme-picker option {
+  color: var(--popover-foreground);
+  background: var(--popover);
+}
+
 .page-header h1 {
   margin: 0;
   font-size: clamp(28px, 3vw, 34px);
@@ -166,6 +211,7 @@
 .icon-button:focus-visible,
 .field input:focus-visible,
 .field textarea:focus-visible,
+.theme-picker select:focus-visible,
 .choice:focus-within {
   outline: 3px solid color-mix(in srgb, var(--app-accent) 32%, transparent);
   outline-offset: 2px;
@@ -208,13 +254,13 @@
 }
 
 .button-danger-quiet {
-  border-color: #f0d2ce;
-  color: #a23d32;
-  background: #fff;
+  border-color: var(--danger-border);
+  color: var(--destructive);
+  background: var(--danger-surface);
 }
 
 .button-danger-quiet:hover:not(:disabled) {
-  background: #fff5f3;
+  background: color-mix(in srgb, var(--danger-surface) 78%, var(--destructive));
 }
 
 .profile-form {
@@ -293,11 +339,11 @@
 }
 
 .form-connection-success {
-  color: #28734a;
+  color: var(--status-success);
 }
 
 .form-connection-error {
-  color: #a63c32;
+  color: var(--destructive);
 }
 
 .field input:not([type="radio"]),
@@ -380,14 +426,14 @@
 
 .form-error,
 .notice-error {
-  color: #8d352d;
-  background: #fff5f3;
+  color: var(--destructive);
+  background: var(--danger-surface);
 }
 
 .form-error {
   margin: 0 0 18px;
   padding: 10px 12px;
-  border: 1px solid #f1d8d4;
+  border: 1px solid var(--danger-border);
   border-radius: 7px;
   font-size: 13px;
 }
@@ -399,7 +445,7 @@
   gap: 16px;
   margin: -12px 0 28px;
   padding: 12px 14px;
-  border: 1px solid #f1d8d4;
+  border: 1px solid var(--danger-border);
   border-radius: 8px;
 }
 
@@ -576,11 +622,11 @@
 }
 
 .session-state-running {
-  color: #34845b;
+  color: var(--status-success);
 }
 
 .session-state-stopping {
-  color: #a86e1f;
+  color: var(--status-warning);
 }
 
 .console-panel {
@@ -590,18 +636,18 @@
   overflow: hidden;
   border: 1px solid var(--app-line);
   border-radius: 9px;
-  background: #15191b;
+  background: var(--terminal-background);
 }
 
 .console-output {
   height: 220px;
   overflow: auto;
   padding: 13px 15px;
-  color: #d4e2dc;
+  color: var(--terminal-foreground);
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
   font-size: 12px;
   line-height: 1.55;
-  scrollbar-color: #58645e #202625;
+  scrollbar-color: var(--terminal-scroll-thumb) var(--terminal-scroll-track);
 }
 
 .console-output pre {
@@ -615,8 +661,8 @@
   align-items: center;
   gap: 10px;
   padding: 10px 11px;
-  border-top: 1px solid #303936;
-  color: #7fc894;
+  border-top: 1px solid var(--terminal-border);
+  color: var(--terminal-accent);
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
 }
 
@@ -625,14 +671,14 @@
   flex: 1;
   border: 0;
   outline: 0;
-  color: #e4eee8;
+  color: var(--terminal-foreground);
   background: transparent;
   font: inherit;
   font-size: 12px;
 }
 
 .console-input-row input::placeholder {
-  color: #87928c;
+  color: var(--terminal-muted);
 }
 
 .files-panel {
@@ -773,7 +819,7 @@
 
 .files-error {
   margin: 0;
-  color: #a23d32;
+  color: var(--destructive);
   font-size: 12px;
 }
 
@@ -793,7 +839,7 @@
 
 .remove-confirm span {
   width: 100%;
-  color: #80564e;
+  color: var(--status-warning);
   font-size: 11px;
   text-align: right;
 }
@@ -893,7 +939,13 @@
 
   .page-header {
     align-items: flex-start;
+    flex-wrap: wrap;
     margin-bottom: 30px;
+  }
+
+  .page-actions {
+    width: 100%;
+    justify-content: space-between;
   }
 
   .page-header h1 {
