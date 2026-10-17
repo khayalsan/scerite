@@ -1,8 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type { FormEvent } from "react";
-import { FileKey, FolderOpen, HardDrive, Network, Palette, Plus, X } from "lucide-react";
+import { ArrowLeft, FileKey, FolderOpen, HardDrive, Network, Palette, Plus, X } from "lucide-react";
 import { serverProfiles } from "./lib/serverProfiles";
 import type { ServerProfile, ServerTarget } from "./lib/serverProfiles";
 import { serverSessions } from "./lib/serverSessions";
@@ -145,6 +146,9 @@ function errorText(error: unknown) {
 
 function App() {
   const [theme, setTheme] = useState<ThemeId>(readSavedTheme);
+  const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const selectedProfileId = pathname.startsWith("/servers/") ? pathname.slice("/servers/".length) : null;
   const [profiles, setProfiles] = useState<ServerProfile[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -170,6 +174,7 @@ function App() {
   const [formConnectionSucceeded, setFormConnectionSucceeded] = useState(false);
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [isRemoving, setIsRemoving] = useState(false);
+  const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId);
 
   useLayoutEffect(() => {
     const root = document.documentElement;
@@ -536,6 +541,7 @@ function App() {
         return next;
       });
       setRemovingId(null);
+      if (selectedProfileId === id) navigate("/");
     } catch (error) {
       setActionError(errorText(error));
     } finally {
@@ -546,16 +552,16 @@ function App() {
   return (
     <main className="app-shell">
       <aside className="sidebar" aria-label="Main navigation">
-        <a className="brand" href="#servers" aria-label="ServerCrafter home">
+        <Link className="brand" to="/" aria-label="ServerCrafter home">
           <span className="brand-mark" aria-hidden="true">S</span>
           <span>ServerCrafter</span>
-        </a>
+        </Link>
         <nav className="primary-nav">
-          <a className="nav-link nav-link-active" href="#servers" aria-current="page">
+          <Link className="nav-link nav-link-active" to="/" aria-current={selectedProfileId ? undefined : "page"}>
             <span className="nav-indicator" aria-hidden="true" />
             Servers
             <span className="nav-count">{profiles.length}</span>
-          </a>
+          </Link>
         </nav>
         <div className="sidebar-footer">
           <span className="connection-dot" aria-hidden="true" />
@@ -566,8 +572,17 @@ function App() {
       <section className="workspace" id="servers" aria-labelledby="page-title">
         <header className="page-header">
           <div>
-            <h1 id="page-title">Servers</h1>
-            <p>Keep your local folders and remote machines organized.</p>
+            {selectedProfileId && (
+              <button className="back-link" onClick={() => navigate("/")}>
+                <ArrowLeft size={15} aria-hidden="true" /> All servers
+              </button>
+            )}
+            <h1 id="page-title">{selectedProfile?.name ?? (selectedProfileId ? "Server" : "Servers")}</h1>
+            <p>{selectedProfile
+              ? selectedProfile.target.kind === "local"
+                ? selectedProfile.target.directory
+                : `${selectedProfile.target.username}@${selectedProfile.target.host}:${selectedProfile.target.port}`
+              : "Keep your local folders and remote machines organized."}</p>
           </div>
           <div className="page-actions">
             <label className="theme-picker">
@@ -577,7 +592,7 @@ function App() {
                 {themes.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
               </select>
             </label>
-            {!isFormOpen && (
+            {!isFormOpen && !selectedProfileId && (
               <button className="button button-primary" onClick={openNewProfile}>
                 <Plus size={16} aria-hidden="true" /> Add server
               </button>
@@ -790,8 +805,8 @@ function App() {
         )}
 
         <div className="list-heading">
-          <h2>Saved servers</h2>
-          {!isLoading && <span>{profiles.length} {profiles.length === 1 ? "server" : "servers"}</span>}
+          <h2>{selectedProfileId ? "Server controls" : "Saved servers"}</h2>
+          {!selectedProfileId && !isLoading && <span>{profiles.length} {profiles.length === 1 ? "server" : "servers"}</span>}
         </div>
 
         {isLoading ? (
@@ -801,6 +816,12 @@ function App() {
             <h3>Saved servers could not be loaded</h3>
             <p>{loadError}</p>
             <button className="button button-secondary" onClick={() => void loadProfiles()}>Try again</button>
+          </div>
+        ) : selectedProfileId && !selectedProfile ? (
+          <div className="empty-state">
+            <h3>Server not found</h3>
+            <p>This server may have been removed.</p>
+            <button className="button button-secondary" onClick={() => navigate("/")}>Back to servers</button>
           </div>
         ) : profiles.length === 0 ? (
           <div className="empty-state">
@@ -833,21 +854,23 @@ function App() {
               const isBusy = busySessionId === profile.id;
 
               return (
-                <article className="server-row" key={profile.id}>
-                  <span className={isLocal ? "server-icon server-icon-local" : "server-icon server-icon-remote"} aria-hidden="true">
-                    {isLocal ? <HardDrive size={18} /> : <Network size={18} />}
-                  </span>
-                  <div className="server-main">
-                    <div className="server-name-line">
-                      <h3>{profile.name}</h3>
-                      <span className={isLocal ? "target-badge target-badge-local" : "target-badge target-badge-remote"}>
-                        {isLocal ? "Local" : "Remote"}
+                <article className={`server-row${selectedProfileId === profile.id ? " server-row-detail" : ""}`} key={profile.id} hidden={!!selectedProfileId && selectedProfileId !== profile.id}>
+                  <Link className="server-row-open" to={`/servers/${profile.id}`} aria-label={`Open ${profile.name}`} aria-current={selectedProfileId === profile.id ? "page" : undefined}>
+                    <span className={isLocal ? "server-icon server-icon-local" : "server-icon server-icon-remote"} aria-hidden="true">
+                      {isLocal ? <HardDrive size={18} /> : <Network size={18} />}
+                    </span>
+                    <span className="server-main">
+                      <span className="server-name-line">
+                        <h3>{profile.name}</h3>
+                        <span className={isLocal ? "target-badge target-badge-local" : "target-badge target-badge-remote"}>
+                          {isLocal ? "Local" : "Remote"}
+                        </span>
                       </span>
-                    </div>
-                    <p title={location}>{location}</p>
-                    {isLocal && <span className={`session-state session-state-${state}`}>{status ? state : "Checking status…"}</span>}
-                    {!isLocal && connectedRemotes[profile.id] && <span className={`session-state session-state-${remoteStateTone}`}>{remoteStateLabel}</span>}
-                  </div>
+                      <span className="server-location" title={location}>{location}</span>
+                      {isLocal && <span className={`session-state session-state-${state}`}>{status ? state : "Checking status…"}</span>}
+                      {!isLocal && connectedRemotes[profile.id] && <span className={`session-state session-state-${remoteStateTone}`}>{remoteStateLabel}</span>}
+                    </span>
+                  </Link>
                   {removingId === profile.id ? (
                     <div className="remove-confirm" role="group" aria-label={`Remove ${profile.name}`}>
                       <span>Remove profile? Server files stay untouched.</span>

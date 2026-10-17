@@ -532,6 +532,79 @@
   border-bottom: 1px solid var(--app-line);
 }
 
+.server-row[hidden] {
+  display: none;
+}
+
+.server-row-detail {
+  align-items: flex-start;
+  gap: 18px;
+  padding: 22px;
+  border: 1px solid var(--app-line);
+  border-radius: 12px;
+  background: var(--app-paper);
+}
+
+.server-row-open {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 15px;
+  padding: 16px 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.server-row-open:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--app-accent) 32%, transparent);
+  outline-offset: 3px;
+}
+
+.server-row-open:hover .server-name-line h3 {
+  color: var(--app-accent);
+}
+
+.server-row-detail .server-row-open {
+  flex: 1 0 100%;
+  padding: 0;
+  cursor: default;
+}
+
+.server-row-detail .row-actions,
+.server-row-detail .remove-confirm {
+  margin-left: 53px;
+}
+
+.server-row-detail .console-panel,
+.server-row-detail .files-panel {
+  flex-basis: 100%;
+  margin-left: 53px;
+}
+
+.back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 8px;
+  padding: 0;
+  border: 0;
+  color: var(--app-muted);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.back-link:hover {
+  color: var(--app-ink);
+}
+
 .server-icon {
   display: grid;
   width: 38px;
@@ -564,6 +637,7 @@
 }
 
 .server-name-line h3 {
+  display: inline-block;
   overflow: hidden;
   margin: 0;
   font-size: 14px;
@@ -591,9 +665,10 @@
   background: var(--secondary);
 }
 
-.server-main p {
+.server-location {
+  display: block;
   overflow: hidden;
-  margin: 3px 0 0;
+  margin-top: 3px;
   color: var(--app-muted);
   font-size: 12px;
   text-overflow: ellipsis;
