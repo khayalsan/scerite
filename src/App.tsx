@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type { FormEvent } from "react";
-import { FileKey, FolderOpen, HardDrive, Network, Plus, X } from "lucide-react";
+import { FileKey, FolderOpen, HardDrive, Network, Palette, Plus, X } from "lucide-react";
 import { serverProfiles } from "./lib/serverProfiles";
 import type { ServerProfile, ServerTarget } from "./lib/serverProfiles";
 import { serverSessions } from "./lib/serverSessions";
@@ -21,6 +21,28 @@ type ProfileDraft = {
   username: string;
   identityFile: string;
 };
+
+const themes = [
+  { id: "violet-night", label: "Violet Night" },
+  { id: "catppuccin-mocha", label: "Catppuccin Mocha" },
+  { id: "catppuccin-latte", label: "Catppuccin Latte" },
+  { id: "nord", label: "Nord" },
+  { id: "dracula", label: "Dracula" },
+  { id: "rose-pine", label: "Rosé Pine" },
+] as const;
+
+type ThemeId = (typeof themes)[number]["id"];
+
+const themeStorageKey = "servercrafter.theme";
+
+function readSavedTheme(): ThemeId {
+  try {
+    const savedTheme = window.localStorage.getItem(themeStorageKey);
+    return themes.find((theme) => theme.id === savedTheme)?.id ?? "violet-night";
+  } catch {
+    return "violet-night";
+  }
+}
 
 const emptyDraft: ProfileDraft = {
   name: "",
@@ -122,6 +144,7 @@ function errorText(error: unknown) {
 }
 
 function App() {
+  const [theme, setTheme] = useState<ThemeId>(readSavedTheme);
   const [profiles, setProfiles] = useState<ServerProfile[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -147,6 +170,17 @@ function App() {
   const [formConnectionSucceeded, setFormConnectionSucceeded] = useState(false);
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [isRemoving, setIsRemoving] = useState(false);
+
+  useLayoutEffect(() => {
+    const root = document.documentElement;
+    root.dataset.theme = theme;
+    root.classList.toggle("dark", theme !== "catppuccin-latte");
+    try {
+      window.localStorage.setItem(themeStorageKey, theme);
+    } catch {
+      // The selected theme still applies for this session if storage is unavailable.
+    }
+  }, [theme]);
 
   async function loadProfiles() {
     setIsLoading(true);
@@ -535,11 +569,20 @@ function App() {
             <h1 id="page-title">Servers</h1>
             <p>Keep your local folders and remote machines organized.</p>
           </div>
-          {!isFormOpen && (
-            <button className="button button-primary" onClick={openNewProfile}>
-              <Plus size={16} aria-hidden="true" /> Add server
-            </button>
-          )}
+          <div className="page-actions">
+            <label className="theme-picker">
+              <Palette size={16} aria-hidden="true" />
+              <span>Theme</span>
+              <select aria-label="Color theme" value={theme} onChange={(event) => setTheme(event.currentTarget.value as ThemeId)}>
+                {themes.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+              </select>
+            </label>
+            {!isFormOpen && (
+              <button className="button button-primary" onClick={openNewProfile}>
+                <Plus size={16} aria-hidden="true" /> Add server
+              </button>
+            )}
+          </div>
         </header>
 
         {isFormOpen && (
