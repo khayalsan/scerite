@@ -3,13 +3,14 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type { FormEvent } from "react";
-import { ArrowLeft, FileKey, FolderOpen, HardDrive, Network, Palette, Plus, Settings, SlidersHorizontal, Terminal, X } from "lucide-react";
+import { ArrowLeft, Download, FileKey, FolderOpen, HardDrive, Network, Palette, Plus, Settings, SlidersHorizontal, Terminal, X } from "lucide-react";
 import { localInstallRoot, serverEnvironments, serverProfiles } from "./lib/serverProfiles";
 import type { ServerEnvironment, ServerProfile, ServerTarget } from "./lib/serverProfiles";
 import { serverSessions } from "./lib/serverSessions";
 import type { LocalServerStatus, RemoteServerStatus } from "./lib/serverSessions";
 import { LocalFilesPanel } from "./components/LocalFilesPanel";
 import { ServerPropertiesPanel } from "./components/ServerPropertiesPanel";
+import { VanillaInstallPanel } from "./components/VanillaInstallPanel";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select";
 import "./App.css";
 
@@ -53,7 +54,7 @@ function readSavedTheme(): ThemeId {
   }
 }
 
-type ServerTab = "console" | "files" | "properties" | "settings";
+type ServerTab = "console" | "files" | "properties" | "install" | "settings";
 
 const emptyDraft: ProfileDraft = {
   name: "",
@@ -177,6 +178,7 @@ function App() {
   const [consoleProfileId, setConsoleProfileId] = useState<string | null>(null);
   const [filesProfileId, setFilesProfileId] = useState<string | null>(null);
   const [propertiesProfileId, setPropertiesProfileId] = useState<string | null>(null);
+  const [installProfileId, setInstallProfileId] = useState<string | null>(null);
   const [consoleOutput, setConsoleOutput] = useState("");
   const [consoleInput, setConsoleInput] = useState("");
   const consoleCursor = useRef(0);
@@ -1010,6 +1012,9 @@ function App() {
               <button className={`server-tab${activeServerTab === "properties" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "properties" ? "page" : undefined} onClick={() => { setActiveServerTab("properties"); setPropertiesProfileId(selectedProfile.id); }}>
                 <SlidersHorizontal size={16} aria-hidden="true" /> Properties
               </button>
+              <button className={`server-tab${activeServerTab === "install" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "install" ? "page" : undefined} onClick={() => { setActiveServerTab("install"); setInstallProfileId(selectedProfile.id); }}>
+                <Download size={16} aria-hidden="true" /> Install
+              </button>
               <button className={`server-tab${activeServerTab === "settings" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "settings" ? "page" : undefined} onClick={() => {
                 setActiveServerTab("settings");
                 if (isFormOpen && editingProfile?.id === selectedProfile.id) return;
@@ -1300,6 +1305,9 @@ function App() {
                               canEdit={isLocal ? status?.state === "stopped" : remoteState === "stopped"}
                             />
                           )}
+                        </section>
+                        <section className="server-tab-panel" hidden={activeServerTab !== "install"} aria-label="Install Minecraft">
+                          {installProfileId === profile.id && <VanillaInstallPanel profileId={profile.id} remote={!isLocal} rootConfigured={isLocal ? !!localRoot : !!environments.find((environment) => environment.id === (target.kind === "remote" ? target.environmentId : ""))?.rootDirectory} canInstall={isLocal ? state === "stopped" : remoteState === "stopped"} />}
                         </section>
                         <section className={`server-tab-panel server-settings-panel${isFormOpen && editingProfile?.id === profile.id ? " server-settings-editing" : ""}`} hidden={activeServerTab !== "settings"} aria-label="Server settings">
                           {isFormOpen && editingProfile?.id === profile.id ? renderProfileForm() : (
