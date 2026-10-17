@@ -11,7 +11,8 @@ use std::{
 
 use serde::Serialize;
 use ssh2::{
-    CheckResult, ErrorCode, FileType, KnownHostFileKind, OpenFlags, OpenType, RenameFlags, Session,
+    CheckResult, ErrorCode, FileType, KnownHostFileKind, MethodType, OpenFlags, OpenType,
+    RenameFlags, Session,
 };
 use tauri::State;
 use uuid::Uuid;
@@ -119,6 +120,26 @@ pub async fn test_remote_connection(
 ) -> Result<(), String> {
     let profile = require_remote_profile(&profiles, profile_id)?;
     run_remote(profile, Arc::clone(remote_sessions.inner()), |_, _| Ok(())).await
+}
+
+#[tauri::command]
+pub async fn test_remote_connection_draft(
+    host: String,
+    port: u16,
+    username: String,
+    identity_file: Option<String>,
+) -> Result<(), String> {
+    let host = host.trim().to_owned();
+    let username = username.trim().to_owned();
+    if host.is_empty() || username.is_empty() || port == 0 {
+        return Err("Enter a host, SSH user, and valid port before testing the connection.".into());
+    }
+    let identity_file = identity_file.filter(|path| !path.trim().is_empty());
+    tauri::async_runtime::spawn_blocking(move || {
+        connect_remote(&host, port, &username, identity_file.as_deref()).map(|_| ())
+    })
+    .await
+    .map_err(|error| format!("SSH connection test failed to finish: {error}"))?
 }
 
 #[tauri::command]
@@ -557,11 +578,23 @@ fn connect_remote(
 
     let mut session =
         Session::new().map_err(|error| format!("Could not create SSH session: {error}"))?;
+    let usable_host_keys = session
+        .supported_algs(MethodType::HostKey)
+        .map_err(|error| format!("Could not inspect supported SSH host keys: {error}"))?
+        .into_iter()
+        .filter(|algorithm| !algorithm.contains("-cert-v01@openssh.com"))
+        .collect::<Vec<_>>();
+    if usable_host_keys.is_empty() {
+        return Err("This SSH build has no supported host-key algorithms.".into());
+    }
+    session
+        .method_pref(MethodType::HostKey, &usable_host_keys.join(","))
+        .map_err(|error| format!("Could not configure SSH host-key algorithms: {error}"))?;
     session.set_tcp_stream(stream);
     session.set_timeout(CONNECT_TIMEOUT.as_millis() as u32);
     session
         .handshake()
-        .map_err(|error| format!("SSH handshake failed: {error}"))?;
+        .map_err(|error| format!("SSH handshake failed during encryption/key negotiation: {error}. Check that the server offers a standard SSH host key and a modern key-exchange and cipher algorithm."))?;
     verify_host_key(&session, host, port)?;
     authenticate(&session, username, identity_file)?;
     session.set_keepalive(true, 15);

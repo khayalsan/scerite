@@ -17,6 +17,7 @@ pub fn run_session_manager(app_data_dir: PathBuf) -> Result<(), String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let profile_path = app.path().app_data_dir()?.join("server-profiles.json");
             let profile_store =
@@ -42,6 +43,7 @@ pub fn run() {
             server_files::read_local_server_file,
             server_files::write_local_server_file,
             remote_ssh::test_remote_connection,
+            remote_ssh::test_remote_connection_draft,
             remote_ssh::remote_server_status,
             remote_ssh::start_remote_server,
             remote_ssh::stop_remote_server,

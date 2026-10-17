@@ -270,6 +270,36 @@
   grid-column: 1 / -1;
 }
 
+.path-control {
+  display: flex;
+  min-width: 0;
+  gap: 8px;
+}
+
+.path-control input {
+  flex: 1;
+  min-width: 0;
+}
+
+.path-control .button {
+  flex: 0 0 auto;
+}
+
+.form-connection-result {
+  margin: 10px 0 0;
+  color: var(--app-muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.form-connection-success {
+  color: #28734a;
+}
+
+.form-connection-error {
+  color: #a63c32;
+}
+
 .field input:not([type="radio"]),
 .field textarea {
   width: 100%;

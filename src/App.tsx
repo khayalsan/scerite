@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type { FormEvent } from "react";
-import { HardDrive, Network, Plus, X } from "lucide-react";
+import { FileKey, FolderOpen, HardDrive, Network, Plus, X } from "lucide-react";
 import { serverProfiles } from "./lib/serverProfiles";
 import type { ServerProfile, ServerTarget } from "./lib/serverProfiles";
 import { serverSessions } from "./lib/serverSessions";
@@ -109,6 +110,9 @@ function App() {
   const [editingProfile, setEditingProfile] = useState<ServerProfile | null>(null);
   const [draft, setDraft] = useState<ProfileDraft>(emptyDraft);
   const [isSaving, setIsSaving] = useState(false);
+  const [isTestingConnection, setIsTestingConnection] = useState(false);
+  const [formConnectionResult, setFormConnectionResult] = useState<string | null>(null);
+  const [formConnectionSucceeded, setFormConnectionSucceeded] = useState(false);
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [isRemoving, setIsRemoving] = useState(false);
 
@@ -187,6 +191,46 @@ function App() {
       setRemoteStatuses((current) => ({ ...current, [profileId]: { state: "unreachable" } }));
     } finally {
       setBusySessionId(null);
+    }
+  }
+
+  async function testDraftConnection() {
+    setIsTestingConnection(true);
+    setFormError(null);
+    setFormConnectionResult(null);
+    setFormConnectionSucceeded(false);
+    try {
+      await invoke<void>("test_remote_connection_draft", {
+        host: draft.host.trim(),
+        port: Number(draft.port),
+        username: draft.username.trim(),
+        identityFile: draft.identityFile.trim() || null,
+      });
+      setFormConnectionResult("SSH connection verified. The server fingerprint is trusted and authentication succeeded.");
+      setFormConnectionSucceeded(true);
+    } catch (error) {
+      setFormConnectionResult(errorText(error));
+      setFormConnectionSucceeded(false);
+    } finally {
+      setIsTestingConnection(false);
+    }
+  }
+
+  async function selectLocalDirectory() {
+    try {
+      const selected = await openDialog({ directory: true, multiple: false, title: "Choose server folder" });
+      if (typeof selected === "string") setDraft((current) => ({ ...current, directory: selected }));
+    } catch (error) {
+      setFormError(errorText(error));
+    }
+  }
+
+  async function selectIdentityFile() {
+    try {
+      const selected = await openDialog({ multiple: false, title: "Choose SSH identity file" });
+      if (typeof selected === "string") setDraft((current) => ({ ...current, identityFile: selected }));
+    } catch (error) {
+      setFormError(errorText(error));
     }
   }
 
@@ -357,6 +401,8 @@ function App() {
     setEditingProfile(null);
     setDraft(emptyDraft);
     setFormError(null);
+    setFormConnectionResult(null);
+    setFormConnectionSucceeded(false);
     setIsFormOpen(true);
   }
 
@@ -364,6 +410,8 @@ function App() {
     setEditingProfile(profile);
     setDraft(draftFor(profile));
     setFormError(null);
+    setFormConnectionResult(null);
+    setFormConnectionSucceeded(false);
     setIsFormOpen(true);
     setRemovingId(null);
   }
@@ -372,6 +420,8 @@ function App() {
     setIsFormOpen(false);
     setEditingProfile(null);
     setFormError(null);
+    setFormConnectionResult(null);
+    setFormConnectionSucceeded(false);
   }
 
   async function saveProfile(event: FormEvent<HTMLFormElement>) {
@@ -515,12 +565,15 @@ function App() {
                 <>
                   <label className="field field-wide">
                     <span>Server folder</span>
-                    <input
-                      value={draft.directory}
-                      onChange={(event) => setDraft({ ...draft, directory: event.currentTarget.value })}
-                      placeholder="C:\\Minecraft\\Survival"
-                      required
-                    />
+                    <div className="path-control">
+                      <input
+                        value={draft.directory}
+                        onChange={(event) => setDraft({ ...draft, directory: event.currentTarget.value })}
+                        placeholder="C:\\Minecraft\\Survival"
+                        required
+                      />
+                      <button className="button button-secondary" type="button" onClick={() => void selectLocalDirectory()} aria-label="Browse for server folder"><FolderOpen size={15} />Browse</button>
+                    </div>
                     <small>Enter the folder that contains the server files.</small>
                   </label>
                   <label className="field field-wide">
@@ -576,11 +629,14 @@ function App() {
                   </label>
                   <label className="field field-wide">
                     <span>SSH identity file <small>(optional)</small></span>
-                    <input
-                      value={draft.identityFile}
-                      onChange={(event) => setDraft({ ...draft, identityFile: event.currentTarget.value })}
-                      placeholder="C:\\Users\\you\\.ssh\\id_ed25519"
-                    />
+                    <div className="path-control">
+                      <input
+                        value={draft.identityFile}
+                        onChange={(event) => setDraft({ ...draft, identityFile: event.currentTarget.value })}
+                        placeholder="C:\\Users\\you\\.ssh\\id_ed25519"
+                      />
+                      <button className="button button-secondary" type="button" onClick={() => void selectIdentityFile()} aria-label="Browse for SSH identity file"><FileKey size={15} />Browse</button>
+                    </div>
                     <small>Leave blank to use your system SSH agent and default keys. Encrypted keys must be loaded into the agent. Host keys must already be trusted in known_hosts.</small>
                   </label>
                   <label className="field field-wide">
@@ -615,6 +671,11 @@ function App() {
             </div>
 
             <div className="form-actions">
+              {draft.kind === "remote" && (
+                <button className="button button-secondary" type="button" onClick={() => void testDraftConnection()} disabled={isTestingConnection || isSaving || !draft.host.trim() || !draft.username.trim() || !Number(draft.port)}>
+                  {isTestingConnection ? "Testing SSH…" : "Test SSH"}
+                </button>
+              )}
               <button className="button button-quiet" type="button" onClick={closeForm} disabled={isSaving}>
                 Cancel
               </button>
@@ -622,6 +683,7 @@ function App() {
                 {isSaving ? "Saving…" : editingProfile ? "Save changes" : "Save server"}
               </button>
             </div>
+            {formConnectionResult && <p className={formConnectionSucceeded ? "form-connection-result form-connection-success" : "form-connection-result form-connection-error"} role="status">{formConnectionResult}</p>}
           </form>
         )}
 
