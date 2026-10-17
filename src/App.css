@@ -283,19 +283,16 @@
   font-weight: 550;
 }
 
-.theme-picker select {
-  max-width: 180px;
-  border: 0;
+.theme-select-trigger {
+  width: 180px;
+  min-width: 0;
+  min-height: 30px;
+  padding: 4px 8px;
+  border-color: transparent;
   color: var(--app-ink);
   background: transparent;
   cursor: pointer;
-  font: inherit;
   font-size: 13px;
-}
-
-.theme-picker option {
-  color: var(--popover-foreground);
-  background: var(--popover);
 }
 
 .page-header h1 {
@@ -337,7 +334,7 @@
 .icon-button:focus-visible,
 .field input:focus-visible,
 .field textarea:focus-visible,
-.theme-picker select:focus-visible,
+.theme-select-trigger:focus-visible,
 .choice:focus-within {
   outline: 3px solid color-mix(in srgb, var(--app-accent) 32%, transparent);
   outline-offset: 2px;

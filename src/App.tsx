@@ -1016,9 +1016,24 @@ function App() {
             <label className="theme-picker">
               <Palette size={16} aria-hidden="true" />
               <span>Theme</span>
-              <select aria-label="Color theme" value={theme} onChange={(event) => setTheme(event.currentTarget.value as ThemeId)}>
-                {themes.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
-              </select>
+              <Select
+                value={theme}
+                onValueChange={(value) => {
+                  const selectedTheme = themes.find((option) => option.id === value);
+                  if (selectedTheme) setTheme(selectedTheme.id);
+                }}
+              >
+                <SelectTrigger aria-label="Color theme" className="theme-select-trigger">
+                  <SelectValue>
+                    {(selected) => themes.find((option) => option.id === selected)?.label ?? "Violet Night"}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  {themes.map((option) => (
+                    <SelectItem key={option.id} value={option.id}>{option.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </label>
             {!isEnvironmentFormOpen && (
               <button className="button button-secondary" onClick={() => openNewEnvironment()}>
