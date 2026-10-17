@@ -34,7 +34,39 @@ const emptyDraft: ProfileDraft = {
   identityFile: "",
 };
 
+function parseLaunchArguments(value: string): string[] {
+  const launchArguments: string[] = [];
+  let argument = "";
+  let quote: "'" | '"' | null = null;
+  let tokenStarted = false;
+
+  for (const character of value) {
+    if (quote) {
+      if (character === quote) quote = null;
+      else argument += character;
+      tokenStarted = true;
+    } else if (character === "'" || character === '"') {
+      quote = character;
+      tokenStarted = true;
+    } else if (/\s/.test(character)) {
+      if (tokenStarted) {
+        launchArguments.push(argument);
+        argument = "";
+        tokenStarted = false;
+      }
+    } else {
+      argument += character;
+      tokenStarted = true;
+    }
+  }
+  if (tokenStarted) launchArguments.push(argument);
+
+  return launchArguments;
+}
+
 function targetFor(draft: ProfileDraft): ServerTarget {
+  const launchArguments = parseLaunchArguments(draft.arguments);
+
   if (draft.kind === "remote") {
     return {
       kind: "remote",
@@ -45,7 +77,7 @@ function targetFor(draft: ProfileDraft): ServerTarget {
       directory: draft.directory.trim(),
       launch: {
         executable: draft.executable.trim(),
-        arguments: draft.arguments.split(/\r?\n/).filter((argument) => argument.trim().length > 0),
+        arguments: launchArguments,
       },
     };
   }
@@ -55,7 +87,7 @@ function targetFor(draft: ProfileDraft): ServerTarget {
     directory: draft.directory,
     launch: {
       executable: draft.executable.trim(),
-      arguments: draft.arguments.split(/\r?\n/).filter((argument) => argument.trim().length > 0),
+      arguments: launchArguments,
     },
   };
 }
@@ -593,7 +625,7 @@ function App() {
                       rows={4}
                       placeholder={'-Xms2G\n-jar\nserver.jar\nnogui'}
                     />
-                    <small>Enter one argument per line. Avoid passwords or tokens; arguments are saved with the profile.</small>
+                    <small>Separate arguments with spaces or new lines. Quote values that contain spaces. Avoid passwords or tokens; arguments are saved with the profile.</small>
                   </label>
                 </>
               ) : (
@@ -664,7 +696,7 @@ function App() {
                       rows={4}
                       placeholder={'-Xms2G\n-jar\nserver.jar\nnogui'}
                     />
-                    <small>Enter one argument per line. Avoid passwords or tokens; arguments are saved with the profile.</small>
+                    <small>Separate arguments with spaces or new lines. Quote values that contain spaces. Avoid passwords or tokens; arguments are saved with the profile.</small>
                   </label>
                 </>
               )}
