@@ -1,7 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 
+export type LocalLaunchConfig = { executable: string; arguments: string[] };
+
 export type ServerTarget =
-  | { kind: "local"; directory: string }
+  | { kind: "local"; directory: string; launch: LocalLaunchConfig }
   | { kind: "remote"; host: string; port: number; username: string };
 
 export interface ServerProfile {

@@ -165,6 +165,7 @@
 .button:focus-visible,
 .icon-button:focus-visible,
 .field input:focus-visible,
+.field textarea:focus-visible,
 .choice:focus-within {
   outline: 3px solid color-mix(in srgb, var(--app-accent) 32%, transparent);
   outline-offset: 2px;
@@ -269,7 +270,8 @@
   grid-column: 1 / -1;
 }
 
-.field input:not([type="radio"]) {
+.field input:not([type="radio"]),
+.field textarea {
   width: 100%;
   min-height: 40px;
   padding: 0 11px;
@@ -282,7 +284,15 @@
   font-weight: 450;
 }
 
-.field input::placeholder {
+.field textarea {
+  min-height: 104px;
+  padding: 10px 11px;
+  resize: vertical;
+  line-height: 1.45;
+}
+
+.field input::placeholder,
+.field textarea::placeholder {
   color: var(--app-muted);
   opacity: 1;
 }
@@ -511,6 +521,35 @@
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.session-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 7px;
+  color: var(--app-muted);
+  font-size: 11px;
+  font-weight: 560;
+  text-transform: capitalize;
+}
+
+.session-state-running::before,
+.session-state-stopping::before,
+.session-state-stopped::before {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  content: "";
+}
+
+.session-state-running {
+  color: #34845b;
+}
+
+.session-state-stopping {
+  color: #a86e1f;
 }
 
 .row-actions,

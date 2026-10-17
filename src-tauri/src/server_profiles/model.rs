@@ -14,6 +14,8 @@ pub struct ServerProfile {
 pub enum ServerTarget {
     Local {
         directory: String,
+        #[serde(default)]
+        launch: LocalLaunchConfig,
     },
     Remote {
         host: String,
@@ -22,11 +24,27 @@ pub enum ServerTarget {
     },
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalLaunchConfig {
+    pub executable: String,
+    pub arguments: Vec<String>,
+}
+
 impl ServerTarget {
     pub fn validate(&self) -> Result<(), String> {
         match self {
-            Self::Local { directory } if directory.trim().is_empty() => {
-                Err("Choose a server directory.".into())
+            Self::Local { directory, launch } => {
+                if directory.trim().is_empty() {
+                    return Err("Choose a server directory.".into());
+                }
+                if launch.executable.trim().is_empty() {
+                    return Err("Enter a launch executable.".into());
+                }
+                if launch.arguments.iter().any(|argument| argument.contains('\0')) {
+                    return Err("Launch arguments cannot contain null characters.".into());
+                }
+                Ok(())
             }
             Self::Remote {
                 host,
@@ -44,13 +62,18 @@ impl ServerTarget {
                 }
                 Ok(())
             }
-            _ => Ok(()),
         }
     }
 
     pub fn normalized(self) -> Self {
         match self {
-            Self::Local { directory } => Self::Local { directory },
+            Self::Local { directory, launch } => Self::Local {
+                directory: directory.trim().to_owned(),
+                launch: LocalLaunchConfig {
+                    executable: launch.executable.trim().to_owned(),
+                    arguments: launch.arguments,
+                },
+            },
             Self::Remote {
                 host,
                 port,

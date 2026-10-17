@@ -3,12 +3,16 @@ import type { FormEvent } from "react";
 import { HardDrive, Network, Plus, X } from "lucide-react";
 import { serverProfiles } from "./lib/serverProfiles";
 import type { ServerProfile, ServerTarget } from "./lib/serverProfiles";
+import { serverSessions } from "./lib/serverSessions";
+import type { LocalServerStatus } from "./lib/serverSessions";
 import "./App.css";
 
 type ProfileDraft = {
   name: string;
   kind: "local" | "remote";
   directory: string;
+  executable: string;
+  arguments: string;
   host: string;
   port: string;
   username: string;
@@ -18,6 +22,8 @@ const emptyDraft: ProfileDraft = {
   name: "",
   kind: "local",
   directory: "",
+  executable: "",
+  arguments: "",
   host: "",
   port: "22",
   username: "",
@@ -33,7 +39,14 @@ function targetFor(draft: ProfileDraft): ServerTarget {
     };
   }
 
-  return { kind: "local", directory: draft.directory };
+  return {
+    kind: "local",
+    directory: draft.directory,
+    launch: {
+      executable: draft.executable.trim(),
+      arguments: draft.arguments.split(/\r?\n/).filter((argument) => argument.trim().length > 0),
+    },
+  };
 }
 
 function draftFor(profile: ServerProfile): ProfileDraft {
@@ -48,7 +61,13 @@ function draftFor(profile: ServerProfile): ProfileDraft {
     };
   }
 
-  return { ...emptyDraft, name: profile.name, directory: profile.target.directory };
+  return {
+    ...emptyDraft,
+    name: profile.name,
+    directory: profile.target.directory,
+    executable: profile.target.launch.executable,
+    arguments: profile.target.launch.arguments.join("\n"),
+  };
 }
 
 function errorText(error: unknown) {
@@ -60,6 +79,9 @@ function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [sessionError, setSessionError] = useState<string | null>(null);
+  const [statuses, setStatuses] = useState<Record<string, LocalServerStatus>>({});
+  const [busySessionId, setBusySessionId] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingProfile, setEditingProfile] = useState<ServerProfile | null>(null);
@@ -83,6 +105,48 @@ function App() {
   useEffect(() => {
     void loadProfiles();
   }, []);
+
+  useEffect(() => {
+    const localProfiles = profiles.filter((profile) => profile.target.kind === "local");
+    if (localProfiles.length === 0) return;
+
+    let active = true;
+    const refresh = async () => {
+      const results = await Promise.allSettled(
+        localProfiles.map(async (profile) => [profile.id, await serverSessions.status(profile.id)] as const),
+      );
+      if (!active) return;
+      setStatuses((current) => {
+        const next = { ...current };
+        results.forEach((result) => {
+          if (result.status === "fulfilled") next[result.value[0]] = result.value[1];
+        });
+        return next;
+      });
+      const failed = results.find((result) => result.status === "rejected");
+      if (failed?.status === "rejected") setSessionError(errorText(failed.reason));
+    };
+
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 2000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [profiles]);
+
+  async function controlServer(profileId: string, action: "start" | "stop") {
+    setBusySessionId(profileId);
+    setSessionError(null);
+    try {
+      const status = await serverSessions[action](profileId);
+      setStatuses((current) => ({ ...current, [profileId]: status }));
+    } catch (error) {
+      setSessionError(errorText(error));
+    } finally {
+      setBusySessionId(null);
+    }
+  }
 
   function openNewProfile() {
     setEditingProfile(null);
@@ -227,16 +291,37 @@ function App() {
               </fieldset>
 
               {draft.kind === "local" ? (
-                <label className="field field-wide">
-                  <span>Server folder</span>
-                  <input
-                    value={draft.directory}
-                    onChange={(event) => setDraft({ ...draft, directory: event.currentTarget.value })}
-                    placeholder="C:\\Minecraft\\Survival"
-                    required
-                  />
-                  <small>Enter the folder that contains the server files.</small>
-                </label>
+                <>
+                  <label className="field field-wide">
+                    <span>Server folder</span>
+                    <input
+                      value={draft.directory}
+                      onChange={(event) => setDraft({ ...draft, directory: event.currentTarget.value })}
+                      placeholder="C:\\Minecraft\\Survival"
+                      required
+                    />
+                    <small>Enter the folder that contains the server files.</small>
+                  </label>
+                  <label className="field field-wide">
+                    <span>Launch executable</span>
+                    <input
+                      value={draft.executable}
+                      onChange={(event) => setDraft({ ...draft, executable: event.currentTarget.value })}
+                      placeholder="java"
+                      required
+                    />
+                  </label>
+                  <label className="field field-wide">
+                    <span>Arguments</span>
+                    <textarea
+                      value={draft.arguments}
+                      onChange={(event) => setDraft({ ...draft, arguments: event.currentTarget.value })}
+                      rows={4}
+                      placeholder={'-Xms2G\n-jar\nserver.jar\nnogui'}
+                    />
+                    <small>Enter one argument per line. Avoid passwords or tokens; arguments are saved with the profile.</small>
+                  </label>
+                </>
               ) : (
                 <>
                   <label className="field field-wide">
@@ -303,6 +388,13 @@ function App() {
           </div>
         )}
 
+        {sessionError && (
+          <div className="notice notice-error" role="alert">
+            <div><strong>Could not control a local server.</strong><span>{sessionError}</span></div>
+            <button className="button button-quiet" onClick={() => setSessionError(null)}>Dismiss</button>
+          </div>
+        )}
+
         <div className="list-heading">
           <h2>Saved servers</h2>
           {!isLoading && <span>{profiles.length} {profiles.length === 1 ? "server" : "servers"}</span>}
@@ -331,6 +423,9 @@ function App() {
               const location = target.kind === "local"
                 ? target.directory
                 : `${target.username}@${target.host}:${target.port}`;
+              const status = isLocal ? statuses[profile.id] : undefined;
+              const state = status?.state ?? "checking";
+              const isBusy = busySessionId === profile.id;
 
               return (
                 <article className="server-row" key={profile.id}>
@@ -345,6 +440,7 @@ function App() {
                       </span>
                     </div>
                     <p title={location}>{location}</p>
+                    {isLocal && <span className={`session-state session-state-${state}`}>{status ? state : "Checking status…"}</span>}
                   </div>
                   {removingId === profile.id ? (
                     <div className="remove-confirm" role="group" aria-label={`Remove ${profile.name}`}>
@@ -356,8 +452,11 @@ function App() {
                     </div>
                   ) : (
                     <div className="row-actions">
+                      {isLocal && (!status || state === "stopped") && <button className="button button-primary" onClick={() => void controlServer(profile.id, "start")} disabled={isBusy || !target.launch.executable.trim()}>{isBusy ? "Starting…" : "Start"}</button>}
+                      {isLocal && state === "running" && <button className="button button-secondary" onClick={() => void controlServer(profile.id, "stop")} disabled={isBusy}>{isBusy ? "Stopping…" : "Stop"}</button>}
+                      {isLocal && state === "stopping" && <button className="button button-secondary" disabled>Stopping…</button>}
                       <button className="button button-quiet" onClick={() => openEditProfile(profile)}>Edit</button>
-                      <button className="button button-quiet" onClick={() => setRemovingId(profile.id)}>Remove</button>
+                      <button className="button button-quiet" onClick={() => setRemovingId(profile.id)} disabled={isLocal && state !== "stopped"} title={isLocal && state !== "stopped" ? "Stop the server before removing its profile." : undefined}>Remove</button>
                     </div>
                   )}
                 </article>
