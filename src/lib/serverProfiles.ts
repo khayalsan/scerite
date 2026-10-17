@@ -4,7 +4,16 @@ export type LocalLaunchConfig = { executable: string; arguments: string[] };
 
 export type ServerTarget =
   | { kind: "local"; directory: string; launch: LocalLaunchConfig }
-  | { kind: "remote"; host: string; port: number; username: string; identityFile: string | null; directory: string; launch: LocalLaunchConfig };
+  | { kind: "remote"; environmentId: string; directory: string; launch: LocalLaunchConfig };
+
+export interface ServerEnvironment {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  username: string;
+  identityFile: string | null;
+}
 
 export interface ServerProfile {
   id: string;
@@ -19,4 +28,13 @@ export const serverProfiles = {
   update: (id: string, name: string, target: ServerTarget) =>
     invoke<ServerProfile>("update_server_profile", { id, name, target }),
   delete: (id: string) => invoke<void>("delete_server_profile", { id }),
+};
+
+export const serverEnvironments = {
+  list: () => invoke<ServerEnvironment[]>("list_server_environments"),
+  create: (name: string, host: string, port: number, username: string, identityFile: string | null) =>
+    invoke<ServerEnvironment>("create_server_environment", { name, host, port, username, identityFile }),
+  update: (id: string, name: string, host: string, port: number, username: string, identityFile: string | null) =>
+    invoke<ServerEnvironment>("update_server_environment", { id, name, host, port, username, identityFile }),
+  delete: (id: string) => invoke<void>("delete_server_environment", { id }),
 };
