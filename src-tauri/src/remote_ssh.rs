@@ -1,20 +1,30 @@
 use std::{
     collections::HashMap,
     env,
-    io::{Read, Write},
-    net::{TcpStream, ToSocketAddrs},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::Duration,
     time::Instant,
 };
 
-use serde::Serialize;
-use ssh2::{
-    CheckResult, ErrorCode, FileType, KnownHostFileKind, MethodType, OpenFlags, OpenType,
-    RenameFlags, Session,
+use russh::{
+    ChannelMsg,
+    client::{self, Handle},
+    keys::{
+        self, PublicKeyOrCertificate,
+        agent::{AgentIdentity, client::AgentClient},
+    },
 };
+use russh_sftp::{
+    client::{SftpSession, error::Error as SftpError, rawsession::RawSftpSession},
+    protocol::{FileAttributes, FileType, OpenFlags, Packet, StatusCode},
+};
+use serde::Serialize;
 use tauri::State;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    runtime::{Builder, Runtime},
+};
 use uuid::Uuid;
 
 use crate::server_profiles::{LocalLaunchConfig, ServerProfile, ServerProfileStore, ServerTarget};
@@ -24,17 +34,42 @@ const MAX_FILE_BYTES: u64 = 1024 * 1024;
 const MAX_CONSOLE_BYTES: u64 = 512 * 1024;
 const MAX_DIRECTORY_ENTRIES: usize = 1000;
 const CONNECTION_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
-const SFTP_END_OF_DIRECTORY: ErrorCode = ErrorCode::Session(-16);
 
-#[derive(Default)]
 pub struct RemoteSessionManager {
     sessions: Mutex<HashMap<Uuid, CachedConnection>>,
+    runtime: Arc<Runtime>,
 }
 
 struct CachedConnection {
     config: RemoteConnectionConfig,
-    session: Session,
+    session: Arc<Handle<SshHandler>>,
     last_used: Instant,
+}
+
+impl Default for RemoteSessionManager {
+    fn default() -> Self {
+        let runtime = Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("create remote SSH runtime");
+        Self {
+            sessions: Mutex::new(HashMap::new()),
+            runtime: Arc::new(runtime),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct RemoteConnection {
+    runtime: Arc<Runtime>,
+    handle: Arc<Handle<SshHandler>>,
+}
+
+struct RemoteSftp {
+    runtime: Arc<Runtime>,
+    handle: Arc<Handle<SshHandler>>,
+    inner: SftpSession,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -46,7 +81,7 @@ struct RemoteConnectionConfig {
 }
 
 impl RemoteSessionManager {
-    fn session(&self, profile: &ServerProfile) -> Result<Session, String> {
+    fn session(self: &Arc<Self>, profile: &ServerProfile) -> Result<RemoteConnection, String> {
         let config = remote_connection_config(profile)?;
         let mut sessions = self
             .sessions
@@ -56,13 +91,19 @@ impl RemoteSessionManager {
         if let Some(connection) = sessions.get_mut(&profile.id) {
             if connection.config == config {
                 connection.last_used = Instant::now();
-                return Ok(connection.session.clone());
+                if !connection.session.is_closed() {
+                    return Ok(RemoteConnection {
+                        runtime: Arc::clone(&self.runtime),
+                        handle: Arc::clone(&connection.session),
+                    });
+                }
             }
             sessions.remove(&profile.id);
         }
         drop(sessions);
 
         let session = connect_remote(
+            &self.runtime,
             &config.host,
             config.port,
             &config.username,
@@ -76,11 +117,14 @@ impl RemoteSessionManager {
             profile.id,
             CachedConnection {
                 config,
-                session: session.clone(),
+                session: Arc::clone(&session),
                 last_used: Instant::now(),
             },
         );
-        Ok(session)
+        Ok(RemoteConnection {
+            runtime: Arc::clone(&self.runtime),
+            handle: session,
+        })
     }
 
     fn invalidate(&self, profile_id: Uuid) {
@@ -136,7 +180,12 @@ pub async fn test_remote_connection_draft(
     }
     let identity_file = identity_file.filter(|path| !path.trim().is_empty());
     tauri::async_runtime::spawn_blocking(move || {
-        connect_remote(&host, port, &username, identity_file.as_deref()).map(|_| ())
+        let runtime = Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .map_err(|error| format!("Could not start the SSH runtime: {error}"))?;
+        connect_remote(&runtime, &host, port, &username, identity_file.as_deref()).map(|_| ())
     })
     .await
     .map_err(|error| format!("SSH connection test failed to finish: {error}"))?
@@ -336,20 +385,14 @@ pub async fn list_remote_server_files(
         reject_remote_symlink_path(&sftp, &canonical_root, &requested)?;
         let directory = canonical_inside(&sftp, &canonical_root, &requested)?;
         let directory_stat = sftp.stat(Path::new(&directory)).map_err(|error| format!("Could not read remote folder: {error}"))?;
-        if directory_stat.file_type() != FileType::Directory {
+        if directory_stat.file_type() != FileType::Dir {
             return Err("The remote path is not a folder.".into());
         }
 
         let prefix = relative_path.trim_matches('/');
         let mut entries = Vec::new();
-        let mut directory_handle = sftp.opendir(Path::new(&directory)).map_err(|error| format!("Could not list remote files: {error}"))?;
-        loop {
-            let (path, stat) = match directory_handle.readdir() {
-                Ok(entry) => entry,
-                Err(error) if error.code() == SFTP_END_OF_DIRECTORY => break,
-                Err(error) => return Err(format!("Could not list remote files: {error}")),
-            };
-            let Some(name) = path.to_str() else { continue };
+        let directory_entries = sftp.read_dir(Path::new(&directory)).map_err(|error| format!("Could not list remote files: {error}"))?;
+        for (name, stat) in directory_entries {
             if name == "." || name == ".." { continue; }
             if name.is_empty() || name.chars().any(char::is_control) { continue; }
             let kind = stat.file_type();
@@ -361,7 +404,7 @@ pub async fn list_remote_server_files(
             entries.push(RemoteServerFileEntry {
                 name: name.to_owned(),
                 path: entry_path,
-                directory: kind == FileType::Directory,
+                directory: kind == FileType::Dir,
                 size: stat.size.unwrap_or(0),
             });
         }
@@ -393,18 +436,14 @@ pub async fn read_remote_server_file(
             let metadata = sftp
                 .lstat(Path::new(&canonical))
                 .map_err(|error| format!("Could not read remote file metadata: {error}"))?;
-            if metadata.file_type() != FileType::RegularFile {
+            if metadata.file_type() != FileType::File {
                 return Err("Only regular remote files can be opened.".into());
             }
             if metadata.size.unwrap_or(0) > MAX_FILE_BYTES {
                 return Err("Files larger than 1 MB cannot be edited here.".into());
             }
-            let file = sftp
-                .open(Path::new(&canonical))
-                .map_err(|error| format!("Could not open remote file: {error}"))?;
-            let mut bytes = Vec::new();
-            file.take(MAX_FILE_BYTES + 1)
-                .read_to_end(&mut bytes)
+            let bytes = sftp
+                .read_file(Path::new(&canonical))
                 .map_err(|error| format!("Could not read remote file: {error}"))?;
             if bytes.len() as u64 > MAX_FILE_BYTES {
                 return Err("Files larger than 1 MB cannot be edited here.".into());
@@ -449,7 +488,7 @@ pub async fn write_remote_server_file(
             if metadata.file_type() == FileType::Symlink {
                 return Err("Remote symbolic links cannot be overwritten here.".into());
             }
-            if metadata.file_type() != FileType::RegularFile {
+            if metadata.file_type() != FileType::File {
                 return Err("Only regular remote files can be overwritten.".into());
             }
             if !overwrite {
@@ -459,24 +498,16 @@ pub async fn write_remote_server_file(
         }
 
         let temporary = format!("{}/.servercrafter-{}.tmp", canonical_parent.trim_end_matches('/'), Uuid::new_v4());
-        let mut file = sftp.open_mode(
-            Path::new(&temporary),
-            OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::EXCLUSIVE,
-            0o600,
-            OpenType::File,
-        ).map_err(|error| format!("Could not create a temporary remote file: {error}"))?;
-        if let Err(error) = file.write_all(content.as_bytes()) {
-            drop(file);
+        if let Err(error) = sftp.write_file_exclusive(Path::new(&temporary), content.as_bytes()) {
             let _ = sftp.unlink(Path::new(&temporary));
-            return Err(format!("Could not write remote file: {error}"));
+            return Err(format!("Could not write temporary remote file: {error}"));
         }
-        drop(file);
-        let flags = if overwrite {
-            RenameFlags::ATOMIC | RenameFlags::OVERWRITE | RenameFlags::NATIVE
+        let rename_result = if overwrite {
+            sftp.posix_rename(Path::new(&temporary), Path::new(&destination))
         } else {
-            RenameFlags::ATOMIC | RenameFlags::NATIVE
+            sftp.rename(Path::new(&temporary), Path::new(&destination))
         };
-        if let Err(error) = sftp.rename(Path::new(&temporary), Path::new(&destination), Some(flags)) {
+        if let Err(error) = rename_result {
             let _ = sftp.unlink(Path::new(&temporary));
             return Err(format!("Could not save remote file: {error}"));
         }
@@ -492,7 +523,7 @@ async fn run_remote<T, F>(
 ) -> Result<T, String>
 where
     T: Send + 'static,
-    F: FnOnce(&Session, &ServerProfile) -> Result<T, String> + Send + 'static,
+    F: FnOnce(&RemoteConnection, &ServerProfile) -> Result<T, String> + Send + 'static,
 {
     tauri::async_runtime::spawn_blocking(move || {
         let session = sessions.session(&profile)?;
@@ -541,83 +572,113 @@ fn remote_connection_config(profile: &ServerProfile) -> Result<RemoteConnectionC
 }
 
 fn connect_remote(
+    runtime: &Runtime,
     host: &str,
     port: u16,
     username: &str,
     identity_file: Option<&str>,
-) -> Result<Session, String> {
-    let addresses = (host, port)
-        .to_socket_addrs()
-        .map_err(|error| format!("Could not resolve SSH host: {error}"))?;
-    let mut last_error = None;
-    let mut stream = None;
-    for address in addresses {
-        match TcpStream::connect_timeout(&address, CONNECT_TIMEOUT) {
-            Ok(connected) => {
-                stream = Some(connected);
-                break;
-            }
-            Err(error) => last_error = Some(error),
-        }
-    }
-    let stream = stream.ok_or_else(|| {
-        format!(
-            "Could not connect to the SSH host: {}",
-            last_error.map_or_else(
-                || "no addresses were returned".into(),
-                |error| error.to_string()
-            )
-        )
-    })?;
-    stream
-        .set_read_timeout(Some(CONNECT_TIMEOUT))
-        .map_err(|error| format!("Could not configure the SSH connection: {error}"))?;
-    stream
-        .set_write_timeout(Some(CONNECT_TIMEOUT))
-        .map_err(|error| format!("Could not configure the SSH connection: {error}"))?;
-
-    let mut session =
-        Session::new().map_err(|error| format!("Could not create SSH session: {error}"))?;
-    let usable_host_keys = session
-        .supported_algs(MethodType::HostKey)
-        .map_err(|error| format!("Could not inspect supported SSH host keys: {error}"))?
-        .into_iter()
-        .filter(|algorithm| !algorithm.contains("-cert-v01@openssh.com"))
-        .collect::<Vec<_>>();
-    if usable_host_keys.is_empty() {
-        return Err("This SSH build has no supported host-key algorithms.".into());
-    }
-    session
-        .method_pref(MethodType::HostKey, &usable_host_keys.join(","))
-        .map_err(|error| format!("Could not configure SSH host-key algorithms: {error}"))?;
-    session.set_tcp_stream(stream);
-    session.set_timeout(CONNECT_TIMEOUT.as_millis() as u32);
-    session
-        .handshake()
-        .map_err(|error| format!("SSH handshake failed during encryption/key negotiation: {error}. Check that the server offers a standard SSH host key and a modern key-exchange and cipher algorithm."))?;
-    verify_host_key(&session, host, port)?;
-    authenticate(&session, username, identity_file)?;
-    session.set_keepalive(true, 15);
-    Ok(session)
+) -> Result<Arc<Handle<SshHandler>>, String> {
+    runtime.block_on(connect_remote_async(host, port, username, identity_file))
 }
 
-fn verify_host_key(session: &Session, host: &str, port: u16) -> Result<(), String> {
-    let (key, _) = session
-        .host_key()
-        .ok_or_else(|| "The SSH server did not provide a host key.".to_owned())?;
-    let path = known_hosts_path()?;
-    let mut known_hosts = session
-        .known_hosts()
-        .map_err(|error| format!("Could not read trusted SSH hosts: {error}"))?;
-    known_hosts.read_file(&path, KnownHostFileKind::OpenSSH).map_err(|_| {
-        format!("No trusted SSH host keys were found in {}. Verify the server fingerprint and add it to known_hosts before connecting.", path.display())
-    })?;
-    match known_hosts.check_port(host, port, key) {
-        CheckResult::Match => Ok(()),
-        CheckResult::Mismatch => Err("The SSH host key changed. Connection refused; verify the new fingerprint before updating known_hosts.".into()),
-        CheckResult::NotFound => Err(format!("The SSH host key for {host}:{port} is not trusted. Verify its fingerprint and add it to {}.", path.display())),
-        CheckResult::Failure => Err("Could not check the SSH host key against known_hosts.".into()),
+struct SshHandler {
+    host: String,
+    port: u16,
+    known_hosts: PathBuf,
+    error: Arc<Mutex<Option<String>>>,
+}
+
+impl client::Handler for SshHandler {
+    type Error = russh::Error;
+    async fn check_server_key(
+        &mut self,
+        key: &PublicKeyOrCertificate,
+    ) -> Result<bool, Self::Error> {
+        if key.certificate().is_some() {
+            if let Ok(mut error) = self.error.lock() {
+                *error = Some(
+                    "OpenSSH host certificates are not trusted unless their CA is configured."
+                        .into(),
+                );
+            }
+            return Ok(false);
+        }
+        match russh::keys::known_hosts::check_known_hosts_path(
+            &self.host,
+            self.port,
+            &key.public_key(),
+            &self.known_hosts,
+        ) {
+            Ok(trusted) => {
+                if !trusted && let Ok(mut error) = self.error.lock() {
+                    *error = Some(format!(
+                        "The SSH host key for {}:{} is not trusted or has changed. Verify its fingerprint and check {}.",
+                        self.host,
+                        self.port,
+                        self.known_hosts.display()
+                    ));
+                }
+                Ok(trusted)
+            }
+            Err(cause) => {
+                if let Ok(mut error) = self.error.lock() {
+                    *error = Some(format!(
+                        "Could not read trusted SSH hosts from {}: {cause}",
+                        self.known_hosts.display()
+                    ));
+                }
+                Ok(false)
+            }
+        }
     }
+}
+
+async fn connect_remote_async(
+    host: &str,
+    port: u16,
+    username: &str,
+    identity_file: Option<&str>,
+) -> Result<Arc<Handle<SshHandler>>, String> {
+    let addresses = tokio::net::lookup_host((host, port))
+        .await
+        .map_err(|error| format!("Could not resolve SSH host: {error}"))?;
+    let mut last_error = None;
+    for address in addresses {
+        let key_error = Arc::new(Mutex::new(None));
+        let handler = SshHandler {
+            host: host.to_owned(),
+            port,
+            known_hosts: known_hosts_path()?,
+            error: Arc::clone(&key_error),
+        };
+        let config = Arc::new(client::Config {
+            inactivity_timeout: Some(CONNECTION_IDLE_TIMEOUT),
+            ..Default::default()
+        });
+        match tokio::time::timeout(CONNECT_TIMEOUT, client::connect(config, address, handler)).await
+        {
+            Ok(Ok(mut handle)) => {
+                if authenticate(&mut handle, username, identity_file).await? {
+                    let _ = handle.send_keepalive(false).await;
+                    return Ok(Arc::new(handle));
+                }
+                return Err("SSH authentication failed. Check the selected key or load the key into your SSH agent; encrypted private keys must be unlocked by the agent.".into());
+            }
+            Ok(Err(cause)) => {
+                if let Ok(detail) = key_error.lock() {
+                    if let Some(detail) = detail.clone() {
+                        return Err(detail);
+                    }
+                }
+                last_error = Some(cause.to_string());
+            }
+            Err(_) => last_error = Some("connection timed out".into()),
+        }
+    }
+    Err(format!(
+        "SSH handshake or connection failed: {}. Check that the server offers a standard host key and a modern key-exchange and cipher algorithm.",
+        last_error.unwrap_or_else(|| "no addresses were returned".into())
+    ))
 }
 
 fn known_hosts_path() -> Result<PathBuf, String> {
@@ -629,44 +690,98 @@ fn known_hosts_path() -> Result<PathBuf, String> {
     Ok(PathBuf::from(home).join(".ssh").join("known_hosts"))
 }
 
-fn authenticate(
-    session: &Session,
+async fn authenticate(
+    session: &mut Handle<SshHandler>,
     username: &str,
     identity_file: Option<&str>,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     if let Some(identity_file) = identity_file {
-        if session
-            .userauth_pubkey_file(username, None, Path::new(identity_file), None)
-            .is_ok()
-        {
-            return Ok(());
+        if let Ok(key) = keys::load_secret_key(identity_file, None) {
+            let hash = session
+                .best_supported_rsa_hash()
+                .await
+                .ok()
+                .flatten()
+                .flatten();
+            let auth_key = keys::PrivateKeyWithHashAlg::new(Arc::new(key), hash);
+            if let Ok(result) = session.authenticate_publickey(username, auth_key).await {
+                if result.success() {
+                    return Ok(true);
+                }
+            }
         }
     }
-
-    if let Ok(mut agent) = session.agent() {
-        if agent.connect().is_ok() && agent.list_identities().is_ok() {
-            if let Ok(identities) = agent.identities() {
-                for identity in identities {
-                    if agent.userauth(username, &identity).is_ok() {
-                        return Ok(());
+    #[cfg(unix)]
+    if let Ok(agent) = AgentClient::connect_env().await {
+        if authenticate_agent(session, username, agent).await {
+            return Ok(true);
+        }
+    }
+    #[cfg(windows)]
+    {
+        if let Ok(agent) = AgentClient::connect_named_pipe(r"\\.\pipe\openssh-ssh-agent").await {
+            if authenticate_agent(session, username, agent).await {
+                return Ok(true);
+            }
+        }
+        if let Ok(agent) = AgentClient::connect_pageant().await {
+            if authenticate_agent(session, username, agent).await {
+                return Ok(true);
+            }
+        }
+    }
+    if identity_file.is_none() {
+        for identity in default_identity_paths() {
+            if let Ok(key) = keys::load_secret_key(&identity, None) {
+                let hash = session
+                    .best_supported_rsa_hash()
+                    .await
+                    .ok()
+                    .flatten()
+                    .flatten();
+                let auth_key = keys::PrivateKeyWithHashAlg::new(Arc::new(key), hash);
+                if let Ok(result) = session.authenticate_publickey(username, auth_key).await {
+                    if result.success() {
+                        return Ok(true);
                     }
                 }
             }
         }
     }
+    Ok(false)
+}
 
-    if identity_file.is_none() {
-        for identity in default_identity_paths() {
-            if session
-                .userauth_pubkey_file(username, None, &identity, None)
-                .is_ok()
-            {
-                return Ok(());
-            }
+async fn authenticate_agent<S>(
+    session: &mut Handle<SshHandler>,
+    username: &str,
+    mut agent: AgentClient<S>,
+) -> bool
+where
+    S: russh::keys::agent::client::AgentStream + Send + Unpin + 'static,
+{
+    let Ok(identities) = agent.request_identities().await else {
+        return false;
+    };
+    for identity in identities {
+        let key = match identity {
+            AgentIdentity::PublicKey { key, .. } => key,
+            AgentIdentity::Certificate { .. } => continue,
+        };
+        let hash = session
+            .best_supported_rsa_hash()
+            .await
+            .ok()
+            .flatten()
+            .flatten();
+        if session
+            .authenticate_publickey_with(username, key, hash, &mut agent)
+            .await
+            .is_ok_and(|result| result.success())
+        {
+            return true;
         }
     }
-
-    Err("SSH authentication failed. Check the selected key or load the key into your SSH agent; encrypted private keys must be unlocked by the agent.".into())
+    false
 }
 
 fn default_identity_paths() -> Vec<PathBuf> {
@@ -679,7 +794,10 @@ fn default_identity_paths() -> Vec<PathBuf> {
         .collect()
 }
 
-fn remote_is_running(session: &Session, profile: &ServerProfile) -> Result<Option<bool>, String> {
+fn remote_is_running(
+    session: &RemoteConnection,
+    profile: &ServerProfile,
+) -> Result<Option<bool>, String> {
     let command = format!(
         "tmux has-session -t {}",
         shell_quote(&session_name(profile.id))
@@ -695,7 +813,10 @@ fn remote_is_running(session: &Session, profile: &ServerProfile) -> Result<Optio
     Ok(Some(false))
 }
 
-fn remote_directory_has_java_process(session: &Session, root: &str) -> Result<bool, String> {
+fn remote_directory_has_java_process(
+    session: &RemoteConnection,
+    root: &str,
+) -> Result<bool, String> {
     let command = format!(
         "root={}; [ -d /proc ] || exit 2; command -v readlink >/dev/null 2>&1 || exit 127; for process in /proc/[0-9]*; do [ -r \"$process/comm\" ] || continue; [ \"$(cat \"$process/comm\" 2>/dev/null)\" = java ] || continue; cwd=$(readlink -f -- \"$process/cwd\" 2>/dev/null) || continue; case \"$cwd\" in \"$root\"|\"$root\"/*) printf '%s\\n' \"$process\"; exit 0;; esac; done; exit 1",
         shell_quote(root),
@@ -710,38 +831,209 @@ fn remote_directory_has_java_process(session: &Session, root: &str) -> Result<bo
     }
 }
 
-fn execute(session: &Session, command: &str) -> Result<RemoteCommandOutput, String> {
-    let mut channel = session
-        .channel_session()
-        .map_err(|error| format!("Could not open an SSH channel: {error}"))?;
-    channel
-        .exec(command)
-        .map_err(|error| format!("Could not run the remote command: {error}"))?;
-    let stdout = read_channel_limited(&mut channel)?;
-    let stderr = read_channel_limited(&mut channel.stderr())?;
-    channel
-        .wait_close()
-        .map_err(|error| format!("Could not finish the remote command: {error}"))?;
-    let exit_code = channel
-        .exit_status()
-        .map_err(|error| format!("Could not read remote command status: {error}"))?;
-    Ok(RemoteCommandOutput {
-        stdout,
-        stderr,
-        exit_code,
+fn execute(session: &RemoteConnection, command: &str) -> Result<RemoteCommandOutput, String> {
+    let command = command.to_owned();
+    session.runtime.block_on(async {
+        let mut channel = session
+            .handle
+            .channel_open_session()
+            .await
+            .map_err(|error| format!("Could not open an SSH channel: {error}"))?;
+        channel
+            .exec(true, command)
+            .await
+            .map_err(|error| format!("Could not run the remote command: {error}"))?;
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let mut exit_code = 0;
+        while let Some(message) = channel.wait().await {
+            match message {
+                ChannelMsg::Data { data } => append_limited(&mut stdout, &data)?,
+                ChannelMsg::ExtendedData { data, .. } => append_limited(&mut stderr, &data)?,
+                ChannelMsg::ExitStatus { exit_status } => exit_code = exit_status as i32,
+                ChannelMsg::Close => break,
+                _ => {}
+            }
+        }
+        Ok(RemoteCommandOutput {
+            stdout,
+            stderr,
+            exit_code,
+        })
     })
 }
 
-fn read_channel_limited(reader: &mut impl Read) -> Result<Vec<u8>, String> {
-    let mut output = Vec::new();
-    reader
-        .take(MAX_CONSOLE_BYTES + 1)
-        .read_to_end(&mut output)
-        .map_err(|error| format!("Could not read remote command output: {error}"))?;
-    if output.len() as u64 > MAX_CONSOLE_BYTES {
+fn append_limited(output: &mut Vec<u8>, data: &[u8]) -> Result<(), String> {
+    if output.len() + data.len() > MAX_CONSOLE_BYTES as usize {
         return Err("Remote command output exceeded the 512 KB safety limit.".into());
     }
-    Ok(output)
+    output.extend_from_slice(data);
+    Ok(())
+}
+
+impl RemoteConnection {
+    fn sftp(&self) -> Result<RemoteSftp, String> {
+        let channel = self.runtime.block_on(async {
+            let channel = self
+                .handle
+                .channel_open_session()
+                .await
+                .map_err(|error| format!("Could not open SFTP channel: {error}"))?;
+            channel
+                .request_subsystem(true, "sftp")
+                .await
+                .map_err(|error| format!("Could not start SFTP subsystem: {error}"))?;
+            Ok::<_, String>(channel.into_stream())
+        })?;
+        let inner = self
+            .runtime
+            .block_on(SftpSession::new(channel))
+            .map_err(|error| format!("Could not initialize SFTP: {error}"))?;
+        inner.set_timeout(CONNECT_TIMEOUT.as_secs());
+        Ok(RemoteSftp {
+            runtime: Arc::clone(&self.runtime),
+            handle: Arc::clone(&self.handle),
+            inner,
+        })
+    }
+}
+
+impl RemoteSftp {
+    fn realpath(&self, path: &Path) -> Result<String, String> {
+        self.runtime
+            .block_on(self.inner.canonicalize(path.to_string_lossy().to_string()))
+            .map_err(|e| e.to_string())
+    }
+    fn stat(&self, path: &Path) -> Result<FileAttributes, String> {
+        self.runtime
+            .block_on(self.inner.metadata(path.to_string_lossy().to_string()))
+            .map_err(|e| e.to_string())
+    }
+    fn lstat(&self, path: &Path) -> Result<FileAttributes, String> {
+        self.runtime
+            .block_on(
+                self.inner
+                    .symlink_metadata(path.to_string_lossy().to_string()),
+            )
+            .map_err(|e| e.to_string())
+    }
+    fn read_dir(&self, path: &Path) -> Result<Vec<(String, FileAttributes)>, String> {
+        let path = path.to_string_lossy().into_owned();
+        self.runtime.block_on(async {
+            let channel = self
+                .handle
+                .channel_open_session()
+                .await
+                .map_err(|e| e.to_string())?;
+            channel
+                .request_subsystem(true, "sftp")
+                .await
+                .map_err(|e| e.to_string())?;
+            let raw = RawSftpSession::new(channel.into_stream());
+            raw.init().await.map_err(|e| e.to_string())?;
+            let handle = raw.opendir(path).await.map_err(|e| e.to_string())?;
+            let mut entries = Vec::new();
+            loop {
+                let batch = match raw.readdir(&handle.handle).await {
+                    Ok(batch) => batch,
+                    Err(SftpError::Status(status)) if status.status_code == StatusCode::Eof => {
+                        break;
+                    }
+                    Err(error) => {
+                        let _ = raw.close(&handle.handle).await;
+                        return Err(error.to_string());
+                    }
+                };
+                for entry in batch.files {
+                    entries.push((entry.filename, entry.attrs));
+                    if entries.len() > MAX_DIRECTORY_ENTRIES {
+                        break;
+                    }
+                }
+                if entries.len() > MAX_DIRECTORY_ENTRIES {
+                    break;
+                }
+            }
+            raw.close(&handle.handle).await.map_err(|e| e.to_string())?;
+            Ok(entries)
+        })
+    }
+    fn read_file(&self, path: &Path) -> Result<Vec<u8>, String> {
+        let path = path.to_string_lossy().to_string();
+        self.runtime.block_on(async {
+            let mut file = self.inner.open(path).await.map_err(|e| e.to_string())?;
+            let mut bytes = Vec::new();
+            let mut buffer = [0_u8; 8192];
+            while bytes.len() <= MAX_FILE_BYTES as usize {
+                let remaining = (MAX_FILE_BYTES as usize + 1 - bytes.len()).min(buffer.len());
+                let count = file
+                    .read(&mut buffer[..remaining])
+                    .await
+                    .map_err(|e| e.to_string())?;
+                if count == 0 {
+                    break;
+                }
+                bytes.extend_from_slice(&buffer[..count]);
+            }
+            file.close().await.map_err(|e| e.to_string())?;
+            Ok::<_, String>(bytes)
+        })
+    }
+    fn write_file_exclusive(&self, path: &Path, content: &[u8]) -> Result<(), String> {
+        let path = path.to_string_lossy().to_string();
+        self.runtime.block_on(async {
+            let mut attrs = FileAttributes::empty();
+            attrs.set_regular(true);
+            attrs.permissions = Some(0o100600);
+            let mut file = self
+                .inner
+                .open_with_flags_and_attributes(
+                    path,
+                    OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::EXCLUDE,
+                    attrs,
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+            file.write_all(content).await.map_err(|e| e.to_string())?;
+            file.close().await.map_err(|e| e.to_string())
+        })
+    }
+    fn unlink(&self, path: &Path) -> Result<(), String> {
+        self.runtime
+            .block_on(self.inner.remove_file(path.to_string_lossy().to_string()))
+            .map_err(|e| e.to_string())
+    }
+    fn rename(&self, old: &Path, new: &Path) -> Result<(), String> {
+        self.runtime
+            .block_on(self.inner.rename(
+                old.to_string_lossy().to_string(),
+                new.to_string_lossy().to_string(),
+            ))
+            .map_err(|e| e.to_string())
+    }
+    fn posix_rename(&self, old: &Path, new: &Path) -> Result<(), String> {
+        let old = old.to_string_lossy().into_owned();
+        let new = new.to_string_lossy().into_owned();
+        self.runtime.block_on(async {
+            let channel = self.handle.channel_open_session().await.map_err(|e| e.to_string())?;
+            channel.request_subsystem(true, "sftp").await.map_err(|e| e.to_string())?;
+            let raw = RawSftpSession::new(channel.into_stream());
+            raw.init().await.map_err(|e| e.to_string())?;
+            let mut data = Vec::with_capacity(old.len() + new.len() + 8);
+            for value in [&old, &new] {
+                let len = u32::try_from(value.len()).map_err(|_| "Remote path is too long.".to_owned())?;
+                data.extend_from_slice(&len.to_be_bytes());
+                data.extend_from_slice(value.as_bytes());
+            }
+            match raw.extended("posix-rename@openssh.com", data).await.map_err(|e| e.to_string())? {
+                Packet::Status(status) if status.status_code == StatusCode::Ok => Ok(()),
+                Packet::Status(status) => Err(if status.status_code == StatusCode::OpUnsupported {
+                    "The remote server does not support atomic file replacement; the existing file was left unchanged.".to_owned()
+                } else { status.error_message }),
+                _ => Err("The remote server returned an unexpected response to atomic file replacement.".to_owned()),
+            }
+        })
+    }
 }
 
 struct RemoteCommandOutput {
@@ -787,7 +1079,7 @@ fn configured_remote_root(profile: &ServerProfile) -> Result<&str, String> {
 }
 
 fn optional_remote_root(
-    session: &Session,
+    session: &RemoteConnection,
     profile: &ServerProfile,
 ) -> Result<Option<String>, String> {
     let ServerTarget::Remote { directory, .. } = &profile.target else {
@@ -800,18 +1092,18 @@ fn optional_remote_root(
     }
 }
 
-fn remote_root(session: &Session, configured: &str) -> Result<String, String> {
+fn remote_root(session: &RemoteConnection, configured: &str) -> Result<String, String> {
     let sftp = session
         .sftp()
         .map_err(|error| format!("Could not open SFTP: {error}"))?;
     remote_root_with_sftp(&sftp, configured)
 }
 
-fn remote_root_with_sftp(sftp: &ssh2::Sftp, configured: &str) -> Result<String, String> {
+fn remote_root_with_sftp(sftp: &RemoteSftp, configured: &str) -> Result<String, String> {
     let canonical = sftp
         .realpath(Path::new(configured))
         .map_err(|error| format!("Could not open the remote server folder: {error}"))?;
-    let root = remote_path(&canonical);
+    let root = canonical.replace('\\', "/");
     if !root.starts_with('/') {
         return Err("The remote server folder must resolve to an absolute path.".into());
     }
@@ -821,7 +1113,7 @@ fn remote_root_with_sftp(sftp: &ssh2::Sftp, configured: &str) -> Result<String, 
     let metadata = sftp
         .stat(Path::new(&root))
         .map_err(|error| format!("Could not read remote server folder: {error}"))?;
-    if metadata.file_type() != FileType::Directory {
+    if metadata.file_type() != FileType::Dir {
         return Err("The configured remote server path is not a folder.".into());
     }
     Ok(root)
@@ -849,11 +1141,11 @@ fn resolve_remote_relative(root: &str, relative: &str, allow_root: bool) -> Resu
     ))
 }
 
-fn canonical_inside(sftp: &ssh2::Sftp, root: &str, candidate: &str) -> Result<String, String> {
+fn canonical_inside(sftp: &RemoteSftp, root: &str, candidate: &str) -> Result<String, String> {
     let canonical = sftp
         .realpath(Path::new(candidate))
         .map_err(|error| format!("Could not resolve the remote path: {error}"))?;
-    let canonical = remote_path(&canonical);
+    let canonical = canonical.replace('\\', "/");
     let root_prefix = format!("{}/", root.trim_end_matches('/'));
     if canonical != root && !canonical.starts_with(&root_prefix) {
         return Err("The remote path resolves outside the configured server folder.".into());
@@ -862,7 +1154,7 @@ fn canonical_inside(sftp: &ssh2::Sftp, root: &str, candidate: &str) -> Result<St
 }
 
 fn reject_remote_symlink_path(
-    sftp: &ssh2::Sftp,
+    sftp: &RemoteSftp,
     root: &str,
     candidate: &str,
 ) -> Result<(), String> {
