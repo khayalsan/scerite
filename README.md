@@ -11,11 +11,13 @@ ServerCrafter is a cross-platform desktop app for managing local and remote Mine
 - `src-tauri/src/server_profiles/store.rs` validates and persists profiles in the app data directory. It writes a temporary file and keeps a recoverable backup while replacing saved data.
 - Minecraft process management, local filesystem access, and remote SSH/SFTP/tmux operations belong in Rust adapters and services as those features are added.
 
-Profile data contains server names and local folder or remote SSH connection details. It does not contain passwords or private keys. Credential storage will use operating-system secure storage when authentication is implemented.
+Profile data contains server names, local or remote server folders, launch commands, and remote SSH connection details. It does not contain passwords or private keys. Remote authentication uses the SSH agent or an optional private-key file path; encrypted keys must be unlocked through the agent. Host keys are checked against the user's `known_hosts` file.
 
 ## Current scope
 
-The app can create, edit, list, and remove local and remote server profiles. Server process control, SSH connections, and server file operations are not implemented yet.
+The app can create, edit, list, and remove server profiles. Local servers can be launched in sessions that survive the desktop app, with a live console and a guarded file editor. Remote Linux profiles can use SSH to manage persistent `tmux` sessions, send console commands, and browse or edit files over SFTP.
+
+Remote process control requires `tmux` on the server and a trusted host key in `known_hosts`. Remote file operations stay inside the configured server folder, skip symbolic links, limit text files to 1 MB, and require the managed server to be stopped before writing.
 
 ## Development
 

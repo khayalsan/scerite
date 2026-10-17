@@ -2,5 +2,16 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
+    let mut arguments = std::env::args_os().skip(1);
+    if arguments.next().as_deref() == Some(std::ffi::OsStr::new("--servercrafter-session-manager")) {
+        let Some(app_data_dir) = arguments.next() else {
+            std::process::exit(2);
+        };
+        if servercrafter_lib::run_session_manager(app_data_dir.into()).is_err() {
+            std::process::exit(1);
+        }
+        return;
+    }
+
     servercrafter_lib::run()
 }
