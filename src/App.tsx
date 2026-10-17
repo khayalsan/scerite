@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import type { FormEvent } from "react";
 import { HardDrive, Network, Plus, X } from "lucide-react";
 import { serverProfiles } from "./lib/serverProfiles";
@@ -17,6 +18,7 @@ type ProfileDraft = {
   host: string;
   port: string;
   username: string;
+  identityFile: string;
 };
 
 const emptyDraft: ProfileDraft = {
@@ -28,6 +30,7 @@ const emptyDraft: ProfileDraft = {
   host: "",
   port: "22",
   username: "",
+  identityFile: "",
 };
 
 function targetFor(draft: ProfileDraft): ServerTarget {
@@ -37,6 +40,7 @@ function targetFor(draft: ProfileDraft): ServerTarget {
       host: draft.host.trim(),
       port: Number(draft.port),
       username: draft.username.trim(),
+      identityFile: draft.identityFile.trim() || null,
     };
   }
 
@@ -59,6 +63,7 @@ function draftFor(profile: ServerProfile): ProfileDraft {
       host: profile.target.host,
       port: String(profile.target.port),
       username: profile.target.username,
+      identityFile: profile.target.identityFile ?? "",
     };
   }
 
@@ -83,6 +88,7 @@ function App() {
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [statuses, setStatuses] = useState<Record<string, LocalServerStatus>>({});
   const [busySessionId, setBusySessionId] = useState<string | null>(null);
+  const [connectedRemotes, setConnectedRemotes] = useState<Record<string, boolean>>({});
   const [consoleProfileId, setConsoleProfileId] = useState<string | null>(null);
   const [filesProfileId, setFilesProfileId] = useState<string | null>(null);
   const [consoleOutput, setConsoleOutput] = useState("");
@@ -152,6 +158,20 @@ function App() {
       }
       const status = await serverSessions[action](profileId);
       setStatuses((current) => ({ ...current, [profileId]: status }));
+    } catch (error) {
+      setSessionError(errorText(error));
+    } finally {
+      setBusySessionId(null);
+    }
+  }
+
+  async function testRemoteConnection(profileId: string) {
+    setBusySessionId(profileId);
+    setSessionError(null);
+    setConnectedRemotes((current) => ({ ...current, [profileId]: false }));
+    try {
+      await invoke<void>("test_remote_connection", { profileId });
+      setConnectedRemotes((current) => ({ ...current, [profileId]: true }));
     } catch (error) {
       setSessionError(errorText(error));
     } finally {
@@ -234,6 +254,12 @@ function App() {
       const saved = editingProfile
         ? await serverProfiles.update(editingProfile.id, draft.name, targetFor(draft))
         : await serverProfiles.create(draft.name, targetFor(draft));
+
+      setConnectedRemotes((current) => {
+        const next = { ...current };
+        delete next[saved.id];
+        return next;
+      });
 
       setProfiles((current) =>
         editingProfile
@@ -409,6 +435,15 @@ function App() {
                       required
                     />
                   </label>
+                  <label className="field field-wide">
+                    <span>SSH identity file <small>(optional)</small></span>
+                    <input
+                      value={draft.identityFile}
+                      onChange={(event) => setDraft({ ...draft, identityFile: event.currentTarget.value })}
+                      placeholder="C:\\Users\\you\\.ssh\\id_ed25519"
+                    />
+                    <small>Leave blank to use your system SSH agent and default keys. Encrypted keys must be loaded into the agent. Host keys must already be trusted in known_hosts.</small>
+                  </label>
                 </>
               )}
             </div>
@@ -446,7 +481,7 @@ function App() {
 
         {sessionError && (
           <div className="notice notice-error" role="alert">
-            <div><strong>Could not control a local server.</strong><span>{sessionError}</span></div>
+            <div><strong>Could not complete the server action.</strong><span>{sessionError}</span></div>
             <button className="button button-quiet" onClick={() => setSessionError(null)}>Dismiss</button>
           </div>
         )}
@@ -497,6 +532,7 @@ function App() {
                     </div>
                     <p title={location}>{location}</p>
                     {isLocal && <span className={`session-state session-state-${state}`}>{status ? state : "Checking status…"}</span>}
+                    {!isLocal && connectedRemotes[profile.id] && <span className="session-state session-state-running">SSH reachable</span>}
                   </div>
                   {removingId === profile.id ? (
                     <div className="remove-confirm" role="group" aria-label={`Remove ${profile.name}`}>
@@ -513,6 +549,7 @@ function App() {
                       {isLocal && state === "stopping" && <button className="button button-secondary" disabled>Stopping…</button>}
                       {isLocal && <button className="button button-quiet" onClick={() => setConsoleProfileId((current) => current === profile.id ? null : profile.id)}>{consoleProfileId === profile.id ? "Close console" : "Console"}</button>}
                       {isLocal && <button className="button button-quiet" onClick={() => setFilesProfileId((current) => current === profile.id ? null : profile.id)}>{filesProfileId === profile.id ? "Close files" : "Files"}</button>}
+                      {!isLocal && <button className="button button-secondary" onClick={() => void testRemoteConnection(profile.id)} disabled={isBusy}>{isBusy ? "Connecting…" : "Test SSH"}</button>}
                       <button className="button button-quiet" onClick={() => openEditProfile(profile)}>Edit</button>
                       <button className="button button-quiet" onClick={() => setRemovingId(profile.id)} disabled={isLocal && state !== "stopped"} title={isLocal && state !== "stopped" ? "Stop the server before removing its profile." : undefined}>Remove</button>
                     </div>

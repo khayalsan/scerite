@@ -1,6 +1,7 @@
 mod server_profiles;
 mod server_files;
 mod server_sessions;
+mod remote_ssh;
 
 use server_profiles::{ServerProfileStore, commands};
 use server_sessions::{LocalSessionManager, commands as session_commands};
@@ -38,6 +39,7 @@ pub fn run() {
             server_files::list_local_server_files,
             server_files::read_local_server_file,
             server_files::write_local_server_file,
+            remote_ssh::test_remote_connection,
         ])
         .run(tauri::generate_context!())
         .expect("error while running servercrafter");
