@@ -284,7 +284,8 @@
 }
 
 .theme-select-trigger {
-  width: 100%;
+  flex: 1;
+  width: auto;
   min-width: 0;
   min-height: 30px;
   padding: 4px 8px;
