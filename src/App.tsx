@@ -3,12 +3,13 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type { FormEvent } from "react";
-import { ArrowLeft, FileKey, FolderOpen, HardDrive, Network, Palette, Plus, Settings, Terminal, X } from "lucide-react";
+import { ArrowLeft, FileKey, FolderOpen, HardDrive, Network, Palette, Plus, Settings, SlidersHorizontal, Terminal, X } from "lucide-react";
 import { serverProfiles } from "./lib/serverProfiles";
 import type { ServerProfile, ServerTarget } from "./lib/serverProfiles";
 import { serverSessions } from "./lib/serverSessions";
 import type { LocalServerStatus, RemoteServerStatus } from "./lib/serverSessions";
 import { LocalFilesPanel } from "./components/LocalFilesPanel";
+import { ServerPropertiesPanel } from "./components/ServerPropertiesPanel";
 import "./App.css";
 
 type ProfileDraft = {
@@ -45,7 +46,7 @@ function readSavedTheme(): ThemeId {
   }
 }
 
-type ServerTab = "console" | "files" | "settings";
+type ServerTab = "console" | "files" | "properties" | "settings";
 
 const emptyDraft: ProfileDraft = {
   name: "",
@@ -162,6 +163,7 @@ function App() {
   const [connectedRemotes, setConnectedRemotes] = useState<Record<string, boolean>>({});
   const [consoleProfileId, setConsoleProfileId] = useState<string | null>(null);
   const [filesProfileId, setFilesProfileId] = useState<string | null>(null);
+  const [propertiesProfileId, setPropertiesProfileId] = useState<string | null>(null);
   const [consoleOutput, setConsoleOutput] = useState("");
   const [consoleInput, setConsoleInput] = useState("");
   const consoleCursor = useRef(0);
@@ -574,6 +576,7 @@ function App() {
         const state = status?.state ?? "checking";
         const remoteState = remoteStatus?.state;
         const isBusy = busySessionId === selectedProfile.id;
+        const isConnected = !!connectedRemotes[selectedProfile.id];
         const statusLabel = isLocal
           ? status ? state : "Checking status…"
           : !remoteStatus
@@ -612,7 +615,7 @@ function App() {
                 {isLocal && (!status || state === "stopped") && <button className="button button-primary" onClick={() => void controlServer(selectedProfile.id, "start")} disabled={isBusy || !target.launch.executable.trim()}>{isBusy ? "Starting…" : "Start server"}</button>}
                 {isLocal && state === "running" && <button className="button button-secondary" onClick={() => void controlServer(selectedProfile.id, "stop")} disabled={isBusy}>{isBusy ? "Stopping…" : "Stop server"}</button>}
                 {isLocal && state === "stopping" && <button className="button button-secondary" disabled>Stopping…</button>}
-                {!isLocal && <button className="button button-secondary" onClick={() => void testRemoteConnection(selectedProfile.id)} disabled={isBusy}>{isBusy ? "Connecting…" : "Connect"}</button>}
+                {!isLocal && <button className={`button ${isConnected ? "button-connected" : "button-secondary"}`} onClick={() => void testRemoteConnection(selectedProfile.id)} disabled={isBusy}>{isConnected ? "Connected" : isBusy ? "Connecting…" : "Connect"}</button>}
                 {!isLocal && (!remoteState || remoteState === "stopped" || remoteState === "unreachable") && <button className="button button-primary" onClick={() => void controlRemoteServer(selectedProfile.id, "start")} disabled={isBusy || !target.directory || !target.launch.executable.trim() || remoteState === "stopped" && !remoteStatus?.tmuxAvailable} title={!target.directory || !target.launch.executable.trim() ? "Set the remote folder and launch executable in the profile." : remoteState === "stopped" && !remoteStatus?.tmuxAvailable ? "Install tmux on the remote server to start it." : undefined}>{isBusy ? "Starting…" : "Start server"}</button>}
                 {!isLocal && remoteState === "running" && <button className="button button-secondary" onClick={() => void controlRemoteServer(selectedProfile.id, "stop")} disabled={isBusy}>{isBusy ? "Stopping…" : "Stop server"}</button>}
                 {!isLocal && remoteState === "stopping" && <button className="button button-secondary" disabled>Stopping…</button>}
@@ -624,6 +627,9 @@ function App() {
               </button>
               <button className={`server-tab${activeServerTab === "files" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "files" ? "page" : undefined} onClick={() => { setActiveServerTab("files"); if (filesProfileId !== selectedProfile.id) toggleFiles(selectedProfile); }}>
                 <FolderOpen size={16} aria-hidden="true" /> Files
+              </button>
+              <button className={`server-tab${activeServerTab === "properties" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "properties" ? "page" : undefined} onClick={() => { setActiveServerTab("properties"); setPropertiesProfileId(selectedProfile.id); }}>
+                <SlidersHorizontal size={16} aria-hidden="true" /> Properties
               </button>
               <button className={`server-tab${activeServerTab === "settings" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "settings" ? "page" : undefined} onClick={() => setActiveServerTab("settings")}>
                 <Settings size={16} aria-hidden="true" /> Settings
@@ -989,6 +995,15 @@ function App() {
                             </div>
                           )}
                         </section>
+                        <section className="server-tab-panel server-properties-tab" hidden={activeServerTab !== "properties"} aria-label="Server properties">
+                          {propertiesProfileId === profile.id && (
+                            <ServerPropertiesPanel
+                              profileId={profile.id}
+                              remote={!isLocal}
+                              canEdit={isLocal ? status?.state === "stopped" : remoteState === "stopped"}
+                            />
+                          )}
+                        </section>
                         <section className="server-tab-panel server-settings-panel" hidden={activeServerTab !== "settings"} aria-label="Server settings">
                           <h2>Server settings</h2>
                           <p>Update this profile or remove it from the saved server list.</p>
@@ -1024,7 +1039,7 @@ function App() {
                           {isLocal && (!status || state === "stopped") && <button className="button button-primary" onClick={() => void controlServer(profile.id, "start")} disabled={isBusy || !target.launch.executable.trim()}>{isBusy ? "Starting…" : "Start"}</button>}
                           {isLocal && state === "running" && <button className="button button-secondary" onClick={() => void controlServer(profile.id, "stop")} disabled={isBusy}>{isBusy ? "Stopping…" : "Stop"}</button>}
                           {isLocal && state === "stopping" && <button className="button button-secondary" disabled>Stopping…</button>}
-                          {!isLocal && <button className="button button-secondary" onClick={() => void testRemoteConnection(profile.id)} disabled={isBusy}>{isBusy ? "Connecting…" : "Connect"}</button>}
+                          {!isLocal && <button className={`button ${connectedRemotes[profile.id] ? "button-connected" : "button-secondary"}`} onClick={() => void testRemoteConnection(profile.id)} disabled={isBusy}>{connectedRemotes[profile.id] ? "Connected" : isBusy ? "Connecting…" : "Connect"}</button>}
                           {!isLocal && (!remoteState || remoteState === "stopped" || remoteState === "unreachable") && <button className="button button-primary" onClick={() => void controlRemoteServer(profile.id, "start")} disabled={isBusy || !target.directory || !target.launch.executable.trim() || remoteState === "stopped" && !remoteStatus?.tmuxAvailable} title={!target.directory || !target.launch.executable.trim() ? "Set the remote folder and launch executable in the profile." : remoteState === "stopped" && !remoteStatus?.tmuxAvailable ? "Install tmux on the remote server to start it." : undefined}>{isBusy ? "Starting…" : "Start"}</button>}
                           {!isLocal && remoteState === "running" && <button className="button button-secondary" onClick={() => void controlRemoteServer(profile.id, "stop")} disabled={isBusy}>{isBusy ? "Stopping…" : "Stop"}</button>}
                           {!isLocal && remoteState === "stopping" && <button className="button button-secondary" disabled>Stopping…</button>}
