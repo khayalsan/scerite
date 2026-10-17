@@ -593,6 +593,15 @@ function App() {
               <span className="brand-mark" aria-hidden="true">S</span>
               <span>ServerCrafter</span>
             </Link>
+            <div className="server-page-context">
+              <button className="back-link" onClick={() => navigate("/")}>
+                <ArrowLeft size={15} aria-hidden="true" /> All servers
+              </button>
+              <h1 id="page-title">{selectedProfile.name}</h1>
+              <p>{selectedProfile.target.kind === "local"
+                ? selectedProfile.target.directory
+                : `${selectedProfile.target.username}@${selectedProfile.target.host}:${selectedProfile.target.port}`}</p>
+            </div>
             <section className="server-status-card" aria-label="Server status">
               <span className="server-status-label">Server status</span>
               <span className={`server-status-value server-status-${statusTone}`}>
@@ -642,20 +651,16 @@ function App() {
         </aside>
       )}
 
-      <section className="workspace" id="servers" aria-labelledby="page-title">
-        <header className="page-header">
+      <section
+        className="workspace"
+        id="servers"
+        aria-labelledby={!selectedProfileId ? "page-title" : undefined}
+        aria-label={selectedProfileId ? `${selectedProfile?.name ?? "Server"} workspace` : undefined}
+      >
+        {!selectedProfileId && <header className="page-header">
           <div>
-            {selectedProfileId && (
-              <button className="back-link" onClick={() => navigate("/")}>
-                <ArrowLeft size={15} aria-hidden="true" /> All servers
-              </button>
-            )}
-            <h1 id="page-title">{selectedProfile?.name ?? (selectedProfileId ? "Server" : "Servers")}</h1>
-            <p>{selectedProfile
-              ? selectedProfile.target.kind === "local"
-                ? selectedProfile.target.directory
-                : `${selectedProfile.target.username}@${selectedProfile.target.host}:${selectedProfile.target.port}`
-              : "Keep your local folders and remote machines organized."}</p>
+            <h1 id="page-title">Servers</h1>
+            <p>Keep your local folders and remote machines organized.</p>
           </div>
           <div className="page-actions">
             <label className="theme-picker">
@@ -671,7 +676,7 @@ function App() {
               </button>
             )}
           </div>
-        </header>
+        </header>}
 
         {isFormOpen && (
           <form className="profile-form" onSubmit={saveProfile} aria-labelledby="form-title">
