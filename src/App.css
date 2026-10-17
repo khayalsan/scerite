@@ -188,6 +188,78 @@
   gap: 10px;
 }
 
+.environment-section {
+  margin: -10px 0 34px;
+}
+
+.environment-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.environment-section-heading h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 620;
+}
+
+.environment-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
+  gap: 12px;
+}
+
+.environment-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--app-line);
+  border-radius: 10px;
+  background: var(--app-paper);
+}
+
+.environment-card-selected {
+  border-color: var(--app-accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--app-accent) 24%, transparent);
+}
+
+.environment-card-main {
+  display: grid;
+  gap: 5px;
+  padding: 0;
+  border: 0;
+  color: var(--app-ink);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.environment-card-main:focus-visible {
+  border-radius: 4px;
+  outline: 3px solid color-mix(in srgb, var(--app-accent) 32%, transparent);
+  outline-offset: 3px;
+}
+
+.environment-card-title {
+  font-size: 14px;
+  font-weight: 620;
+}
+
+.environment-card-address,
+.environment-card-count {
+  color: var(--app-muted);
+  font-size: 12px;
+}
+
+.environment-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
 .theme-picker {
   display: inline-flex;
   min-height: 36px;

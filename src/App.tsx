@@ -4,8 +4,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type { FormEvent } from "react";
 import { ArrowLeft, FileKey, FolderOpen, HardDrive, Network, Palette, Plus, Settings, SlidersHorizontal, Terminal, X } from "lucide-react";
-import { serverProfiles } from "./lib/serverProfiles";
-import type { ServerProfile, ServerTarget } from "./lib/serverProfiles";
+import { serverEnvironments, serverProfiles } from "./lib/serverProfiles";
+import type { ServerEnvironment, ServerProfile, ServerTarget } from "./lib/serverProfiles";
 import { serverSessions } from "./lib/serverSessions";
 import type { LocalServerStatus, RemoteServerStatus } from "./lib/serverSessions";
 import { LocalFilesPanel } from "./components/LocalFilesPanel";
@@ -18,6 +18,11 @@ type ProfileDraft = {
   directory: string;
   executable: string;
   arguments: string;
+  environmentId: string;
+};
+
+type EnvironmentDraft = {
+  name: string;
   host: string;
   port: string;
   username: string;
@@ -54,6 +59,11 @@ const emptyDraft: ProfileDraft = {
   directory: "",
   executable: "",
   arguments: "",
+  environmentId: "",
+};
+
+const emptyEnvironmentDraft: EnvironmentDraft = {
+  name: "",
   host: "",
   port: "22",
   username: "",
@@ -96,10 +106,7 @@ function targetFor(draft: ProfileDraft): ServerTarget {
   if (draft.kind === "remote") {
     return {
       kind: "remote",
-      host: draft.host.trim(),
-      port: Number(draft.port),
-      username: draft.username.trim(),
-      identityFile: draft.identityFile.trim() || null,
+      environmentId: draft.environmentId,
       directory: draft.directory.trim(),
       launch: {
         executable: draft.executable.trim(),
@@ -124,10 +131,7 @@ function draftFor(profile: ServerProfile): ProfileDraft {
       ...emptyDraft,
       name: profile.name,
       kind: "remote",
-      host: profile.target.host,
-      port: String(profile.target.port),
-      username: profile.target.username,
-      identityFile: profile.target.identityFile ?? "",
+      environmentId: profile.target.environmentId,
       directory: profile.target.directory,
       executable: profile.target.launch.executable,
       arguments: profile.target.launch.arguments.join("\n"),
@@ -153,6 +157,8 @@ function App() {
   const { pathname } = useLocation();
   const selectedProfileId = pathname.startsWith("/servers/") ? pathname.slice("/servers/".length) : null;
   const [profiles, setProfiles] = useState<ServerProfile[]>([]);
+  const [environments, setEnvironments] = useState<ServerEnvironment[]>([]);
+  const [environmentFilterId, setEnvironmentFilterId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -177,10 +183,20 @@ function App() {
   const [isTestingConnection, setIsTestingConnection] = useState(false);
   const [formConnectionResult, setFormConnectionResult] = useState<string | null>(null);
   const [formConnectionSucceeded, setFormConnectionSucceeded] = useState(false);
+  const [isEnvironmentFormOpen, setIsEnvironmentFormOpen] = useState(false);
+  const [editingEnvironment, setEditingEnvironment] = useState<ServerEnvironment | null>(null);
+  const [environmentDraft, setEnvironmentDraft] = useState<EnvironmentDraft>(emptyEnvironmentDraft);
+  const [environmentError, setEnvironmentError] = useState<string | null>(null);
+  const [isSavingEnvironment, setIsSavingEnvironment] = useState(false);
+  const [removingEnvironmentId, setRemovingEnvironmentId] = useState<string | null>(null);
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [isRemoving, setIsRemoving] = useState(false);
   const [activeServerTab, setActiveServerTab] = useState<ServerTab>("console");
   const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId);
+  const visibleProfiles = !selectedProfileId && environmentFilterId
+    ? profiles.filter((profile) => profile.target.kind === "remote" && profile.target.environmentId === environmentFilterId)
+    : profiles;
+  const filteredEnvironment = environments.find((environment) => environment.id === environmentFilterId);
   const profileRemovalDisabled = editingProfile
     ? editingProfile.target.kind === "local"
       ? statuses[editingProfile.id]?.state !== "stopped"
@@ -202,7 +218,12 @@ function App() {
     setIsLoading(true);
     setLoadError(null);
     try {
-      setProfiles(await serverProfiles.list());
+      const [savedProfiles, savedEnvironments] = await Promise.all([
+        serverProfiles.list(),
+        serverEnvironments.list(),
+      ]);
+      setProfiles(savedProfiles);
+      setEnvironments(savedEnvironments);
     } catch (error) {
       setLoadError(errorText(error));
     } finally {
@@ -287,17 +308,17 @@ function App() {
     }
   }
 
-  async function testDraftConnection() {
+  async function testEnvironmentDraftConnection() {
     setIsTestingConnection(true);
-    setFormError(null);
+    setEnvironmentError(null);
     setFormConnectionResult(null);
     setFormConnectionSucceeded(false);
     try {
       await invoke<void>("test_remote_connection_draft", {
-        host: draft.host.trim(),
-        port: Number(draft.port),
-        username: draft.username.trim(),
-        identityFile: draft.identityFile.trim() || null,
+        host: environmentDraft.host.trim(),
+        port: Number(environmentDraft.port),
+        username: environmentDraft.username.trim(),
+        identityFile: environmentDraft.identityFile.trim() || null,
       });
       setFormConnectionResult("SSH connection verified. The server fingerprint is trusted and authentication succeeded.");
       setFormConnectionSucceeded(true);
@@ -321,9 +342,9 @@ function App() {
   async function selectIdentityFile() {
     try {
       const selected = await openDialog({ multiple: false, title: "Choose SSH identity file" });
-      if (typeof selected === "string") setDraft((current) => ({ ...current, identityFile: selected }));
+      if (typeof selected === "string") setEnvironmentDraft((current) => ({ ...current, identityFile: selected }));
     } catch (error) {
-      setFormError(errorText(error));
+      setEnvironmentError(errorText(error));
     }
   }
 
@@ -490,9 +511,80 @@ function App() {
     }
   }
 
-  function openNewProfile() {
+  function openNewEnvironment(environment?: ServerEnvironment) {
+    setEditingEnvironment(environment ?? null);
+    setEnvironmentDraft(environment ? {
+      name: environment.name,
+      host: environment.host,
+      port: String(environment.port),
+      username: environment.username,
+      identityFile: environment.identityFile ?? "",
+    } : emptyEnvironmentDraft);
+    setEnvironmentError(null);
+    setFormConnectionResult(null);
+    setFormConnectionSucceeded(false);
+    setIsEnvironmentFormOpen(true);
+  }
+
+  function closeEnvironmentForm() {
+    setIsEnvironmentFormOpen(false);
+    setEditingEnvironment(null);
+    setEnvironmentError(null);
+    setFormConnectionResult(null);
+    setFormConnectionSucceeded(false);
+  }
+
+  async function saveEnvironment(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setEnvironmentError(null);
+    setIsSavingEnvironment(true);
+    try {
+      const saved = editingEnvironment
+        ? await serverEnvironments.update(
+          editingEnvironment.id,
+          environmentDraft.name,
+          environmentDraft.host,
+          Number(environmentDraft.port),
+          environmentDraft.username,
+          environmentDraft.identityFile.trim() || null,
+        )
+        : await serverEnvironments.create(
+          environmentDraft.name,
+          environmentDraft.host,
+          Number(environmentDraft.port),
+          environmentDraft.username,
+          environmentDraft.identityFile.trim() || null,
+        );
+      setEnvironments((current) => editingEnvironment
+        ? current.map((environment) => environment.id === saved.id ? saved : environment)
+        : [...current, saved]);
+      setEnvironmentFilterId(saved.id);
+      if (!editingEnvironment) {
+        setDraft((current) => ({ ...current, kind: "remote", environmentId: saved.id }));
+      }
+      closeEnvironmentForm();
+    } catch (error) {
+      setEnvironmentError(errorText(error));
+    } finally {
+      setIsSavingEnvironment(false);
+    }
+  }
+
+  async function removeEnvironment(id: string) {
+    setEnvironmentError(null);
+    try {
+      await serverEnvironments.delete(id);
+      setEnvironments((current) => current.filter((environment) => environment.id !== id));
+      setRemovingEnvironmentId(null);
+      if (environmentFilterId === id) setEnvironmentFilterId(null);
+    } catch (error) {
+      setEnvironmentError(errorText(error));
+    }
+  }
+
+  function openNewProfile(environmentId?: string) {
     setEditingProfile(null);
-    setDraft(emptyDraft);
+    setDraft({ ...emptyDraft, kind: environmentId ? "remote" : "local", environmentId: environmentId ?? "" });
     setFormError(null);
     setFormConnectionResult(null);
     setFormConnectionSucceeded(false);
@@ -576,6 +668,56 @@ function App() {
     } finally {
       setIsRemoving(false);
     }
+  }
+
+  function renderEnvironmentForm() {
+    return (
+      <form className="profile-form environment-form" onSubmit={saveEnvironment} aria-labelledby="environment-form-title">
+        <div className="form-heading">
+          <div>
+            <h2 id="environment-form-title">{editingEnvironment ? "Edit environment" : "Add remote environment"}</h2>
+            <p>Save SSH connection settings once, then use them for multiple servers.</p>
+          </div>
+        </div>
+        {environmentError && <p className="form-error" role="alert">{environmentError}</p>}
+        <div className="form-grid">
+          <label className="field field-wide">
+            <span>Environment name</span>
+            <input autoFocus maxLength={80} value={environmentDraft.name} onChange={(event) => setEnvironmentDraft({ ...environmentDraft, name: event.currentTarget.value })} placeholder="Production server" required />
+          </label>
+          <label className="field field-wide">
+            <span>Host name or address</span>
+            <input value={environmentDraft.host} onChange={(event) => setEnvironmentDraft({ ...environmentDraft, host: event.currentTarget.value })} placeholder="server.example.com" required />
+          </label>
+          <label className="field">
+            <span>SSH user</span>
+            <input value={environmentDraft.username} onChange={(event) => setEnvironmentDraft({ ...environmentDraft, username: event.currentTarget.value })} placeholder="minecraft" required />
+          </label>
+          <label className="field">
+            <span>SSH port</span>
+            <input type="number" min={1} max={65535} value={environmentDraft.port} onChange={(event) => setEnvironmentDraft({ ...environmentDraft, port: event.currentTarget.value })} required />
+          </label>
+          <label className="field field-wide">
+            <span>SSH identity file <small>(optional)</small></span>
+            <div className="path-control">
+              <input value={environmentDraft.identityFile} onChange={(event) => setEnvironmentDraft({ ...environmentDraft, identityFile: event.currentTarget.value })} placeholder="C:\\Users\\you\\.ssh\\id_ed25519" />
+              <button className="button button-secondary" type="button" onClick={() => void selectIdentityFile()} aria-label="Browse for SSH identity file"><FileKey size={15} />Browse</button>
+            </div>
+            <small>Leave blank to use your system SSH agent and default keys. Encrypted keys must be loaded into the agent. Host keys must already be trusted in known_hosts.</small>
+          </label>
+        </div>
+        <div className="form-actions">
+          <button className="button button-secondary" type="button" onClick={() => void testEnvironmentDraftConnection()} disabled={isTestingConnection || isSavingEnvironment || !environmentDraft.host.trim() || !environmentDraft.username.trim() || !Number(environmentDraft.port)}>
+            {isTestingConnection ? "Testing SSH…" : "Test SSH"}
+          </button>
+          <button className="button button-quiet" type="button" onClick={closeEnvironmentForm} disabled={isSavingEnvironment}>Cancel</button>
+          <button className="button button-primary" type="submit" disabled={isSavingEnvironment}>
+            {isSavingEnvironment ? "Saving…" : editingEnvironment ? "Save environment" : "Create environment"}
+          </button>
+        </div>
+        {formConnectionResult && <p className={formConnectionSucceeded ? "form-connection-result form-connection-success" : "form-connection-result form-connection-error"} role="status">{formConnectionResult}</p>}
+      </form>
+    );
   }
 
   function renderProfileForm() {
@@ -670,46 +812,16 @@ function App() {
               ) : (
                 <>
                   <label className="field field-wide">
-                    <span>Host name or address</span>
-                    <input
-                      value={draft.host}
-                      onChange={(event) => setDraft({ ...draft, host: event.currentTarget.value })}
-                      placeholder="server.example.com"
-                      required
-                    />
+                    <span>Remote environment</span>
+                    <select value={draft.environmentId} onChange={(event) => setDraft({ ...draft, environmentId: event.currentTarget.value })} required>
+                      <option value="">Choose an environment</option>
+                      {environments.map((environment) => <option key={environment.id} value={environment.id}>{environment.name} · {environment.username}@{environment.host}:{environment.port}</option>)}
+                    </select>
+                    <small>SSH connection settings are saved once per environment and shared by its servers.</small>
                   </label>
-                  <label className="field">
-                    <span>SSH user</span>
-                    <input
-                      value={draft.username}
-                      onChange={(event) => setDraft({ ...draft, username: event.currentTarget.value })}
-                      placeholder="minecraft"
-                      required
-                    />
-                  </label>
-                  <label className="field">
-                    <span>SSH port</span>
-                    <input
-                      type="number"
-                      min={1}
-                      max={65535}
-                      value={draft.port}
-                      onChange={(event) => setDraft({ ...draft, port: event.currentTarget.value })}
-                      required
-                    />
-                  </label>
-                  <label className="field field-wide">
-                    <span>SSH identity file <small>(optional)</small></span>
-                    <div className="path-control">
-                      <input
-                        value={draft.identityFile}
-                        onChange={(event) => setDraft({ ...draft, identityFile: event.currentTarget.value })}
-                        placeholder="C:\\Users\\you\\.ssh\\id_ed25519"
-                      />
-                      <button className="button button-secondary" type="button" onClick={() => void selectIdentityFile()} aria-label="Browse for SSH identity file"><FileKey size={15} />Browse</button>
-                    </div>
-                    <small>Leave blank to use your system SSH agent and default keys. Encrypted keys must be loaded into the agent. Host keys must already be trusted in known_hosts.</small>
-                  </label>
+                  <button className="button button-secondary" type="button" onClick={() => openNewEnvironment()}>
+                    <Plus size={15} aria-hidden="true" /> Add remote environment
+                  </button>
                   <label className="field field-wide">
                     <span>Remote server folder <small>(needed for start and files)</small></span>
                     <input
@@ -742,11 +854,6 @@ function App() {
             </div>
 
             <div className="form-actions">
-              {draft.kind === "remote" && (
-                <button className="button button-secondary" type="button" onClick={() => void testDraftConnection()} disabled={isTestingConnection || isSaving || !draft.host.trim() || !draft.username.trim() || !Number(draft.port)}>
-                  {isTestingConnection ? "Testing SSH…" : "Test SSH"}
-                </button>
-              )}
               {!selectedProfileId && (
                 <button className="button button-quiet" type="button" onClick={closeForm} disabled={isSaving}>
                   Cancel
@@ -770,7 +877,6 @@ function App() {
                 <button className="button button-quiet" type="button" onClick={() => setRemovingId(null)} disabled={isRemoving}>Cancel</button>
               </div>
             )}
-            {formConnectionResult && <p className={formConnectionSucceeded ? "form-connection-result form-connection-success" : "form-connection-result form-connection-error"} role="status">{formConnectionResult}</p>}
           </form>
     );
   }
@@ -780,6 +886,9 @@ function App() {
       {selectedProfile ? (() => {
         const target = selectedProfile.target;
         const isLocal = target.kind === "local";
+        const environment = target.kind === "remote"
+          ? environments.find((item) => item.id === target.environmentId)
+          : undefined;
         const status = isLocal ? statuses[selectedProfile.id] : undefined;
         const remoteStatus = !isLocal ? remoteStatuses[selectedProfile.id] : undefined;
         const state = status?.state ?? "checking";
@@ -812,7 +921,9 @@ function App() {
               <h1 id="page-title">{selectedProfile.name}</h1>
               <p>{selectedProfile.target.kind === "local"
                 ? selectedProfile.target.directory
-                : `${selectedProfile.target.username}@${selectedProfile.target.host}:${selectedProfile.target.port}`}</p>
+                : environment
+                  ? `${environment.name} · ${environment.username}@${environment.host}:${environment.port}`
+                  : "Remote environment unavailable"}</p>
             </div>
             <section className="server-status-card" aria-label="Server status">
               <span className="server-status-label">Server status</span>
@@ -881,7 +992,7 @@ function App() {
         {!selectedProfileId && <header className="page-header">
           <div>
             <h1 id="page-title">Servers</h1>
-            <p>Keep your local folders and remote machines organized.</p>
+            <p>Manage local servers and group remote servers by environment.</p>
           </div>
           <div className="page-actions">
             <label className="theme-picker">
@@ -891,16 +1002,58 @@ function App() {
                 {themes.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
               </select>
             </label>
-            {!isFormOpen && !selectedProfileId && (
-              <button className="button button-primary" onClick={openNewProfile}>
+            {!isEnvironmentFormOpen && (
+              <button className="button button-secondary" onClick={() => openNewEnvironment()}>
+                <Plus size={16} aria-hidden="true" /> Add environment
+              </button>
+            )}
+            {!isFormOpen && !isEnvironmentFormOpen && (
+              <button className="button button-primary" onClick={() => openNewProfile(filteredEnvironment?.id)}>
                 <Plus size={16} aria-hidden="true" /> Add server
               </button>
             )}
           </div>
         </header>}
 
-        {!selectedProfileId && isFormOpen && renderProfileForm()}
+        {!selectedProfileId && isEnvironmentFormOpen && renderEnvironmentForm()}
+        {!selectedProfileId && isFormOpen && !isEnvironmentFormOpen && renderProfileForm()}
 
+        {!selectedProfileId && environments.length > 0 && (
+          <section className="environment-section" aria-label="Remote environments">
+            <div className="environment-section-heading">
+              <h2>Remote environments</h2>
+              {environmentFilterId && <button className="button button-quiet" onClick={() => setEnvironmentFilterId(null)}>Show all servers</button>}
+            </div>
+            {environmentError && !isEnvironmentFormOpen && <p className="form-error" role="alert">{environmentError}</p>}
+            <div className="environment-grid">
+              {environments.map((environment) => {
+                const serverCount = profiles.filter((profile) => profile.target.kind === "remote" && profile.target.environmentId === environment.id).length;
+                const isSelected = environmentFilterId === environment.id;
+                return (
+                  <article className={`environment-card${isSelected ? " environment-card-selected" : ""}`} key={environment.id}>
+                    <button className="environment-card-main" type="button" onClick={() => setEnvironmentFilterId(isSelected ? null : environment.id)}>
+                      <span className="environment-card-title">{environment.name}</span>
+                      <span className="environment-card-address">{environment.username}@{environment.host}:{environment.port}</span>
+                      <span className="environment-card-count">{serverCount} {serverCount === 1 ? "server" : "servers"}</span>
+                    </button>
+                    <div className="environment-card-actions">
+                      <button className="button button-primary" type="button" onClick={() => { setEnvironmentFilterId(environment.id); openNewProfile(environment.id); }}>Add server</button>
+                      <button className="button button-quiet" type="button" onClick={() => openNewEnvironment(environment)}>Edit</button>
+                      <button className="button button-quiet" type="button" onClick={() => setRemovingEnvironmentId(environment.id)} disabled={serverCount > 0} title={serverCount > 0 ? "Remove its servers before deleting this environment." : undefined}>Remove</button>
+                    </div>
+                    {removingEnvironmentId === environment.id && (
+                      <div className="remove-confirm" role="group" aria-label={`Remove ${environment.name}`}>
+                        <span>Remove this empty environment?</span>
+                        <button className="button button-danger-quiet" type="button" onClick={() => void removeEnvironment(environment.id)}>Remove environment</button>
+                        <button className="button button-quiet" type="button" onClick={() => setRemovingEnvironmentId(null)}>Cancel</button>
+                      </div>
+                    )}
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+        )}
 
         {loadError && profiles.length > 0 && (
           <div className="notice notice-error" role="alert">
@@ -930,8 +1083,8 @@ function App() {
         )}
 
         {!selectedProfileId && <div className="list-heading">
-          <h2>Saved servers</h2>
-          {!isLoading && <span>{profiles.length} {profiles.length === 1 ? "server" : "servers"}</span>}
+          <h2>{filteredEnvironment ? `${filteredEnvironment.name} servers` : "Saved servers"}</h2>
+          {!isLoading && <span>{visibleProfiles.length} {visibleProfiles.length === 1 ? "server" : "servers"}</span>}
         </div>}
 
         {isLoading ? (
@@ -951,18 +1104,24 @@ function App() {
         ) : profiles.length === 0 ? (
           <div className="empty-state">
             <div className="empty-mark" aria-hidden="true"><span /></div>
-            <h3>No servers saved</h3>
-            <p>Add a local or remote profile to get started.</p>
-            {!isFormOpen && <button className="button button-secondary" onClick={openNewProfile}>Add your first server</button>}
+            <h3>{filteredEnvironment ? `No servers in ${filteredEnvironment.name}` : "No servers saved"}</h3>
+            <p>{filteredEnvironment ? "Add a server to this environment." : "Add a local server or create a remote environment to get started."}</p>
+            {!isFormOpen && <button className="button button-secondary" onClick={() => openNewProfile(filteredEnvironment?.id)}>{filteredEnvironment ? "Add server" : "Add your first server"}</button>}
+          </div>
+        ) : visibleProfiles.length === 0 ? (
+          <div className="empty-state">
+            <h3>No servers in {filteredEnvironment?.name ?? "this environment"}</h3>
+            <p>Add a server to this environment.</p>
+            {!isFormOpen && <button className="button button-secondary" onClick={() => filteredEnvironment && openNewProfile(filteredEnvironment.id)}>Add server</button>}
           </div>
         ) : (
           <div className="server-list" aria-label="Saved servers">
-            {profiles.map((profile) => {
+            {visibleProfiles.map((profile) => {
               const target = profile.target;
               const isLocal = target.kind === "local";
               const location = target.kind === "local"
                 ? target.directory
-                : `${target.username}@${target.host}:${target.port}${target.directory ? ` · ${target.directory}` : ""}`;
+                : `${environments.find((environment) => environment.id === target.environmentId)?.name ?? "Remote environment"}${target.directory ? ` · ${target.directory}` : ""}`;
               const status = isLocal ? statuses[profile.id] : undefined;
               const remoteStatus = !isLocal ? remoteStatuses[profile.id] : undefined;
               const state = status?.state ?? "checking";

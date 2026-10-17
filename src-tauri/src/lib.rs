@@ -30,6 +30,10 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::list_server_environments,
+            commands::create_server_environment,
+            commands::update_server_environment,
+            commands::delete_server_environment,
             commands::list_server_profiles,
             commands::create_server_profile,
             commands::update_server_profile,

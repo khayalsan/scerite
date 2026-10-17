@@ -27,7 +27,9 @@ use tokio::{
 };
 use uuid::Uuid;
 
-use crate::server_profiles::{LocalLaunchConfig, ServerProfile, ServerProfileStore, ServerTarget};
+use crate::server_profiles::{
+    LocalLaunchConfig, ServerEnvironment, ServerProfile, ServerProfileStore, ServerTarget,
+};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_FILE_BYTES: u64 = 1024 * 1024;
@@ -81,8 +83,12 @@ struct RemoteConnectionConfig {
 }
 
 impl RemoteSessionManager {
-    fn session(self: &Arc<Self>, profile: &ServerProfile) -> Result<RemoteConnection, String> {
-        let config = remote_connection_config(profile)?;
+    fn session(
+        self: &Arc<Self>,
+        profile: &ServerProfile,
+        environment: &ServerEnvironment,
+    ) -> Result<RemoteConnection, String> {
+        let config = remote_connection_config(environment);
         let mut sessions = self
             .sessions
             .lock()
@@ -162,8 +168,14 @@ pub async fn test_remote_connection(
     profiles: State<'_, ServerProfileStore>,
     remote_sessions: State<'_, Arc<RemoteSessionManager>>,
 ) -> Result<(), String> {
-    let profile = require_remote_profile(&profiles, profile_id)?;
-    run_remote(profile, Arc::clone(remote_sessions.inner()), |_, _| Ok(())).await
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    run_remote(
+        profile,
+        environment,
+        Arc::clone(remote_sessions.inner()),
+        |_, _| Ok(()),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -197,9 +209,10 @@ pub async fn remote_server_status(
     profiles: State<'_, ServerProfileStore>,
     remote_sessions: State<'_, Arc<RemoteSessionManager>>,
 ) -> Result<RemoteServerStatus, String> {
-    let profile = require_remote_profile(&profiles, profile_id)?;
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
     run_remote(
         profile,
+        environment,
         Arc::clone(remote_sessions.inner()),
         |session, profile| {
             let running = remote_is_running(session, profile)?;
@@ -229,8 +242,8 @@ pub async fn start_remote_server(
     profiles: State<'_, ServerProfileStore>,
     remote_sessions: State<'_, Arc<RemoteSessionManager>>,
 ) -> Result<RemoteServerStatus, String> {
-    let profile = require_remote_profile(&profiles, profile_id)?;
-    run_remote(profile, Arc::clone(remote_sessions.inner()), |session, profile| {
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    run_remote(profile, environment, Arc::clone(remote_sessions.inner()), |session, profile| {
         let ServerTarget::Remote { directory, launch, .. } = &profile.target else {
             return Err("Remote server controls are only available for remote profiles.".into());
         };
@@ -271,8 +284,8 @@ pub async fn stop_remote_server(
     profiles: State<'_, ServerProfileStore>,
     remote_sessions: State<'_, Arc<RemoteSessionManager>>,
 ) -> Result<RemoteServerStatus, String> {
-    let profile = require_remote_profile(&profiles, profile_id)?;
-    run_remote(profile, Arc::clone(remote_sessions.inner()), |session, profile| {
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    run_remote(profile, environment, Arc::clone(remote_sessions.inner()), |session, profile| {
         let running = remote_is_running(session, profile)?;
         if running != Some(true) {
             if let Some(root) = optional_remote_root(session, profile)? {
@@ -301,8 +314,8 @@ pub async fn remote_server_console(
     profiles: State<'_, ServerProfileStore>,
     remote_sessions: State<'_, Arc<RemoteSessionManager>>,
 ) -> Result<RemoteConsoleSnapshot, String> {
-    let profile = require_remote_profile(&profiles, profile_id)?;
-    run_remote(profile, Arc::clone(remote_sessions.inner()), |session, profile| {
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    run_remote(profile, environment, Arc::clone(remote_sessions.inner()), |session, profile| {
         if remote_is_running(session, profile)? != Some(true) {
             if let Some(root) = optional_remote_root(session, profile)? {
                 if remote_directory_has_java_process(session, &root)? {
@@ -334,7 +347,7 @@ pub async fn send_remote_console_input(
     profiles: State<'_, ServerProfileStore>,
     remote_sessions: State<'_, Arc<RemoteSessionManager>>,
 ) -> Result<(), String> {
-    let profile = require_remote_profile(&profiles, profile_id)?;
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
     if input.len() > 4096
         || input
             .chars()
@@ -342,7 +355,7 @@ pub async fn send_remote_console_input(
     {
         return Err("Console commands must be one line and 4 KB or less.".into());
     }
-    run_remote(profile, Arc::clone(remote_sessions.inner()), move |session, profile| {
+    run_remote(profile, environment, Arc::clone(remote_sessions.inner()), move |session, profile| {
         if remote_is_running(session, profile)? != Some(true) {
             if let Some(root) = optional_remote_root(session, profile)? {
                 if remote_directory_has_java_process(session, &root)? {
@@ -376,8 +389,8 @@ pub async fn list_remote_server_files(
     profiles: State<'_, ServerProfileStore>,
     remote_sessions: State<'_, Arc<RemoteSessionManager>>,
 ) -> Result<Vec<RemoteServerFileEntry>, String> {
-    let profile = require_remote_profile(&profiles, profile_id)?;
-    run_remote(profile, Arc::clone(remote_sessions.inner()), move |session, profile| {
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    run_remote(profile, environment, Arc::clone(remote_sessions.inner()), move |session, profile| {
         let root = configured_remote_root(profile)?;
         let sftp = session.sftp().map_err(|error| format!("Could not open SFTP: {error}"))?;
         let canonical_root = remote_root_with_sftp(&sftp, root)?;
@@ -421,9 +434,10 @@ pub async fn read_remote_server_file(
     profiles: State<'_, ServerProfileStore>,
     remote_sessions: State<'_, Arc<RemoteSessionManager>>,
 ) -> Result<String, String> {
-    let profile = require_remote_profile(&profiles, profile_id)?;
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
     run_remote(
         profile,
+        environment,
         Arc::clone(remote_sessions.inner()),
         move |session, profile| {
             let sftp = session
@@ -463,11 +477,11 @@ pub async fn write_remote_server_file(
     profiles: State<'_, ServerProfileStore>,
     remote_sessions: State<'_, Arc<RemoteSessionManager>>,
 ) -> Result<(), String> {
-    let profile = require_remote_profile(&profiles, profile_id)?;
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
     if content.len() as u64 > MAX_FILE_BYTES {
         return Err("Files larger than 1 MB cannot be edited here.".into());
     }
-    run_remote(profile, Arc::clone(remote_sessions.inner()), move |session, profile| {
+    run_remote(profile, environment, Arc::clone(remote_sessions.inner()), move |session, profile| {
         match remote_is_running(session, profile)? {
             Some(true) => return Err("Stop the server before editing its files.".into()),
             Some(false) => {}
@@ -518,6 +532,7 @@ pub async fn write_remote_server_file(
 
 async fn run_remote<T, F>(
     profile: ServerProfile,
+    environment: ServerEnvironment,
     sessions: Arc<RemoteSessionManager>,
     operation: F,
 ) -> Result<T, String>
@@ -526,7 +541,7 @@ where
     F: FnOnce(&RemoteConnection, &ServerProfile) -> Result<T, String> + Send + 'static,
 {
     tauri::async_runtime::spawn_blocking(move || {
-        let session = sessions.session(&profile)?;
+        let session = sessions.session(&profile, &environment)?;
         let result = operation(&session, &profile);
         if result.is_err() {
             sessions.invalidate(profile.id);
@@ -540,35 +555,26 @@ where
 fn require_remote_profile(
     profiles: &ServerProfileStore,
     profile_id: Uuid,
-) -> Result<ServerProfile, String> {
+) -> Result<(ServerProfile, ServerEnvironment), String> {
     let profile = profiles
         .list()?
         .into_iter()
         .find(|profile| profile.id == profile_id)
         .ok_or_else(|| "Server profile was not found.".to_owned())?;
-    if !matches!(profile.target, ServerTarget::Remote { .. }) {
-        return Err("This operation is only available for remote profiles.".into());
-    }
-    Ok(profile)
-}
-
-fn remote_connection_config(profile: &ServerProfile) -> Result<RemoteConnectionConfig, String> {
-    let ServerTarget::Remote {
-        host,
-        port,
-        username,
-        identity_file,
-        ..
-    } = &profile.target
-    else {
+    let ServerTarget::Remote { environment_id, .. } = &profile.target else {
         return Err("This operation is only available for remote profiles.".into());
     };
-    Ok(RemoteConnectionConfig {
-        host: host.clone(),
-        port: *port,
-        username: username.clone(),
-        identity_file: identity_file.clone(),
-    })
+    let environment = profiles.environment(*environment_id)?;
+    Ok((profile, environment))
+}
+
+fn remote_connection_config(environment: &ServerEnvironment) -> RemoteConnectionConfig {
+    RemoteConnectionConfig {
+        host: environment.host.clone(),
+        port: environment.port,
+        username: environment.username.clone(),
+        identity_file: environment.identity_file.clone(),
+    }
 }
 
 fn connect_remote(

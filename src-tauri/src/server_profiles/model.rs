@@ -10,6 +10,62 @@ pub struct ServerProfile {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerEnvironment {
+    pub id: Uuid,
+    pub name: String,
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    #[serde(default)]
+    pub identity_file: Option<String>,
+}
+
+impl ServerEnvironment {
+    pub fn validate(&self) -> Result<(), String> {
+        validate_environment_name(&self.name)?;
+        if self.host.trim().is_empty()
+            || self.host.starts_with('-')
+            || self.host.chars().any(|character| {
+                character.is_whitespace() || matches!(character, '@' | '/' | '\\' | '\0')
+            })
+        {
+            return Err("Enter a remote host name or address.".into());
+        }
+        if self.port == 0 {
+            return Err("The SSH port must be between 1 and 65535.".into());
+        }
+        if self.username.trim().is_empty()
+            || self.username.starts_with('-')
+            || !self.username.chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '_' | '.' | '-')
+            })
+        {
+            return Err("Enter an SSH user name.".into());
+        }
+        if self
+            .identity_file
+            .as_ref()
+            .is_some_and(|path| path.contains('\0'))
+        {
+            return Err("The SSH identity path is invalid.".into());
+        }
+        Ok(())
+    }
+
+    pub fn normalized(mut self) -> Self {
+        self.name = self.name.trim().to_owned();
+        self.host = self.host.trim().to_owned();
+        self.username = self.username.trim().to_owned();
+        self.identity_file = self.identity_file.and_then(|path| {
+            let path = path.trim().to_owned();
+            (!path.is_empty()).then_some(path)
+        });
+        self
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ServerTarget {
     Local {
@@ -18,11 +74,8 @@ pub enum ServerTarget {
         launch: LocalLaunchConfig,
     },
     Remote {
-        host: String,
-        port: u16,
-        username: String,
-        #[serde(rename = "identityFile", default)]
-        identity_file: Option<String>,
+        #[serde(rename = "environmentId")]
+        environment_id: Uuid,
         #[serde(default)]
         directory: String,
         #[serde(default)]
@@ -57,38 +110,10 @@ impl ServerTarget {
                 Ok(())
             }
             Self::Remote {
-                host,
-                port,
-                username,
-                identity_file,
+                environment_id: _,
                 directory,
                 launch,
             } => {
-                if host.trim().is_empty()
-                    || host.starts_with('-')
-                    || host.chars().any(|character| {
-                        character.is_whitespace() || matches!(character, '@' | '/' | '\\' | '\0')
-                    })
-                {
-                    return Err("Enter a remote host name or address.".into());
-                }
-                if *port == 0 {
-                    return Err("The SSH port must be between 1 and 65535.".into());
-                }
-                if username.trim().is_empty()
-                    || username.starts_with('-')
-                    || !username.chars().all(|character| {
-                        character.is_ascii_alphanumeric() || matches!(character, '_' | '.' | '-')
-                    })
-                {
-                    return Err("Enter an SSH user name.".into());
-                }
-                if identity_file
-                    .as_ref()
-                    .is_some_and(|path| path.contains('\0'))
-                {
-                    return Err("The SSH identity path is invalid.".into());
-                }
                 let trimmed_directory = directory.trim().trim_end_matches('/');
                 if !directory.trim().is_empty()
                     && (trimmed_directory.is_empty()
@@ -126,20 +151,11 @@ impl ServerTarget {
                 },
             },
             Self::Remote {
-                host,
-                port,
-                username,
-                identity_file,
+                environment_id,
                 directory,
                 launch,
             } => Self::Remote {
-                host: host.trim().to_owned(),
-                port,
-                username: username.trim().to_owned(),
-                identity_file: identity_file.and_then(|path| {
-                    let path = path.trim().to_owned();
-                    (!path.is_empty()).then_some(path)
-                }),
+                environment_id,
                 directory: {
                     let directory = directory.trim();
                     if directory.len() > 1 {
@@ -164,6 +180,17 @@ pub fn validate_name(name: &str) -> Result<(), String> {
     }
     if trimmed.chars().count() > 80 {
         return Err("Server names must be 80 characters or fewer.".into());
+    }
+    Ok(())
+}
+
+pub fn validate_environment_name(name: &str) -> Result<(), String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("Enter an environment name.".into());
+    }
+    if trimmed.chars().count() > 80 {
+        return Err("Environment names must be 80 characters or fewer.".into());
     }
     Ok(())
 }
