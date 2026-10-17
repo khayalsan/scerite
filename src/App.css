@@ -577,13 +577,162 @@
 
 .server-row-detail .row-actions,
 .server-row-detail .remove-confirm {
+  margin-left: 0;
+}
+
+.server-detail-layout {
+  display: grid;
+  min-width: 0;
+  flex: 1 0 calc(100% - 53px);
+  grid-template-columns: minmax(180px, 220px) minmax(0, 1fr);
+  gap: 22px;
   margin-left: 53px;
 }
 
-.server-row-detail .console-panel,
-.server-row-detail .files-panel {
-  flex-basis: 100%;
-  margin-left: 53px;
+.server-detail-sidebar {
+  display: grid;
+  align-content: start;
+  gap: 15px;
+  min-width: 0;
+}
+
+.server-status-card {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid var(--app-line);
+  border-radius: 10px;
+  background: var(--app-ground);
+}
+
+.server-status-label {
+  color: var(--app-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.server-status-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--app-muted);
+  font-size: 13px;
+  font-weight: 650;
+  text-transform: capitalize;
+}
+
+.server-status-dot {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.server-status-running {
+  color: #28734a;
+}
+
+.server-status-stopping {
+  color: #a86e1f;
+}
+
+.server-status-unreachable {
+  color: var(--destructive);
+}
+
+.server-status-unmanaged {
+  color: #a86e1f;
+}
+
+.server-detail-actions {
+  display: grid;
+  gap: 7px;
+  margin-top: 4px;
+}
+
+.server-detail-actions .button {
+  width: 100%;
+}
+
+.server-tab-list {
+  display: grid;
+  gap: 4px;
+}
+
+.server-tab {
+  display: flex;
+  min-height: 40px;
+  align-items: center;
+  gap: 10px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--app-muted);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 560;
+  text-align: left;
+}
+
+.server-tab:hover,
+.server-tab-active {
+  color: var(--app-accent);
+  background: var(--app-accent-soft);
+}
+
+.server-tab:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--app-accent) 32%, transparent);
+  outline-offset: 2px;
+}
+
+.server-tab-content {
+  min-width: 0;
+  min-height: 300px;
+}
+
+.server-tab-panel[hidden] {
+  display: none;
+}
+
+.server-tab-empty,
+.server-settings-panel {
+  display: grid;
+  align-content: start;
+  justify-items: start;
+  gap: 10px;
+  min-height: 230px;
+  padding: 20px;
+  border: 1px solid var(--app-line);
+  border-radius: 10px;
+  background: var(--app-ground);
+}
+
+.server-tab-empty {
+  align-content: center;
+  justify-items: center;
+  text-align: center;
+}
+
+.server-tab-empty h2,
+.server-settings-panel h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.server-tab-empty p,
+.server-settings-panel > p {
+  margin: 0;
+  color: var(--app-muted);
+  font-size: 13px;
+}
+
+.server-settings-panel .row-actions {
+  margin-top: 8px;
 }
 
 .back-link {
@@ -712,6 +861,23 @@
   border: 1px solid var(--app-line);
   border-radius: 9px;
   background: var(--terminal-background);
+}
+
+.console-toolbar {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 11px;
+  border-bottom: 1px solid #303936;
+  color: #d4e2dc;
+  font-size: 12px;
+}
+
+.console-toolbar .button {
+  min-height: 29px;
+  padding: 0 8px;
 }
 
 .console-output {
@@ -962,6 +1128,11 @@
   .workspace {
     padding-top: 40px;
   }
+
+  .server-detail-layout {
+    grid-template-columns: minmax(150px, 190px) minmax(0, 1fr);
+    gap: 14px;
+  }
 }
 
 @media (max-width: 560px) {
@@ -1054,6 +1225,50 @@
   .server-row {
     min-height: 80px;
     gap: 10px;
+  }
+
+  .server-row-detail {
+    padding: 14px;
+  }
+
+  .server-row-detail .server-detail-layout {
+    flex-basis: 100%;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 13px;
+    margin-left: 0;
+  }
+
+  .server-detail-sidebar {
+    gap: 10px;
+  }
+
+  .server-status-card {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+  }
+
+  .server-status-label {
+    grid-column: 1 / -1;
+  }
+
+  .server-detail-actions {
+    grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+    grid-column: 1 / -1;
+  }
+
+  .server-tab-list {
+    display: flex;
+    overflow-x: auto;
+    padding-bottom: 5px;
+    border-bottom: 1px solid var(--app-line);
+  }
+
+  .server-tab {
+    flex: 0 0 auto;
+  }
+
+  .server-tab-content {
+    min-height: 240px;
   }
 
   .console-panel {
