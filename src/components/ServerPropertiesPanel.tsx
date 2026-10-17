@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { RotateCcw, Save } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { serverFiles } from "../lib/serverFiles";
 
 type PropertyEntry = {
@@ -193,6 +194,10 @@ export function ServerPropertiesPanel({ profileId, remote, canEdit }: ServerProp
     else setReloadKey((current) => current + 1);
   }
 
+  function updateProperty(key: string, value: string) {
+    setValues((current) => ({ ...current, [key]: value }));
+  }
+
   function resetChanges() {
     if (hasChanges && window.confirm("Discard unsaved server.properties changes?")) {
       setValues(originalValues);
@@ -267,21 +272,26 @@ export function ServerPropertiesPanel({ profileId, remote, canEdit }: ServerProp
                             role="switch"
                             checked={booleanValue === "true"}
                             disabled={!canEdit || isSaving}
-                            onChange={(event) => setValues((current) => ({ ...current, [entry.key]: String(event.currentTarget.checked) }))}
+                            onChange={(event) => updateProperty(entry.key, String(event.currentTarget.checked))}
                           />
                           <span aria-hidden="true" />
                         </label>
                       ) : options ? (
-                        <select
-                          id={`property-${entry.lineIndex}`}
-                          className="property-control"
+                        <Select
                           value={value}
                           disabled={!canEdit || isSaving}
-                          onChange={(event) => setValues((current) => ({ ...current, [entry.key]: event.currentTarget.value }))}
+                          onValueChange={(nextValue) => {
+                            if (nextValue !== null) updateProperty(entry.key, nextValue);
+                          }}
                         >
-                          {!options.includes(value) && <option value={value}>{value}</option>}
-                          {options.map((option) => <option key={option} value={option}>{displayName(option)}</option>)}
-                        </select>
+                          <SelectTrigger id={`property-${entry.lineIndex}`} aria-label={label}>
+                            <SelectValue>{(selected) => selected ? displayName(selected) : "Choose an option"}</SelectValue>
+                          </SelectTrigger>
+                          <SelectContent>
+                            {!options.includes(value) && <SelectItem value={value}>{displayName(value)}</SelectItem>}
+                            {options.map((option) => <SelectItem key={option} value={option}>{displayName(option)}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
                       ) : (
                         <input
                           id={`property-${entry.lineIndex}`}
@@ -290,7 +300,7 @@ export function ServerPropertiesPanel({ profileId, remote, canEdit }: ServerProp
                           step={isNumeric ? "any" : undefined}
                           value={value}
                           disabled={!canEdit || isSaving}
-                          onChange={(event) => setValues((current) => ({ ...current, [entry.key]: event.currentTarget.value }))}
+                          onChange={(event) => updateProperty(entry.key, event.currentTarget.value)}
                         />
                       )}
                     </div>
