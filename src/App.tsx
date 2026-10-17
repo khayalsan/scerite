@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type { FormEvent } from "react";
 import { ArrowLeft, FileKey, FolderOpen, HardDrive, Network, Palette, Plus, Settings, SlidersHorizontal, Terminal, X } from "lucide-react";
-import { serverEnvironments, serverProfiles } from "./lib/serverProfiles";
+import { localInstallRoot, serverEnvironments, serverProfiles } from "./lib/serverProfiles";
 import type { ServerEnvironment, ServerProfile, ServerTarget } from "./lib/serverProfiles";
 import { serverSessions } from "./lib/serverSessions";
 import type { LocalServerStatus, RemoteServerStatus } from "./lib/serverSessions";
@@ -24,6 +24,7 @@ type ProfileDraft = {
 
 type EnvironmentDraft = {
   name: string;
+  rootDirectory: string;
   host: string;
   port: string;
   username: string;
@@ -65,6 +66,7 @@ const emptyDraft: ProfileDraft = {
 
 const emptyEnvironmentDraft: EnvironmentDraft = {
   name: "",
+  rootDirectory: "",
   host: "",
   port: "22",
   username: "",
@@ -159,6 +161,10 @@ function App() {
   const selectedProfileId = pathname.startsWith("/servers/") ? pathname.slice("/servers/".length) : null;
   const [profiles, setProfiles] = useState<ServerProfile[]>([]);
   const [environments, setEnvironments] = useState<ServerEnvironment[]>([]);
+  const [localRoot, setLocalRoot] = useState<string | null>(null);
+  const [localRootDraft, setLocalRootDraft] = useState("");
+  const [localRootError, setLocalRootError] = useState<string | null>(null);
+  const [isSavingLocalRoot, setIsSavingLocalRoot] = useState(false);
   const [environmentFilterId, setEnvironmentFilterId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -219,12 +225,15 @@ function App() {
     setIsLoading(true);
     setLoadError(null);
     try {
-      const [savedProfiles, savedEnvironments] = await Promise.all([
+      const [savedProfiles, savedEnvironments, savedLocalRoot] = await Promise.all([
         serverProfiles.list(),
         serverEnvironments.list(),
+        localInstallRoot.get(),
       ]);
       setProfiles(savedProfiles);
       setEnvironments(savedEnvironments);
+      setLocalRoot(savedLocalRoot);
+      setLocalRootDraft(savedLocalRoot ?? "");
     } catch (error) {
       setLoadError(errorText(error));
     } finally {
@@ -337,6 +346,30 @@ function App() {
       if (typeof selected === "string") setDraft((current) => ({ ...current, directory: selected }));
     } catch (error) {
       setFormError(errorText(error));
+    }
+  }
+
+  async function selectLocalRoot() {
+    try {
+      const selected = await openDialog({ directory: true, multiple: false, title: "Choose local Minecraft root" });
+      if (typeof selected === "string") setLocalRootDraft(selected);
+    } catch (error) {
+      setLocalRootError(errorText(error));
+    }
+  }
+
+  async function saveLocalRoot(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setLocalRootError(null);
+    setIsSavingLocalRoot(true);
+    try {
+      const saved = await localInstallRoot.set(localRootDraft);
+      setLocalRoot(saved);
+      setLocalRootDraft(saved);
+    } catch (error) {
+      setLocalRootError(errorText(error));
+    } finally {
+      setIsSavingLocalRoot(false);
     }
   }
 
@@ -516,6 +549,7 @@ function App() {
     setEditingEnvironment(environment ?? null);
     setEnvironmentDraft(environment ? {
       name: environment.name,
+      rootDirectory: environment.rootDirectory,
       host: environment.host,
       port: String(environment.port),
       username: environment.username,
@@ -544,6 +578,7 @@ function App() {
         ? await serverEnvironments.update(
           editingEnvironment.id,
           environmentDraft.name,
+          environmentDraft.rootDirectory,
           environmentDraft.host,
           Number(environmentDraft.port),
           environmentDraft.username,
@@ -551,6 +586,7 @@ function App() {
         )
         : await serverEnvironments.create(
           environmentDraft.name,
+          environmentDraft.rootDirectory,
           environmentDraft.host,
           Number(environmentDraft.port),
           environmentDraft.username,
@@ -689,6 +725,11 @@ function App() {
           <label className="field field-wide">
             <span>Environment name</span>
             <input autoFocus maxLength={80} value={environmentDraft.name} onChange={(event) => setEnvironmentDraft({ ...environmentDraft, name: event.currentTarget.value })} placeholder="Production server" required />
+          </label>
+          <label className="field field-wide">
+            <span>Minecraft root folder</span>
+            <input value={environmentDraft.rootDirectory} onChange={(event) => setEnvironmentDraft({ ...environmentDraft, rootDirectory: event.currentTarget.value })} placeholder="/home/ubuntu/minecraft" required />
+            <small>Versions download to cache/minecraft under this folder. The folder must exist on the remote machine.</small>
           </label>
           <label className="field field-wide">
             <span>Host name or address</span>
@@ -1051,6 +1092,28 @@ function App() {
         {!selectedProfileId && isEnvironmentFormOpen && renderEnvironmentForm()}
         {!selectedProfileId && isFormOpen && !isEnvironmentFormOpen && renderProfileForm()}
 
+        {!selectedProfileId && (
+          <section className="local-root-section" aria-labelledby="local-root-title">
+            <div className="environment-section-heading">
+              <h2 id="local-root-title">This computer</h2>
+            </div>
+            <form className="local-root-form" onSubmit={(event) => void saveLocalRoot(event)}>
+              <label className="field">
+                <span>Minecraft root folder</span>
+                <div className="path-control">
+                  <input value={localRootDraft} onChange={(event) => setLocalRootDraft(event.currentTarget.value)} placeholder="C:\\Minecraft" required />
+                  <button className="button button-secondary" type="button" onClick={() => void selectLocalRoot()} aria-label="Browse for local Minecraft root"><FolderOpen size={15} />Browse</button>
+                </div>
+                <small>Vanilla versions are cached in cache/minecraft beneath this folder.</small>
+              </label>
+              <button className="button button-secondary" type="submit" disabled={isSavingLocalRoot || !localRootDraft.trim() || localRootDraft === localRoot}>
+                {isSavingLocalRoot ? "Saving…" : "Save root"}
+              </button>
+            </form>
+            {localRootError && <p className="form-error" role="alert">{localRootError}</p>}
+          </section>
+        )}
+
         {!selectedProfileId && environments.length > 0 && (
           <section className="environment-section" aria-label="Remote environments">
             <div className="environment-section-heading">
@@ -1067,6 +1130,7 @@ function App() {
                     <button className="environment-card-main" type="button" onClick={() => setEnvironmentFilterId(isSelected ? null : environment.id)}>
                       <span className="environment-card-title">{environment.name}</span>
                       <span className="environment-card-address">{environment.username}@{environment.host}:{environment.port}</span>
+                      <span className="environment-card-address">{environment.rootDirectory || "Set a Minecraft root to install versions"}</span>
                       <span className="environment-card-count">{serverCount} {serverCount === 1 ? "server" : "servers"}</span>
                     </button>
                     <div className="environment-card-actions">

@@ -192,6 +192,32 @@
   margin: -10px 0 34px;
 }
 
+.local-root-section {
+  margin: -10px 0 34px;
+  padding: 14px;
+  border: 1px solid var(--app-line);
+  border-radius: 10px;
+  background: var(--app-paper);
+}
+
+.local-root-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  max-width: 760px;
+}
+
+@media (max-width: 560px) {
+  .local-root-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .local-root-form > .button {
+    justify-self: start;
+  }
+}
+
 .environment-section-heading {
   display: flex;
   align-items: center;
