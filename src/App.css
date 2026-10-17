@@ -879,6 +879,19 @@
   display: none;
 }
 
+.install-panel {
+  display: grid;
+  gap: 1.5rem;
+  max-width: 38rem;
+  padding: 1.5rem;
+}
+
+.install-panel h2 { margin: 0 0 .5rem; }
+.install-panel p { color: var(--muted-foreground); line-height: 1.5; }
+.install-form { display: grid; gap: .75rem; max-width: 22rem; }
+.install-version-trigger { width: 100%; }
+.install-success { color: var(--success, #74c69d) !important; }
+
 .server-tab-empty,
 .server-settings-panel {
   display: grid;
