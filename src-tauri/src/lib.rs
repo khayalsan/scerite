@@ -1,14 +1,25 @@
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
+mod server_profiles;
+
+use server_profiles::{ServerProfileStore, commands};
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![greet])
+        .setup(|app| {
+            let profile_path = app.path().app_data_dir()?.join("server-profiles.json");
+            let profile_store =
+                ServerProfileStore::open(profile_path).map_err(std::io::Error::other)?;
+            app.manage(profile_store);
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            commands::list_server_profiles,
+            commands::create_server_profile,
+            commands::update_server_profile,
+            commands::delete_server_profile,
+        ])
         .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .expect("error while running servercrafter");
 }
