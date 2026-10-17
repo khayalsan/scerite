@@ -5,6 +5,7 @@ import { serverProfiles } from "./lib/serverProfiles";
 import type { ServerProfile, ServerTarget } from "./lib/serverProfiles";
 import { serverSessions } from "./lib/serverSessions";
 import type { LocalServerStatus } from "./lib/serverSessions";
+import { LocalFilesPanel } from "./components/LocalFilesPanel";
 import "./App.css";
 
 type ProfileDraft = {
@@ -83,6 +84,7 @@ function App() {
   const [statuses, setStatuses] = useState<Record<string, LocalServerStatus>>({});
   const [busySessionId, setBusySessionId] = useState<string | null>(null);
   const [consoleProfileId, setConsoleProfileId] = useState<string | null>(null);
+  const [filesProfileId, setFilesProfileId] = useState<string | null>(null);
   const [consoleOutput, setConsoleOutput] = useState("");
   const [consoleInput, setConsoleInput] = useState("");
   const consoleCursor = useRef(0);
@@ -510,6 +512,7 @@ function App() {
                       {isLocal && state === "running" && <button className="button button-secondary" onClick={() => void controlServer(profile.id, "stop")} disabled={isBusy}>{isBusy ? "Stopping…" : "Stop"}</button>}
                       {isLocal && state === "stopping" && <button className="button button-secondary" disabled>Stopping…</button>}
                       {isLocal && <button className="button button-quiet" onClick={() => setConsoleProfileId((current) => current === profile.id ? null : profile.id)}>{consoleProfileId === profile.id ? "Close console" : "Console"}</button>}
+                      {isLocal && <button className="button button-quiet" onClick={() => setFilesProfileId((current) => current === profile.id ? null : profile.id)}>{filesProfileId === profile.id ? "Close files" : "Files"}</button>}
                       <button className="button button-quiet" onClick={() => openEditProfile(profile)}>Edit</button>
                       <button className="button button-quiet" onClick={() => setRemovingId(profile.id)} disabled={isLocal && state !== "stopped"} title={isLocal && state !== "stopped" ? "Stop the server before removing its profile." : undefined}>Remove</button>
                     </div>
@@ -525,6 +528,9 @@ function App() {
                         <button className="button button-primary" type="submit" disabled={state !== "running" || isBusy || !consoleInput.trim()}>Send</button>
                       </form>
                     </section>
+                  )}
+                  {isLocal && filesProfileId === profile.id && (
+                    <LocalFilesPanel profileId={profile.id} serverName={profile.name} canEdit={status?.state === "stopped"} onClose={() => setFilesProfileId(null)} />
                   )}
                 </article>
               );
