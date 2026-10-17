@@ -1078,21 +1078,6 @@ function App() {
                           <button className="button button-quiet" onClick={() => setRemovingId(profile.id)} disabled={isLocal ? state !== "stopped" : remoteState === "running" || remoteState === "stopping" || remoteState === "unmanaged"} title={(isLocal && state !== "stopped") || remoteState === "running" || remoteState === "stopping" || remoteState === "unmanaged" ? "Stop the server before removing its profile." : undefined}>Remove</button>
                         </div>
                       )}
-                      {consoleProfileId === profile.id && (
-                        <section className="console-panel" aria-label={`${profile.name} console`}>
-                          <div className="console-output" ref={consoleOutputRef} role="log" aria-live="polite">
-                            <pre>{consoleOutput || "Console output will appear here."}</pre>
-                          </div>
-                          <form className="console-input-row" onSubmit={(event) => void sendConsoleInput(event)}>
-                            <span aria-hidden="true">&gt;</span>
-                            <input aria-label="Console command" value={consoleInput} onChange={(event) => setConsoleInput(event.currentTarget.value)} placeholder="Enter a server command" disabled={!serverRunning || isBusy} />
-                            <button className="button button-primary" type="submit" disabled={!serverRunning || isBusy || !consoleInput.trim()}>Send</button>
-                          </form>
-                        </section>
-                      )}
-                      {filesProfileId === profile.id && (
-                        <LocalFilesPanel profileId={profile.id} serverName={profile.name} canEdit={isLocal ? status?.state === "stopped" : remoteState === "stopped" && !!remoteStatus?.tmuxAvailable} remote={!isLocal} onClose={() => setFilesProfileId(null)} />
-                      )}
                     </>
                   )}
                 </article>
