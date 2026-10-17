@@ -9,7 +9,7 @@ Scerite is a cross-platform desktop app for managing local and remote Minecraft 
 - `src-tauri/src/server_profiles/model.rs` defines the shared Rust profile and target types.
 - `src-tauri/src/server_profiles/commands.rs` exposes profile actions to the frontend.
 - `src-tauri/src/server_profiles/store.rs` validates and persists profiles in the app data directory. It writes a temporary file and keeps a recoverable backup while replacing saved data.
-- Minecraft process management, local filesystem access, and remote SSH/SFTP/tmux operations belong in Rust adapters and services as those features are added.
+- Minecraft process management, local filesystem access, remote SSH/SFTP/tmux operations, and vanilla installation are handled in Rust.
 
 Profile data contains server names, local or remote server folders, launch commands, and remote SSH connection details. It does not contain passwords or private keys. Remote authentication uses the SSH agent or an optional private-key file path; encrypted keys must be unlocked through the agent. Host keys are checked against the user's `known_hosts` file.
 
@@ -18,6 +18,10 @@ Profile data contains server names, local or remote server folders, launch comma
 The app can create, edit, list, and remove server profiles. Local servers can be launched in sessions that survive the desktop app, with a live console and a guarded file editor. Remote Linux profiles can use SSH to manage persistent `tmux` sessions, send console commands, and browse or edit files over SFTP.
 
 Remote process control requires `tmux` on the server and a trusted host key in `known_hosts`. Remote file operations stay inside the configured server folder, skip symbolic links, limit text files to 1 MB, and require the managed server to be stopped before writing.
+
+## Vanilla installation
+
+Set one Minecraft root for this computer, or a root for each remote environment. Each selected server folder must be directly inside that root's `servers/` folder. The installer creates `servers/` and the selected server folder when needed. From the server's **Install** tab, choose an official vanilla release. The jar is verified against Mojang's SHA-1 checksum, saved under `cache/minecraft/<version>/server.jar`, then copied into the selected folder as `server.jar`. The installer refuses to replace an existing `server.jar` and requires the server to be stopped. Remote installation uploads through SFTP and uses standard Linux `sha1sum`, `cp`, and `ln` commands; no remote agent is required. Loader and mod installation are not included yet.
 
 ## Development
 
