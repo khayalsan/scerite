@@ -40,13 +40,22 @@ export function WorldsPanel({ profileId, remote }: WorldsPanelProps) {
       const root = await serverFiles.list(remote, profileId, "");
       const properties = await serverFiles.read(remote, profileId, "server.properties").catch(() => "");
       const candidates = root.filter((entry) => entry.directory);
-      const listings = await Promise.allSettled(candidates.map((entry) => serverFiles.list(remote, profileId, entry.path)));
-      if (!active) return;
-      setActiveWorldName(worldName(properties));
-      setWorlds(candidates.filter((_, index) => listings[index].status === "fulfilled" && listings[index].value.some((file) => file.name === "level.dat" && !file.directory)));
-      if (listings.some((result) => result.status === "rejected")) {
-        setError("Some folders could not be inspected. The world list may be incomplete.");
+      const activeName = worldName(properties);
+      const found: ServerFileEntry[] = [];
+      let activeWorldError: string | null = null;
+      for (const candidate of candidates) {
+        if (!active) return;
+        try {
+          const files = await serverFiles.list(remote, profileId, candidate.path);
+          if (files.some((file) => file.name === "level.dat" && !file.directory)) found.push(candidate);
+        } catch (reason) {
+          if (candidate.name === activeName) activeWorldError = `Could not inspect the active world folder: ${errorText(reason)}`;
+        }
       }
+      if (!active) return;
+      setActiveWorldName(activeName);
+      setWorlds(found);
+      setError(activeWorldError);
     })().catch((reason: unknown) => { if (active) setError(errorText(reason)); })
       .finally(() => { if (active) setIsLoading(false); });
     return () => { active = false; };
