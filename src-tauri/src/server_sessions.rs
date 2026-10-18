@@ -20,6 +20,7 @@ use tauri::State;
 use uuid::Uuid;
 
 use crate::server_profiles::{ServerProfileStore, ServerTarget};
+use crate::eula;
 
 const MANAGER_ARGUMENT: &str = "--scerite-session-manager";
 const TOKEN_FILE: &str = "session-manager.token";
@@ -727,6 +728,11 @@ pub mod commands {
         let ServerTarget::Local { directory, launch } = profile.target else {
             unreachable!("require_local_profile only returns local targets")
         };
+        if profiles.auto_accept_eula()?
+            && matches!(manager.status(profile_id)?.state, LocalServerState::Stopped)
+        {
+            eula::enable_local(&directory)?;
+        }
         let managed_java = if let Some(java) = launch.managed_java {
             let root = profiles.local_root()?.ok_or_else(||
                 "Set this computer's Minecraft root before using managed Java.".to_owned())?;

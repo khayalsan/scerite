@@ -27,6 +27,7 @@ use tokio::{
 };
 use uuid::Uuid;
 
+use crate::eula;
 use crate::server_profiles::{
     LocalLaunchConfig, ServerEnvironment, ServerProfile, ServerProfileStore, ServerTarget,
 };
@@ -244,6 +245,7 @@ pub async fn start_remote_server(
     remote_sessions: State<'_, Arc<RemoteSessionManager>>,
 ) -> Result<RemoteServerStatus, String> {
     let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    let auto_accept_eula = profiles.auto_accept_eula()?;
     let environment_root = environment.root_directory.clone();
     run_remote(profile, environment, Arc::clone(remote_sessions.inner()), move |session, profile| {
         let ServerTarget::Remote { directory, launch, .. } = &profile.target else {
@@ -263,6 +265,9 @@ pub async fn start_remote_server(
         let root = remote_root(session, directory)?;
         if remote_directory_has_java_process(session, &root)? {
             return Err("A Java process is already using the remote server folder outside scerite. Stop it there before starting this profile.".into());
+        }
+        if auto_accept_eula {
+            enable_remote_eula(session, &root)?;
         }
         let managed_java = if let Some(java) = launch.managed_java.as_deref() {
             let runtime_root = remote_root(session, &environment_root)?;
@@ -1349,6 +1354,47 @@ fn remote_command_error(context: &str, output: RemoteCommandOutput) -> String {
     } else {
         format!("{context}: {details}")
     }
+}
+
+fn enable_remote_eula(session: &RemoteConnection, root: &str) -> Result<(), String> {
+    let sftp = session.sftp()?;
+    let path = format!("{}/eula.txt", root.trim_end_matches('/'));
+    let exists = execute(session, &format!("test -e {} || test -L {}", shell_quote(&path), shell_quote(&path)))?;
+    let current = if exists.exit_code == 0 {
+        let metadata = sftp.lstat(Path::new(&path))?;
+        if metadata.file_type() != FileType::File {
+            return Err("Remote eula.txt must be a regular file, not a symbolic link.".into());
+        }
+        if metadata.size.unwrap_or(0) > eula::MAX_EULA_BYTES {
+            return Err("Remote eula.txt is unexpectedly large and was not changed.".into());
+        }
+        let bytes = sftp.read_file(Path::new(&path))?;
+        if bytes.len() as u64 > eula::MAX_EULA_BYTES {
+            return Err("Remote eula.txt is unexpectedly large and was not changed.".into());
+        }
+        Some(String::from_utf8(bytes)
+            .map_err(|_| "Remote eula.txt is not UTF-8 text and was not changed.".to_owned())?)
+    } else {
+        None
+    };
+    let Some(updated) = eula::enabled_content(current.as_deref()) else {
+        return Ok(());
+    };
+    let temporary = format!("{}/.servercrafter-{}.tmp", root.trim_end_matches('/'), Uuid::new_v4());
+    if let Err(error) = sftp.write_file_exclusive(Path::new(&temporary), updated.as_bytes()) {
+        let _ = sftp.unlink(Path::new(&temporary));
+        return Err(format!("Could not prepare remote eula.txt: {error}"));
+    }
+    let result = if current.is_some() {
+        sftp.posix_rename(Path::new(&temporary), Path::new(&path))
+    } else {
+        sftp.rename(Path::new(&temporary), Path::new(&path))
+    };
+    if let Err(error) = result {
+        let _ = sftp.unlink(Path::new(&temporary));
+        return Err(format!("Could not enable remote eula.txt: {error}"));
+    }
+    Ok(())
 }
 
 fn launch_command(launch: &LocalLaunchConfig, managed_java: Option<&str>) -> String {

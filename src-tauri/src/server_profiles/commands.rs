@@ -9,6 +9,19 @@ pub fn get_local_install_root(store: State<'_, ServerProfileStore>) -> Result<Op
 }
 
 #[tauri::command]
+pub fn get_auto_accept_eula(store: State<'_, ServerProfileStore>) -> Result<bool, String> {
+    store.auto_accept_eula()
+}
+
+#[tauri::command]
+pub fn set_auto_accept_eula(
+    enabled: bool,
+    store: State<'_, ServerProfileStore>,
+) -> Result<bool, String> {
+    store.set_auto_accept_eula(enabled)
+}
+
+#[tauri::command]
 pub fn set_local_install_root(
     root_directory: String,
     store: State<'_, ServerProfileStore>,

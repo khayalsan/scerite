@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type { FormEvent } from "react";
 import { ArrowLeft, Download, FileKey, FolderOpen, HardDrive, Network, Palette, Plus, Settings, SlidersHorizontal, Terminal, X } from "lucide-react";
-import { localInstallRoot, serverEnvironments, serverProfiles } from "./lib/serverProfiles";
+import { appSettings, localInstallRoot, serverEnvironments, serverProfiles } from "./lib/serverProfiles";
 import type { ServerEnvironment, ServerProfile, ServerTarget } from "./lib/serverProfiles";
 import { serverSessions } from "./lib/serverSessions";
 import type { LocalServerStatus, RemoteServerStatus } from "./lib/serverSessions";
@@ -168,6 +168,9 @@ function App() {
   const [profiles, setProfiles] = useState<ServerProfile[]>([]);
   const [environments, setEnvironments] = useState<ServerEnvironment[]>([]);
   const [localRoot, setLocalRoot] = useState<string | null>(null);
+  const [autoAcceptEula, setAutoAcceptEula] = useState<boolean | null>(null);
+  const [eulaSettingError, setEulaSettingError] = useState<string | null>(null);
+  const [isSavingEulaSetting, setIsSavingEulaSetting] = useState(false);
   const [localRootDraft, setLocalRootDraft] = useState("");
   const [localRootError, setLocalRootError] = useState<string | null>(null);
   const [isSavingLocalRoot, setIsSavingLocalRoot] = useState(false);
@@ -232,14 +235,16 @@ function App() {
     setIsLoading(true);
     setLoadError(null);
     try {
-      const [savedProfiles, savedEnvironments, savedLocalRoot] = await Promise.all([
+      const [savedProfiles, savedEnvironments, savedLocalRoot, savedAutoAcceptEula] = await Promise.all([
         serverProfiles.list(),
         serverEnvironments.list(),
         localInstallRoot.get(),
+        appSettings.getAutoAcceptEula(),
       ]);
       setProfiles(savedProfiles);
       setEnvironments(savedEnvironments);
       setLocalRoot(savedLocalRoot);
+      setAutoAcceptEula(savedAutoAcceptEula);
       setLocalRootDraft(savedLocalRoot ?? "");
     } catch (error) {
       setLoadError(errorText(error));
@@ -1101,6 +1106,37 @@ function App() {
 
         {!selectedProfileId && isEnvironmentFormOpen && renderEnvironmentForm()}
         {!selectedProfileId && isFormOpen && !isEnvironmentFormOpen && renderProfileForm()}
+
+        {!selectedProfileId && (
+          <section className="app-settings-section" aria-labelledby="app-settings-title">
+            <div className="environment-section-heading">
+              <h2 id="app-settings-title">App settings</h2>
+            </div>
+            <label className="app-setting-row">
+              <span className="app-setting-copy">
+                <strong>Auto enable EULA</strong>
+                <small>Turn off if you really wanna read the EULA and accept before running the server</small>
+              </span>
+              <span className="property-switch">
+                <input
+                  type="checkbox"
+                  checked={autoAcceptEula ?? true}
+                  disabled={autoAcceptEula === null || isSavingEulaSetting}
+                  onChange={(event) => {
+                    const enabled = event.currentTarget.checked;
+                    setIsSavingEulaSetting(true);
+                    setEulaSettingError(null);
+                    void appSettings.setAutoAcceptEula(enabled).then(setAutoAcceptEula)
+                      .catch((error: unknown) => setEulaSettingError(errorText(error)))
+                      .finally(() => setIsSavingEulaSetting(false));
+                  }}
+                />
+                <span aria-hidden="true" />
+              </span>
+            </label>
+            {eulaSettingError && <p className="form-error" role="alert">{eulaSettingError}</p>}
+          </section>
+        )}
 
         {!selectedProfileId && (
           <section className="local-root-section" aria-labelledby="local-root-title">

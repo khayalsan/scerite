@@ -44,3 +44,8 @@ export const localInstallRoot = {
   get: () => invoke<string | null>("get_local_install_root"),
   set: (rootDirectory: string) => invoke<string>("set_local_install_root", { rootDirectory }),
 };
+
+export const appSettings = {
+  getAutoAcceptEula: () => invoke<boolean>("get_auto_accept_eula"),
+  setAutoAcceptEula: (enabled: boolean) => invoke<boolean>("set_auto_accept_eula", { enabled }),
+};
