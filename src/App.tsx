@@ -3,7 +3,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type { FormEvent } from "react";
-import { ArrowLeft, Download, FileKey, FolderOpen, Globe2, HardDrive, Network, Palette, Plus, Settings, SlidersHorizontal, Terminal, X } from "lucide-react";
+import { ArrowLeft, Download, FileKey, FolderOpen, Globe2, HardDrive, Network, Package, Palette, Plus, Settings, SlidersHorizontal, Terminal, X } from "lucide-react";
 import { appSettings, localInstallRoot, serverEnvironments, serverProfiles } from "./lib/serverProfiles";
 import type { ServerEnvironment, ServerProfile, ServerTarget } from "./lib/serverProfiles";
 import { serverSessions } from "./lib/serverSessions";
@@ -12,6 +12,7 @@ import { LocalFilesPanel } from "./components/LocalFilesPanel";
 import { WorldsPanel } from "./components/WorldsPanel";
 import { ServerPropertiesPanel } from "./components/ServerPropertiesPanel";
 import { ServerInstallPanel } from "./components/ServerInstallPanel";
+import { PackagesPanel } from "./components/PackagesPanel";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select";
 import "./App.css";
 
@@ -55,7 +56,7 @@ function readSavedTheme(): ThemeId {
   }
 }
 
-type ServerTab = "console" | "files" | "worlds" | "properties" | "install" | "settings";
+type ServerTab = "console" | "files" | "worlds" | "properties" | "packages" | "install" | "settings";
 
 const emptyDraft: ProfileDraft = {
   name: "",
@@ -1023,6 +1024,9 @@ function App() {
               <button className={`server-tab${activeServerTab === "worlds" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "worlds" ? "page" : undefined} onClick={() => setActiveServerTab("worlds")}>
                 <Globe2 size={16} aria-hidden="true" /> Worlds
               </button>
+              <button className={`server-tab${activeServerTab === "packages" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "packages" ? "page" : undefined} onClick={() => setActiveServerTab("packages")}>
+                <Package size={16} aria-hidden="true" /> Mods & plugins
+              </button>
               <button className={`server-tab${activeServerTab === "properties" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "properties" ? "page" : undefined} onClick={() => { setActiveServerTab("properties"); setPropertiesProfileId(selectedProfile.id); }}>
                 <SlidersHorizontal size={16} aria-hidden="true" /> Properties
               </button>
@@ -1344,6 +1348,9 @@ function App() {
                         </section>
                         <section className="server-tab-panel" hidden={activeServerTab !== "worlds"} aria-label="Server worlds">
                           {activeServerTab === "worlds" && <WorldsPanel key={profile.id} profileId={profile.id} remote={!isLocal} />}
+                        </section>
+                        <section className="server-tab-panel" hidden={activeServerTab !== "packages"} aria-label="Server mods and plugins">
+                          {activeServerTab === "packages" && <PackagesPanel key={profile.id} profileId={profile.id} remote={!isLocal} canInstall={isLocal ? state === "stopped" : remoteState === "stopped"} />}
                         </section>
                         <section className="server-tab-panel server-properties-tab" hidden={activeServerTab !== "properties"} aria-label="Server properties">
                           {propertiesProfileId === profile.id && (

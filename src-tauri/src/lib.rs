@@ -6,6 +6,7 @@ mod server_profiles;
 mod server_sessions;
 mod vanilla_install;
 mod software_install;
+mod modrinth;
 
 use server_profiles::{ServerProfileStore, commands};
 use server_sessions::{LocalSessionManager, commands as session_commands};
@@ -37,6 +38,9 @@ pub fn run() {
             vanilla_install::list_vanilla_versions,
             vanilla_install::install_vanilla_version,
             software_install::install_server_software,
+            modrinth::search_modrinth,
+            modrinth::list_modrinth_versions,
+            modrinth::install_modrinth_version,
             vanilla_install::use_managed_java,
             commands::get_local_install_root,
             commands::get_auto_accept_eula,
