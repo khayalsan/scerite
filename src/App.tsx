@@ -11,7 +11,7 @@ import type { LocalServerStatus, RemoteServerStatus } from "./lib/serverSessions
 import { LocalFilesPanel } from "./components/LocalFilesPanel";
 import { WorldsPanel } from "./components/WorldsPanel";
 import { ServerPropertiesPanel } from "./components/ServerPropertiesPanel";
-import { VanillaInstallPanel } from "./components/VanillaInstallPanel";
+import { ServerInstallPanel } from "./components/ServerInstallPanel";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select";
 import "./App.css";
 
@@ -1355,7 +1355,7 @@ function App() {
                           )}
                         </section>
                         <section className="server-tab-panel" hidden={activeServerTab !== "install"} aria-label="Install Minecraft">
-                          {installProfileId === profile.id && <VanillaInstallPanel profileId={profile.id} remote={!isLocal} rootConfigured={isLocal ? !!localRoot : !!environments.find((environment) => environment.id === (target.kind === "remote" ? target.environmentId : ""))?.rootDirectory} canInstall={isLocal ? state === "stopped" : remoteState === "stopped"} onUpdated={async () => setProfiles(await serverProfiles.list())} />}
+                          {installProfileId === profile.id && <ServerInstallPanel profileId={profile.id} remote={!isLocal} rootConfigured={isLocal ? !!localRoot : !!environments.find((environment) => environment.id === (target.kind === "remote" ? target.environmentId : ""))?.rootDirectory} canInstall={isLocal ? state === "stopped" : remoteState === "stopped"} onUpdated={async () => setProfiles(await serverProfiles.list())} />}
                         </section>
                         <section className={`server-tab-panel server-settings-panel${isFormOpen && editingProfile?.id === profile.id ? " server-settings-editing" : ""}`} hidden={activeServerTab !== "settings"} aria-label="Server settings">
                           {isFormOpen && editingProfile?.id === profile.id ? renderProfileForm() : (

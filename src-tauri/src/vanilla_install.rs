@@ -19,9 +19,10 @@ use crate::{
 
 const MANIFEST_URL: &str = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
 
-fn client() -> Result<reqwest::Client, String> {
+pub(crate) fn client() -> Result<reqwest::Client, String> {
     let _ = rustls::crypto::ring::default_provider().install_default();
     reqwest::Client::builder()
+        .user_agent("ServerCrafter/0.2.0 (https://github.com/khayalsan/servercrafter)")
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|error| format!("Could not initialize Minecraft downloads: {error}"))
@@ -74,7 +75,7 @@ struct InstallProgress {
     total: u64,
 }
 
-fn progress(
+pub(crate) fn progress(
     app: &tauri::AppHandle,
     profile_id: Uuid,
     phase: &'static str,
@@ -120,18 +121,18 @@ async fn manifest(client: &reqwest::Client) -> Result<Manifest, String> {
 }
 
 #[tauri::command]
-pub async fn list_vanilla_versions() -> Result<Vec<String>, String> {
+pub async fn list_vanilla_versions(include_snapshots: Option<bool>) -> Result<Vec<String>, String> {
     let client = client()?;
     Ok(manifest(&client)
         .await?
         .versions
         .into_iter()
-        .filter(|version| version.kind == "release" && safe_version(&version.id))
+        .filter(|version| (version.kind == "release" || (include_snapshots == Some(true) && version.kind == "snapshot")) && safe_version(&version.id))
         .map(|version| version.id)
         .collect())
 }
 
-fn safe_version(version: &str) -> bool {
+pub(crate) fn safe_version(version: &str) -> bool {
     !version.is_empty()
         && version.len() <= 48
         && version
@@ -159,9 +160,9 @@ async fn server_download(
         .await?
         .versions
         .into_iter()
-        .find(|version| version.id == version_id && version.kind == "release")
+        .find(|version| version.id == version_id && matches!(version.kind.as_str(), "release" | "snapshot"))
         .ok_or_else(|| {
-            "That Minecraft release is not available in the official manifest.".to_owned()
+            "That Minecraft version is not available in the official manifest.".to_owned()
         })?;
     official_url(&version.url, "piston-meta.mojang.com")?;
     let metadata: VersionMetadata = client
@@ -191,6 +192,13 @@ async fn server_download(
         return Err("The official server download metadata is invalid.".into());
     }
     Ok((server, java_major))
+}
+
+pub(crate) async fn java_major_for_version(
+    client: &reqwest::Client,
+    version_id: &str,
+) -> Result<u16, String> {
+    server_download(client, version_id).await.map(|(_, major)| major)
 }
 
 fn verified_file(path: &Path, download: &ServerDownload) -> Result<bool, String> {
@@ -277,10 +285,11 @@ async fn download_jar(
     result
 }
 
-fn install_local(
+pub(crate) fn install_local(
     root: &Path,
     directory: &str,
     cache: &Path,
+    filename: &str,
     profile_id: Uuid,
     sessions: &LocalSessionManager,
 ) -> Result<(), String> {
@@ -318,21 +327,21 @@ fn install_local(
     if target.parent() != Some(servers.as_path()) {
         return Err("The server folder must be directly inside this computer's Minecraft root/servers folder.".into());
     }
-    let destination = target.join("server.jar");
+    let destination = target.join(filename);
     if destination.exists() || fs::symlink_metadata(&destination).is_ok() {
-        return Err("server.jar already exists. Existing server files are not overwritten.".into());
+        return Err(format!("{filename} already exists. Existing server files are not overwritten."));
     }
     let temporary = target.join(format!(".servercrafter-{}.tmp", Uuid::new_v4()));
     fs::copy(cache, &temporary)
         .map_err(|error| format!("Could not copy server jar into the server folder: {error}"))?;
     let result = fs::hard_link(&temporary, &destination).map_err(|error| {
-        format!("Could not install server.jar (existing files are preserved): {error}")
+        format!("Could not install {filename} (existing files are preserved): {error}")
     });
     let _ = fs::remove_file(&temporary);
     result
 }
 
-async fn install_local_java(
+pub(crate) async fn install_local_java(
     client: &reqwest::Client,
     app: &tauri::AppHandle,
     profile_id: Uuid,
@@ -380,7 +389,7 @@ async fn install_local_java(
     Ok(java)
 }
 
-async fn install_remote_java(
+pub(crate) async fn install_remote_java(
     client: &reqwest::Client,
     app: &tauri::AppHandle,
     profile: &ServerProfile,
@@ -440,10 +449,11 @@ async fn install_remote_java(
     result
 }
 
-fn update_java_launch(
+pub(crate) fn update_java_launch(
     profile: &ServerProfile,
     java: &str,
     profiles: &ServerProfileStore,
+    jar_name: &str,
 ) -> Result<bool, String> {
     let mut target = profile.target.clone();
     let launch = match &mut target {
@@ -469,14 +479,14 @@ fn update_java_launch(
         .position(|argument| argument == "-jar")
     {
         if index + 1 < launch.arguments.len() {
-            launch.arguments[index + 1] = "server.jar".into();
+            launch.arguments[index + 1] = jar_name.into();
         } else {
-            launch.arguments.push("server.jar".into());
+            launch.arguments.push(jar_name.into());
         }
     } else {
         launch
             .arguments
-            .extend(["-jar".into(), "server.jar".into(), "nogui".into()]);
+            .extend(["-jar".into(), jar_name.into(), "nogui".into()]);
     }
     profiles.update(profile.id, profile.name.clone(), target)?;
     Ok(true)
@@ -518,7 +528,7 @@ pub async fn use_managed_java(
                 Arc::clone(remote_sessions.inner()), major).await?
         }
     };
-    update_java_launch(&profile, &java, &profiles)?;
+    update_java_launch(&profile, &java, &profiles, "server.jar")?;
     progress(&app, profile_id, "complete", 0, 0);
     Ok(format!("Java {major} is configured for this server. The server jar and other files were not changed."))
 }
@@ -598,7 +608,7 @@ pub async fn install_vanilla_version(
             }
             download_jar(&client, &app, profile_id, &cache, &download).await?;
             progress(&app, profile_id, "installing", download.size, download.size);
-            install_local(&root, directory, &cache, profile_id, &local_sessions)?;
+            install_local(&root, directory, &cache, "server.jar", profile_id, &local_sessions)?;
         }
         ServerTarget::Remote {
             environment_id,
@@ -622,6 +632,8 @@ pub async fn install_vanilla_version(
                     temporary.clone(),
                     version_id.clone(),
                     download.sha1.clone(),
+                    "minecraft".into(),
+                    "server.jar".into(),
                 )
                 .await
             }
@@ -631,7 +643,7 @@ pub async fn install_vanilla_version(
         }
     }
     progress(&app, profile_id, "complete", download.size, download.size);
-    let launch_message = match update_java_launch(&profile, &java, &profiles) {
+    let launch_message = match update_java_launch(&profile, &java, &profiles, "server.jar") {
         Ok(true) => "The server profile now uses its managed Java runtime.".to_owned(),
         Ok(false) => "The custom launch command now receives the managed Java runtime.".to_owned(),
         Err(error) => format!(

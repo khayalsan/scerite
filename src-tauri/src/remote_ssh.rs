@@ -1160,6 +1160,8 @@ pub(crate) async fn install_remote_jar(
     source: PathBuf,
     version: String,
     sha1: String,
+    cache_kind: String,
+    filename: String,
 ) -> Result<(), String> {
     run_remote(profile, environment.clone(), sessions, move |session, profile| {
         let sftp = session.sftp()?;
@@ -1196,17 +1198,17 @@ pub(crate) async fn install_remote_jar(
         if remote_directory_has_java_process(session, &target)? {
             return Err("Stop this server before installing a version.".into());
         }
-        let destination = format!("{target}/server.jar");
+        let destination = format!("{target}/{filename}");
         let absent = execute(session, &format!("test ! -e {} && test ! -L {}", shell_quote(&destination), shell_quote(&destination)))?;
-        if absent.exit_code != 0 { return Err("server.jar already exists. Existing server files are not overwritten.".into()); }
-        let cache_dir = format!("{root}/cache/minecraft/{version}");
+        if absent.exit_code != 0 { return Err(format!("{filename} already exists. Existing server files are not overwritten.")); }
+        let cache_dir = format!("{root}/cache/{cache_kind}/{version}");
         let created = execute(session, &format!("mkdir -p -- {}", shell_quote(&cache_dir)))?;
         if created.exit_code != 0 { return Err(remote_command_error("Could not create remote Minecraft cache", created)); }
         let canonical_cache = remote_root_with_sftp(&sftp, &cache_dir)?;
         if !canonical_cache.starts_with(&format!("{root}/cache/")) {
             return Err("The remote cache resolves outside the configured Minecraft root.".into());
         }
-        let cached = format!("{canonical_cache}/server.jar");
+        let cached = format!("{canonical_cache}/{filename}");
         let cached_exists = execute(session, &format!("test -e {} || test -L {}", shell_quote(&cached), shell_quote(&cached)))?;
         if cached_exists.exit_code == 0 {
             let hash = execute(session, &format!("test ! -L {} && sha1sum -- {}", shell_quote(&cached), shell_quote(&cached)))?;
@@ -1220,7 +1222,7 @@ pub(crate) async fn install_remote_jar(
                     .map_err(|error| format!("Could not upload server jar: {error}"))?;
                 let hash = execute(session, &format!("sha1sum -- {}", shell_quote(&upload)))?;
                 if hash.exit_code != 0 || !String::from_utf8_lossy(&hash.stdout).starts_with(&sha1) {
-                    return Err("The uploaded server jar did not match Mojang's checksum.".into());
+                return Err("The uploaded server jar did not match the downloaded file.".into());
                 }
                 let link = execute(session, &format!("ln -- {} {}", shell_quote(&upload), shell_quote(&cached)))?;
                 if link.exit_code != 0 { return Err(remote_command_error("Could not cache remote server jar", link)); }
@@ -1239,6 +1241,103 @@ pub(crate) async fn install_remote_jar(
         })();
         let _ = sftp.unlink(Path::new(&temporary));
         install?;
+        Ok(())
+    }).await
+}
+
+pub(crate) async fn install_remote_loader(
+    profile: ServerProfile,
+    environment: ServerEnvironment,
+    sessions: Arc<RemoteSessionManager>,
+    directory: String,
+    source: PathBuf,
+    loader: String,
+    version: String,
+    build: String,
+    quilt_loader: Option<String>,
+    java: String,
+    sha1: String,
+) -> Result<(), String> {
+    run_remote(profile, environment.clone(), sessions, move |session, profile| {
+        let sftp = session.sftp()?;
+        let root = remote_root_with_sftp(&sftp, &environment.root_directory)?;
+        if remote_is_running(session, profile)? == Some(true) {
+            return Err("Stop this server before installing software.".into());
+        }
+        let servers = format!("{root}/servers");
+        let created = execute(session, &format!("mkdir -p -- {}", shell_quote(&servers)))?;
+        if created.exit_code != 0 { return Err(remote_command_error("Could not create servers folder", created)); }
+        let servers = remote_root_with_sftp(&sftp, &servers)?;
+        if Path::new(&servers).parent() != Some(Path::new(&root)) {
+            return Err("The servers folder resolves outside the Minecraft root.".into());
+        }
+        let requested = Path::new(&directory);
+        let parent = requested.parent().ok_or("Set an absolute remote server folder.")?;
+        let parent = remote_root_with_sftp(&sftp, &parent.to_string_lossy())?;
+        if parent != servers { return Err("The server folder must be directly inside the Minecraft root/servers folder.".into()); }
+        let target = match remote_root_with_sftp(&sftp, &directory) {
+            Ok(target) => target,
+            Err(_) => {
+                let created = execute(session, &format!("mkdir -- {}", shell_quote(&directory)))?;
+                if created.exit_code != 0 { return Err(remote_command_error("Could not create server folder", created)); }
+                remote_root_with_sftp(&sftp, &directory)?
+            }
+        };
+        if Path::new(&target).parent() != Some(Path::new(&servers)) {
+            return Err("The server folder must be directly inside the Minecraft root/servers folder.".into());
+        }
+        if remote_directory_has_java_process(session, &target)? {
+            return Err("Stop this server before installing software.".into());
+        }
+        if sftp.read_dir(Path::new(&target))?.iter().any(|(name, _)| name != "." && name != "..") {
+            return Err("Forge, NeoForge, and Quilt installers require an empty server folder. Existing files were not changed.".into());
+        }
+        let cache = format!("{root}/cache/{loader}/{version}/{build}");
+        let created = execute(session, &format!("mkdir -p -- {}", shell_quote(&cache)))?;
+        if created.exit_code != 0 { return Err(remote_command_error("Could not create loader cache", created)); }
+        let cache = remote_root_with_sftp(&sftp, &cache)?;
+        if !cache.starts_with(&format!("{root}/cache/")) { return Err("The loader cache resolves outside the Minecraft root.".into()); }
+        let installer = format!("{cache}/installer.jar");
+        match sftp.lstat(Path::new(&installer)) {
+            Ok(stat) if stat.file_type() != FileType::File => return Err("The cached installer is not a regular file.".into()),
+            Ok(_) => {
+                let hash = execute(session, &format!("sha1sum -- {}", shell_quote(&installer)))?;
+                if hash.exit_code != 0 || !String::from_utf8_lossy(&hash.stdout).starts_with(&sha1) {
+                    return Err("The cached installer has a different checksum. Remove it before retrying.".into());
+                }
+            }
+            Err(_) => {
+                sftp.upload_file_exclusive(Path::new(&installer), &source)
+                    .map_err(|error| format!("Could not upload loader installer: {error}"))?;
+                let hash = execute(session, &format!("sha1sum -- {}", shell_quote(&installer)))?;
+                if hash.exit_code != 0 || !String::from_utf8_lossy(&hash.stdout).starts_with(&sha1) {
+                    return Err("The uploaded loader installer failed its checksum check.".into());
+                }
+            }
+        }
+        let args = if loader == "quilt" {
+            format!("install server {} {} --download-server {}", shell_quote(&version), shell_quote(quilt_loader.as_deref().ok_or("Quilt loader version is missing.")?), shell_quote("--install-dir=\".\""))
+        } else {
+            "--installServer".to_owned()
+        };
+        let log = format!("{target}/.servercrafter-install.log");
+        let command = format!("cd {} && {} -jar {} {} > {} 2>&1", shell_quote(&target), shell_quote(&java), shell_quote(&installer), args, shell_quote(&log));
+        let installed = execute(session, &command)?;
+        if installed.exit_code != 0 {
+            let tail = execute(session, &format!("tail -n 30 -- {}", shell_quote(&log)))?;
+            let detail = String::from_utf8_lossy(&tail.stdout);
+            return Err(format!("{loader} installer failed. {} See {log} for details.", detail.chars().take(2000).collect::<String>()));
+        }
+        let expected = if loader == "quilt" {
+            format!("{target}/quilt-server-launch.jar")
+        } else {
+            let family = if loader == "forge" { "net/minecraftforge/forge" } else { "net/neoforged/neoforge" };
+            format!("{target}/libraries/{family}/{build}/unix_args.txt")
+        };
+        if !sftp.lstat(Path::new(&expected)).is_ok_and(|stat| stat.file_type() == FileType::File) {
+            return Err(format!("{loader} installer finished without creating its launch files. See {log} for details."));
+        }
+        let _ = sftp.unlink(Path::new(&log));
         Ok(())
     }).await
 }
