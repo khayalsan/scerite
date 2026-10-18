@@ -405,6 +405,37 @@ pub async fn install_modrinth_version(
         &project_id,
         &version_id,
     );
+    if let ServerTarget::Remote { environment_id, .. } = &profile.target {
+        let url = file["url"].as_str().ok_or("Modrinth did not provide a download URL.")?;
+        let parsed = reqwest::Url::parse(url).map_err(|_| "The package download URL is invalid.")?;
+        if parsed.scheme() != "https" || parsed.host_str() != Some("cdn.modrinth.com") || parsed.port().is_some()
+            || !parsed.username().is_empty() || parsed.password().is_some() {
+            return Err("The package download is not hosted on the approved Modrinth CDN.".into());
+        }
+        let sha512 = file["hashes"]["sha512"].as_str().ok_or("Modrinth did not provide a SHA-512 checksum.")?;
+        if sha512.len() != 128 || !sha512.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err("Modrinth provided an invalid checksum.".into());
+        }
+        let size = file["size"].as_u64().ok_or("Modrinth did not provide a file size.")?;
+        if size < 1024 || size > MAX_PACKAGE_BYTES {
+            return Err("The package is outside the supported size range (1 KB–128 MB).".into());
+        }
+        let environment = profiles.environment(*environment_id)?;
+        let direct = remote_ssh::install_remote_package(
+            profile.clone(), environment, Arc::clone(remote_sessions.inner()), folder.to_owned(),
+            filename.clone(), None, String::new(), url.to_owned(), Some(sha512.to_owned()),
+        ).await;
+        match direct {
+            Ok(()) => {
+                let dependencies = version["dependencies"].as_array().map_or(0, |items| items.iter().filter(|item| item["dependency_type"] == "required").count());
+                return if dependencies > 0 {
+                    Ok(format!("Installed {filename}. This version lists {dependencies} required dependencies; install those before starting the server."))
+                } else { Ok(format!("Installed {filename}.")) };
+            }
+            Err(error) if error.starts_with(remote_ssh::REMOTE_DOWNLOAD_UNAVAILABLE) => {}
+            Err(error) => return Err(error),
+        }
+    }
     let temporary =
         std::env::temp_dir().join(format!("servercrafter-package-{}.jar", Uuid::new_v4()));
     let result = async {
@@ -418,7 +449,7 @@ pub async fn install_modrinth_version(
             }
             ServerTarget::Remote { environment_id, .. } => {
                 let environment = profiles.environment(environment_id)?;
-                remote_ssh::install_remote_package(profile, environment, Arc::clone(remote_sessions.inner()), folder.to_owned(), filename.clone(), temporary.clone(), sha1).await
+                remote_ssh::install_remote_package(profile, environment, Arc::clone(remote_sessions.inner()), folder.to_owned(), filename.clone(), Some(temporary.clone()), sha1, file["url"].as_str().unwrap_or_default().to_owned(), None).await
             }
         }
     }.await;

@@ -412,6 +412,14 @@ pub(crate) async fn install_remote_java(
         progress(app, profile.id, "java_installed", 0, 0);
         return Ok(java);
     }
+    progress(app, profile.id, "downloading_remote_java", 0, package.size);
+    let direct = remote_ssh::install_remote_java(
+        profile.clone(), environment.clone(), Arc::clone(&sessions), package.clone(),
+        None, String::new(),
+    ).await;
+    if !direct.as_ref().is_err_and(|error| error.starts_with(remote_ssh::REMOTE_DOWNLOAD_UNAVAILABLE)) {
+        return direct;
+    }
     let temporary =
         std::env::temp_dir().join(format!("servercrafter-{}-jdk.tar.gz", Uuid::new_v4()));
     let result = async {
@@ -439,7 +447,7 @@ pub(crate) async fn install_remote_java(
             environment.clone(),
             sessions,
             package,
-            temporary.clone(),
+            Some(temporary.clone()),
             top,
         )
         .await
@@ -619,27 +627,37 @@ pub async fn install_vanilla_version(
             if environment.root_directory.is_empty() {
                 return Err("Set this remote environment's Minecraft root first.".into());
             }
-            let temporary =
-                std::env::temp_dir().join(format!("servercrafter-{}.jar", Uuid::new_v4()));
-            let result = async {
-                download_jar(&client, &app, profile_id, &temporary, &download).await?;
-                progress(&app, profile_id, "uploading", download.size, download.size);
+            let install = |source: Option<std::path::PathBuf>| {
                 remote_ssh::install_remote_jar(
                     profile.clone(),
-                    environment,
+                    environment.clone(),
                     Arc::clone(remote_sessions.inner()),
                     directory.clone(),
-                    temporary.clone(),
+                    source,
+                    download.url.clone(),
                     version_id.clone(),
                     download.sha1.clone(),
+                    None,
                     "minecraft".into(),
                     "server.jar".into(),
                 )
-                .await
+            };
+            progress(&app, profile_id, "downloading_remote", 0, download.size);
+            match install(None).await {
+                Ok(()) => {}
+                Err(error) if error.starts_with(remote_ssh::REMOTE_DOWNLOAD_UNAVAILABLE) => {
+                    let temporary = std::env::temp_dir()
+                        .join(format!("servercrafter-{}.jar", Uuid::new_v4()));
+                    let result = async {
+                        download_jar(&client, &app, profile_id, &temporary, &download).await?;
+                        progress(&app, profile_id, "uploading", download.size, download.size);
+                        install(Some(temporary.clone())).await
+                    }.await;
+                    let _ = fs::remove_file(&temporary);
+                    result?;
+                }
+                Err(error) => return Err(error),
             }
-            .await;
-            let _ = fs::remove_file(&temporary);
-            result?;
         }
     }
     progress(&app, profile_id, "complete", download.size, download.size);

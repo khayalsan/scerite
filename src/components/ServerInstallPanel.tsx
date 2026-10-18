@@ -64,6 +64,8 @@ export function ServerInstallPanel({ profileId, remote, rootConfigured, canInsta
 
   const phase = progress?.phase === "downloading" && progress.total
     ? `Downloading Minecraft ${Math.round(progress.downloaded / progress.total * 100)}%`
+    : progress?.phase === "downloading_remote" ? "Downloading on the remote server…"
+    : progress?.phase === "downloading_remote_java" ? "Downloading Java on the remote server…"
     : progress?.phase === "downloading_java" && progress.total
       ? `Downloading Java ${Math.round(progress.downloaded / progress.total * 100)}%`
     : progress?.phase === "uploading_java" ? "Uploading Java to the remote environment…"
