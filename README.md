@@ -24,3 +24,7 @@ Remote process control requires `tmux` on the server and a trusted host key in `
 - `npm run tauri dev` starts the desktop app.
 - `npm run build` type-checks TypeScript and builds the frontend.
 - `cargo check --manifest-path src-tauri/Cargo.toml` checks the Rust backend.
+
+## Disclaimer
+
+NOT AN OFFICIAL MINECRAFT PRODUCT. NOT APPROVED BY OR ASSOCIATED WITH MOJANG OR MICROSOFT.
