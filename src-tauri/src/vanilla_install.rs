@@ -11,8 +11,9 @@ use tauri::{Emitter, State};
 use uuid::Uuid;
 
 use crate::{
+    java_runtime,
     remote_ssh::{self, RemoteSessionManager},
-    server_profiles::{ServerProfileStore, ServerTarget},
+    server_profiles::{ServerProfile, ServerProfileStore, ServerTarget},
     server_sessions::{LocalServerState, LocalSessionManager},
 };
 
@@ -42,6 +43,14 @@ struct ManifestVersion {
 #[derive(Deserialize)]
 struct VersionMetadata {
     downloads: VersionDownloads,
+    #[serde(rename = "javaVersion")]
+    java_version: Option<JavaVersion>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JavaVersion {
+    major_version: u16,
 }
 
 #[derive(Deserialize)]
@@ -142,7 +151,7 @@ fn checksum_matches(digest: Sha1, expected: &str) -> bool {
 async fn server_download(
     client: &reqwest::Client,
     version_id: &str,
-) -> Result<ServerDownload, String> {
+) -> Result<(ServerDownload, u16), String> {
     if !safe_version(version_id) {
         return Err("Choose a valid Minecraft version.".into());
     }
@@ -165,6 +174,10 @@ async fn server_download(
         .json()
         .await
         .map_err(|error| format!("Could not read version details: {error}"))?;
+    let java_major = metadata
+        .java_version
+        .ok_or_else(|| "This release does not specify a required Java version.".to_owned())?
+        .major_version;
     let server = metadata
         .downloads
         .server
@@ -177,7 +190,7 @@ async fn server_download(
     {
         return Err("The official server download metadata is invalid.".into());
     }
-    Ok(server)
+    Ok((server, java_major))
 }
 
 fn verified_file(path: &Path, download: &ServerDownload) -> Result<bool, String> {
@@ -319,6 +332,152 @@ fn install_local(
     result
 }
 
+async fn install_local_java(
+    client: &reqwest::Client,
+    app: &tauri::AppHandle,
+    profile_id: Uuid,
+    root: &Path,
+    major: u16,
+) -> Result<String, String> {
+    let (os, arch) = java_runtime::local_platform()?;
+    let package = java_runtime::package(client, major, os, arch).await?;
+    if let Some(java) = java_runtime::installed_local(root, &package)? {
+        progress(app, profile_id, "java_cached", 0, 0);
+        return Ok(java.to_string_lossy().into_owned());
+    }
+    let archive = root.join(package.cache_relative());
+    let parent = archive
+        .parent()
+        .ok_or_else(|| "The Java cache path is invalid.".to_owned())?;
+    let relative = parent
+        .strip_prefix(root)
+        .map_err(|_| "The Java cache path is outside the configured Minecraft root.".to_owned())?;
+    let canonical = java_runtime::ensure_managed_directory(root, relative)?;
+    if !canonical.starts_with(root.join("cache").join("java")) {
+        return Err("The Java cache resolves outside the configured Minecraft root.".into());
+    }
+    let download_client = java_runtime::archive_client()?;
+    java_runtime::download_archive(&download_client, &archive, &package, |done, total| {
+        progress(app, profile_id, "downloading_java", done, total);
+    })
+    .await?;
+    progress(
+        app,
+        profile_id,
+        "installing_java",
+        package.size,
+        package.size,
+    );
+    let root = root.to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || {
+        let top = java_runtime::validate_archive(&archive, &package)?;
+        java_runtime::install_local(&root, &archive, &package, &top)
+            .map(|java| java.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|error| format!("Java installation did not finish: {error}"))?
+}
+
+async fn install_remote_java(
+    client: &reqwest::Client,
+    app: &tauri::AppHandle,
+    profile: &ServerProfile,
+    environment: &crate::server_profiles::ServerEnvironment,
+    sessions: Arc<RemoteSessionManager>,
+    major: u16,
+) -> Result<String, String> {
+    let arch =
+        remote_ssh::remote_java_arch(profile.clone(), environment.clone(), Arc::clone(&sessions))
+            .await?;
+    let package = java_runtime::package(client, major, "linux", arch).await?;
+    if let Some(java) = remote_ssh::remote_java_status(
+        profile.clone(),
+        environment.clone(),
+        Arc::clone(&sessions),
+        package.clone(),
+    )
+    .await?
+    {
+        progress(app, profile.id, "java_cached", 0, 0);
+        return Ok(java);
+    }
+    let temporary =
+        std::env::temp_dir().join(format!("servercrafter-{}-jdk.tar.gz", Uuid::new_v4()));
+    let result = async {
+        let download_client = java_runtime::archive_client()?;
+        java_runtime::download_archive(&download_client, &temporary, &package, |done, total| {
+            progress(app, profile.id, "downloading_java", done, total);
+        })
+        .await?;
+        let archive = temporary.clone();
+        let validate_package = package.clone();
+        let top = tauri::async_runtime::spawn_blocking(move || {
+            java_runtime::validate_archive(&archive, &validate_package)
+        })
+        .await
+        .map_err(|error| format!("JDK validation did not finish: {error}"))??;
+        progress(
+            app,
+            profile.id,
+            "uploading_java",
+            package.size,
+            package.size,
+        );
+        remote_ssh::install_remote_java(
+            profile.clone(),
+            environment.clone(),
+            sessions,
+            package,
+            temporary.clone(),
+            top,
+        )
+        .await
+    }
+    .await;
+    let _ = fs::remove_file(&temporary);
+    result
+}
+
+fn update_java_launch(
+    profile: &ServerProfile,
+    java: &str,
+    profiles: &ServerProfileStore,
+) -> Result<bool, String> {
+    let mut target = profile.target.clone();
+    let launch = match &mut target {
+        ServerTarget::Local { launch, .. } | ServerTarget::Remote { launch, .. } => launch,
+    };
+    let executable = launch.executable.trim();
+    let name = Path::new(executable)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(executable);
+    if !executable.is_empty()
+        && !name.eq_ignore_ascii_case("java")
+        && !name.eq_ignore_ascii_case("java.exe")
+    {
+        return Ok(false);
+    }
+    launch.executable = java.to_owned();
+    if let Some(index) = launch
+        .arguments
+        .iter()
+        .position(|argument| argument == "-jar")
+    {
+        if index + 1 < launch.arguments.len() {
+            launch.arguments[index + 1] = "server.jar".into();
+        } else {
+            launch.arguments.push("server.jar".into());
+        }
+    } else {
+        launch
+            .arguments
+            .extend(["-jar".into(), "server.jar".into(), "nogui".into()]);
+    }
+    profiles.update(profile.id, profile.name.clone(), target)?;
+    Ok(true)
+}
+
 #[tauri::command]
 pub async fn install_vanilla_version(
     app: tauri::AppHandle,
@@ -336,7 +495,41 @@ pub async fn install_vanilla_version(
     profile.target.validate()?;
     progress(&app, profile_id, "checking", 0, 0);
     let client = client()?;
-    let download = server_download(&client, &version_id).await?;
+    let (download, java_major) = server_download(&client, &version_id).await?;
+    progress(&app, profile_id, "checking_java", 0, 0);
+    let java = match &profile.target {
+        ServerTarget::Local { .. } => {
+            if !matches!(
+                local_sessions.status(profile_id)?.state,
+                LocalServerState::Stopped
+            ) {
+                return Err("Stop this server before installing a version.".into());
+            }
+            let root = profiles.local_root()?.ok_or_else(|| {
+                "Set this computer's Minecraft root on the Servers page first.".to_owned()
+            })?;
+            let root = fs::canonicalize(root).map_err(|_| {
+                "Create the configured Minecraft root folder before installing a version."
+                    .to_owned()
+            })?;
+            install_local_java(&client, &app, profile_id, &root, java_major).await?
+        }
+        ServerTarget::Remote { environment_id, .. } => {
+            let environment = profiles.environment(*environment_id)?;
+            if environment.root_directory.is_empty() {
+                return Err("Set this remote environment's Minecraft root first.".into());
+            }
+            install_remote_java(
+                &client,
+                &app,
+                &profile,
+                &environment,
+                Arc::clone(remote_sessions.inner()),
+                java_major,
+            )
+            .await?
+        }
+    };
     match &profile.target {
         ServerTarget::Local { directory, .. } => {
             let root = profiles.local_root()?.ok_or_else(|| {
@@ -393,5 +586,16 @@ pub async fn install_vanilla_version(
         }
     }
     progress(&app, profile_id, "complete", download.size, download.size);
-    Ok(format!("Minecraft {version_id} installed as server.jar."))
+    let launch_message = match update_java_launch(&profile, &java, &profiles) {
+        Ok(true) => "The server profile now uses its managed Java runtime.".to_owned(),
+        Ok(false) => format!(
+            "The custom launch executable was kept. Set it to {java} to use the managed JDK."
+        ),
+        Err(error) => format!(
+            "The jar and Java runtime were installed, but the launch profile could not be updated: {error}. Set its executable to {java}."
+        ),
+    };
+    Ok(format!(
+        "Minecraft {version_id} and Java {java_major} installed. {launch_message}"
+    ))
 }
