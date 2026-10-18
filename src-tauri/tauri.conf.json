@@ -23,6 +23,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": "all",
     "icon": [
       "icons/32x32.png",
@@ -31,5 +32,13 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDhDOTkxNUU3MjE5MDkwOUIKUldTYmtKQWg1eFdaalBGRG5ncDFhV3gzZEN2MnlVc1NJREx4TytTNkVUSm9YYUVuNFM3MkNPdTcK",
+      "endpoints": [
+        "https://github.com/khayalsan/scerite/releases/latest/download/latest.json"
+      ]
+    }
   }
 }
