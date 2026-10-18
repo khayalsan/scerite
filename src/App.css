@@ -912,6 +912,32 @@
 .install-version-trigger { width: 100%; }
 .install-success { color: var(--success, #74c69d) !important; }
 
+.packages-panel { display: grid; gap: 18px; margin: 0 0 16px 53px; padding: 18px; border: 1px solid var(--app-line); border-radius: 9px; background: var(--app-ground); }
+.packages-header h2 { margin: 0 0 4px; font-size: 17px; }
+.packages-header p, .packages-catalog > p, .packages-installed-heading p, .packages-version p { margin: 0; color: var(--app-muted); font-size: 12px; line-height: 1.5; }
+.packages-kind { display: flex; gap: 8px; }
+.packages-layout { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(230px, 1fr); gap: 28px; min-width: 0; }
+.packages-catalog, .packages-installed, .packages-search-form, .packages-version { display: grid; align-content: start; gap: 11px; min-width: 0; }
+.packages-catalog h3, .packages-installed h3, .packages-version h3 { margin: 0; font-size: 14px; }
+.packages-search-form { margin-top: 4px; gap: 7px; }
+.packages-search-form label, .packages-version label { font-size: 12px; font-weight: 650; }
+.packages-search-form input { min-width: 0; width: 100%; padding: 8px 10px; border: 1px solid var(--app-line); border-radius: 7px; color: var(--app-ink); background: var(--app-paper); font: inherit; }
+.packages-search-form [data-slot="select-trigger"], .packages-version [data-slot="select-trigger"] { width: 100%; }
+.packages-query { display: flex; gap: 7px; min-width: 0; }
+.packages-query .button, .packages-version .button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
+.packages-results { display: grid; gap: 6px; max-height: 340px; overflow: auto; }
+.packages-result { display: grid; gap: 3px; width: 100%; padding: 10px 12px; border: 1px solid var(--app-line); border-radius: 8px; color: var(--app-ink); background: var(--app-paper); cursor: pointer; font: inherit; text-align: left; }
+.packages-result:hover, .packages-result-selected { border-color: var(--app-accent); }
+.packages-result span, .packages-result small { color: var(--app-muted); font-size: 12px; line-height: 1.4; }
+.packages-result strong, .packages-result span { overflow-wrap: anywhere; }
+.packages-version { padding-top: 12px; border-top: 1px solid var(--app-line); }
+.packages-installed-heading { display: flex; align-items: start; justify-content: space-between; gap: 8px; }
+.packages-installed-list { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
+.packages-installed-list li { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 9px 0; border-bottom: 1px solid var(--app-line); font-size: 12px; }
+.packages-installed-list li span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.packages-installed-list li small { flex: none; color: var(--app-muted); }
+@media (max-width: 900px) { .packages-layout { grid-template-columns: 1fr; } }
+
 .server-tab-empty,
 .server-settings-panel {
   display: grid;
@@ -1915,6 +1941,7 @@
   }
 
   .worlds-panel { margin-left: 44px; }
+  .packages-panel { margin-left: 44px; }
 
   .files-browser {
     grid-template-columns: 1fr;
