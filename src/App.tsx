@@ -104,8 +104,11 @@ function parseLaunchArguments(value: string): string[] {
   return launchArguments;
 }
 
-function targetFor(draft: ProfileDraft): ServerTarget {
+function targetFor(draft: ProfileDraft, previous?: ServerProfile): ServerTarget {
   const launchArguments = parseLaunchArguments(draft.arguments);
+  const managedJava = previous?.target.kind === draft.kind &&
+    (draft.kind === "local" || previous.target.kind === "remote" && previous.target.environmentId === draft.environmentId)
+    ? previous.target.launch.managedJava : undefined;
 
   if (draft.kind === "remote") {
     return {
@@ -115,6 +118,7 @@ function targetFor(draft: ProfileDraft): ServerTarget {
       launch: {
         executable: draft.executable.trim(),
         arguments: launchArguments,
+        managedJava,
       },
     };
   }
@@ -125,6 +129,7 @@ function targetFor(draft: ProfileDraft): ServerTarget {
     launch: {
       executable: draft.executable.trim(),
       arguments: launchArguments,
+      managedJava,
     },
   };
 }
@@ -660,7 +665,7 @@ function App() {
 
     try {
       const saved = editingProfile
-        ? await serverProfiles.update(editingProfile.id, draft.name, targetFor(draft))
+        ? await serverProfiles.update(editingProfile.id, draft.name, targetFor(draft, editingProfile))
         : await serverProfiles.create(draft.name, targetFor(draft));
 
       setConnectedRemotes((current) => {
@@ -1307,7 +1312,7 @@ function App() {
                           )}
                         </section>
                         <section className="server-tab-panel" hidden={activeServerTab !== "install"} aria-label="Install Minecraft">
-                          {installProfileId === profile.id && <VanillaInstallPanel profileId={profile.id} remote={!isLocal} rootConfigured={isLocal ? !!localRoot : !!environments.find((environment) => environment.id === (target.kind === "remote" ? target.environmentId : ""))?.rootDirectory} canInstall={isLocal ? state === "stopped" : remoteState === "stopped"} />}
+                          {installProfileId === profile.id && <VanillaInstallPanel profileId={profile.id} remote={!isLocal} rootConfigured={isLocal ? !!localRoot : !!environments.find((environment) => environment.id === (target.kind === "remote" ? target.environmentId : ""))?.rootDirectory} canInstall={isLocal ? state === "stopped" : remoteState === "stopped"} onUpdated={async () => setProfiles(await serverProfiles.list())} />}
                         </section>
                         <section className={`server-tab-panel server-settings-panel${isFormOpen && editingProfile?.id === profile.id ? " server-settings-editing" : ""}`} hidden={activeServerTab !== "settings"} aria-label="Server settings">
                           {isFormOpen && editingProfile?.id === profile.id ? renderProfileForm() : (

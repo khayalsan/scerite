@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 
-export type LocalLaunchConfig = { executable: string; arguments: string[] };
+export type LocalLaunchConfig = { executable: string; arguments: string[]; managedJava?: string | null };
 
 export type ServerTarget =
   | { kind: "local"; directory: string; launch: LocalLaunchConfig }

@@ -34,6 +34,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             vanilla_install::list_vanilla_versions,
             vanilla_install::install_vanilla_version,
+            vanilla_install::use_managed_java,
             commands::get_local_install_root,
             commands::set_local_install_root,
             commands::list_server_environments,
