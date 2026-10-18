@@ -1619,6 +1619,59 @@
   font-size: 12px;
 }
 
+.worlds-panel {
+  display: grid;
+  gap: 16px;
+  margin: 0 0 16px 53px;
+  padding: 18px;
+  border: 1px solid var(--app-line);
+  border-radius: 9px;
+  background: var(--app-ground);
+}
+
+.worlds-header,
+.worlds-browser-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.worlds-header h2 { margin: 0 0 4px; font-size: 17px; }
+.worlds-header p { margin: 0; color: var(--app-muted); font-size: 12px; }
+.worlds-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 9px; }
+
+.world-card {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-height: 66px;
+  padding: 12px;
+  border: 1px solid var(--app-line);
+  border-radius: 8px;
+  color: var(--app-ink);
+  background: var(--app-paper);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.world-card:hover,
+.world-card-selected { border-color: var(--app-accent); }
+.world-card > svg { flex: 0 0 auto; color: var(--app-accent); }
+.world-card span { display: grid; min-width: 0; gap: 3px; }
+.world-card strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.world-card small { color: var(--app-muted); font-size: 11px; }
+.world-card:focus-visible { outline: 3px solid color-mix(in srgb, var(--app-accent) 32%, transparent); outline-offset: 2px; }
+
+.worlds-browser { min-width: 0; }
+.worlds-browser-heading { margin-bottom: 8px; color: var(--app-ink); font-size: 12px; }
+.worlds-browser-heading strong { overflow-wrap: anywhere; }
+.worlds-preview { display: grid; min-width: 0; align-content: start; gap: 12px; padding: 13px; }
+.worlds-preview strong { color: var(--app-ink); font-size: 12px; }
+.worlds-preview p { margin: 0; color: var(--app-muted); font-size: 12px; }
+.worlds-preview pre { overflow: auto; max-height: 420px; margin: 0; color: var(--app-ink); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+
 .row-actions,
 .remove-confirm {
   display: flex;
@@ -1860,6 +1913,8 @@
     flex-basis: calc(100% - 44px);
     margin-left: 44px;
   }
+
+  .worlds-panel { margin-left: 44px; }
 
   .files-browser {
     grid-template-columns: 1fr;
