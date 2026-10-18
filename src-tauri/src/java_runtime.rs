@@ -143,7 +143,7 @@ pub async fn package(
         || !matches!(os, "windows" | "linux" | "mac")
         || !matches!(arch, "x64" | "aarch64")
     {
-        return Err("This Minecraft release needs a Java build that ServerCrafter cannot install for this platform.".into());
+        return Err("This Minecraft release needs a Java build that Scerite cannot install for this platform.".into());
     }
     let url = format!(
         "https://api.adoptium.net/v3/assets/latest/{major}/hotspot?architecture={arch}&image_type=jdk&os={os}&vendor=eclipse"

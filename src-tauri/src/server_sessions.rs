@@ -154,7 +154,7 @@ impl LocalSessionManager {
         managed_java: Option<String>,
     ) -> Result<LocalServerStatus, String> {
         if managed_java.is_some() && self.request(ManagerRequest::Ping)?.protocol_version < 2 {
-            return Err("The local session manager is from an older ServerCrafter build. Stop its servers and restart the session manager before starting with managed Java.".into());
+            return Err("The local session manager is from an older Scerite build. Stop its servers and restart the session manager before starting with managed Java.".into());
         }
         self.request(ManagerRequest::Start {
             profile_id,

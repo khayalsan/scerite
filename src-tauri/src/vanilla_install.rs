@@ -22,7 +22,7 @@ const MANIFEST_URL: &str = "https://piston-meta.mojang.com/mc/game/version_manif
 pub(crate) fn client() -> Result<reqwest::Client, String> {
     let _ = rustls::crypto::ring::default_provider().install_default();
     reqwest::Client::builder()
-        .user_agent("ServerCrafter/0.2.0 (https://github.com/khayalsan/servercrafter)")
+        .user_agent("Scerite/0.2.0 (https://github.com/khayalsan/scerite)")
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|error| format!("Could not initialize Minecraft downloads: {error}"))

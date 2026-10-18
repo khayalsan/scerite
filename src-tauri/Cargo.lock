@@ -4046,6 +4046,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "scerite"
+version = "0.2.0"
+dependencies = [
+ "flate2",
+ "interprocess",
+ "reqwest",
+ "russh",
+ "russh-sftp",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha1",
+ "sha2 0.10.9",
+ "tar",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-opener",
+ "tokio",
+ "uuid",
+ "zip",
+]
+
+[[package]]
 name = "schannel"
 version = "0.1.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4357,30 +4381,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
-]
-
-[[package]]
-name = "scerite"
-version = "0.2.0"
-dependencies = [
- "flate2",
- "interprocess",
- "reqwest",
- "russh",
- "russh-sftp",
- "rustls",
- "serde",
- "serde_json",
- "sha1",
- "sha2 0.10.9",
- "tar",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-opener",
- "tokio",
- "uuid",
- "zip",
 ]
 
 [[package]]
