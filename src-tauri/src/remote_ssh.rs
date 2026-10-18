@@ -244,7 +244,8 @@ pub async fn start_remote_server(
     remote_sessions: State<'_, Arc<RemoteSessionManager>>,
 ) -> Result<RemoteServerStatus, String> {
     let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
-    run_remote(profile, environment, Arc::clone(remote_sessions.inner()), |session, profile| {
+    let environment_root = environment.root_directory.clone();
+    run_remote(profile, environment, Arc::clone(remote_sessions.inner()), move |session, profile| {
         let ServerTarget::Remote { directory, launch, .. } = &profile.target else {
             return Err("Remote server controls are only available for remote profiles.".into());
         };
@@ -263,7 +264,19 @@ pub async fn start_remote_server(
         if remote_directory_has_java_process(session, &root)? {
             return Err("A Java process is already using the remote server folder outside ServerCrafter. Stop it there before starting this profile.".into());
         }
-        let command = launch_command(launch);
+        let managed_java = if let Some(java) = launch.managed_java.as_deref() {
+            let runtime_root = remote_root(session, &environment_root)?;
+            let actual = session.sftp()?.realpath(Path::new(java))?;
+            if !Path::new(&actual).starts_with(Path::new(&runtime_root).join("runtimes/java")) {
+                return Err("The managed Java executable is outside the configured runtime folder.".into());
+            }
+            let usable = execute(session, &format!("test -x {}", shell_quote(&actual)))?;
+            if usable.exit_code != 0 {
+                return Err("The managed Java executable is missing or is not executable.".into());
+            }
+            Some(actual)
+        } else { None };
+        let command = launch_command(launch, managed_java.as_deref());
         let tmux_command = format!(
             "tmux new-session -d -s {} -c {} {}",
             shell_quote(&session_name(profile.id)),
@@ -1338,13 +1351,20 @@ fn remote_command_error(context: &str, output: RemoteCommandOutput) -> String {
     }
 }
 
-fn launch_command(launch: &LocalLaunchConfig) -> String {
+fn launch_command(launch: &LocalLaunchConfig, managed_java: Option<&str>) -> String {
     let command = std::iter::once(launch.executable.trim())
         .chain(launch.arguments.iter().map(String::as_str))
         .map(shell_quote)
         .collect::<Vec<_>>()
         .join(" ");
-    format!("exec {command}")
+    if let Some(java) = managed_java {
+        let bin = Path::new(java).parent().expect("validated Java has a bin folder");
+        let home = bin.parent().expect("validated Java has a runtime folder");
+        format!("export JAVA_HOME={}; export PATH={}:\"$PATH\"; exec {command}",
+            shell_quote(&home.to_string_lossy()), shell_quote(&bin.to_string_lossy()))
+    } else {
+        format!("exec {command}")
+    }
 }
 
 fn shell_quote(value: &str) -> String {

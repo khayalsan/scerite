@@ -5,7 +5,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 
 type Progress = { profileId: string; phase: string; downloaded: number; total: number };
 
-export function VanillaInstallPanel({ profileId, remote, rootConfigured, canInstall }: { profileId: string; remote: boolean; rootConfigured: boolean; canInstall: boolean }) {
+export function VanillaInstallPanel({ profileId, remote, rootConfigured, canInstall, onUpdated }: { profileId: string; remote: boolean; rootConfigured: boolean; canInstall: boolean; onUpdated: () => Promise<void> }) {
   const [versions, setVersions] = useState<string[]>([]);
   const [version, setVersion] = useState("");
   const [loading, setLoading] = useState(true);
@@ -31,13 +31,14 @@ export function VanillaInstallPanel({ profileId, remote, rootConfigured, canInst
     return () => { void listener.then((unlisten) => unlisten()); };
   }, [profileId]);
 
-  async function install() {
+  async function install(javaOnly = false) {
     setBusy(true);
     setError(null);
     setResult(null);
     setProgress(null);
     try {
-      setResult(await invoke<string>("install_vanilla_version", { profileId, versionId: version }));
+      setResult(await invoke<string>(javaOnly ? "use_managed_java" : "install_vanilla_version", { profileId, versionId: version }));
+      await onUpdated();
     } catch (cause) {
       setError(String(cause));
     } finally {
@@ -71,6 +72,8 @@ export function VanillaInstallPanel({ profileId, remote, rootConfigured, canInst
         <SelectContent>{versions.map((item) => <SelectItem key={item} value={item}>{item}</SelectItem>)}</SelectContent>
       </Select>
       <button className="button button-primary" type="button" disabled={loading || busy || !version || !rootConfigured || !canInstall} onClick={() => void install()}>{busy ? "Installing…" : "Install version"}</button>
+      <button className="button button-secondary" type="button" disabled={loading || busy || !version || !rootConfigured || !canInstall} onClick={() => void install(true)}>Use Java for this version</button>
+      <small>Already installed? Configure Java without replacing the server jar.</small>
     </div>
     {loading && <p role="status">Loading official releases…</p>}
     {!rootConfigured && <p className="form-error">Set the {remote ? "remote environment" : "local"} Minecraft root on the Servers page first.</p>}

@@ -94,6 +94,8 @@ pub enum ServerTarget {
 pub struct LocalLaunchConfig {
     pub executable: String,
     pub arguments: Vec<String>,
+    #[serde(default)]
+    pub managed_java: Option<String>,
 }
 
 impl ServerTarget {
@@ -146,6 +148,7 @@ impl ServerTarget {
                 launch: LocalLaunchConfig {
                     executable: launch.executable.trim().to_owned(),
                     arguments: launch.arguments,
+                    managed_java: launch.managed_java,
                 },
             },
             Self::Remote {
@@ -165,6 +168,7 @@ impl ServerTarget {
                 launch: LocalLaunchConfig {
                     executable: launch.executable.trim().to_owned(),
                     arguments: launch.arguments,
+                    managed_java: launch.managed_java,
                 },
             },
         }

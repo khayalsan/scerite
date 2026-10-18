@@ -452,10 +452,12 @@ fn update_java_launch(
         .file_name()
         .and_then(|value| value.to_str())
         .unwrap_or(executable);
+    launch.managed_java = Some(java.to_owned());
     if !executable.is_empty()
         && !name.eq_ignore_ascii_case("java")
         && !name.eq_ignore_ascii_case("java.exe")
     {
+        profiles.update(profile.id, profile.name.clone(), target)?;
         return Ok(false);
     }
     launch.executable = java.to_owned();
@@ -476,6 +478,47 @@ fn update_java_launch(
     }
     profiles.update(profile.id, profile.name.clone(), target)?;
     Ok(true)
+}
+
+#[tauri::command]
+pub async fn use_managed_java(
+    app: tauri::AppHandle,
+    profile_id: Uuid,
+    version_id: String,
+    profiles: State<'_, ServerProfileStore>,
+    local_sessions: State<'_, LocalSessionManager>,
+    remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<String, String> {
+    let profile = profiles.list()?.into_iter()
+        .find(|profile| profile.id == profile_id)
+        .ok_or_else(|| "Server profile was not found.".to_owned())?;
+    profile.target.validate()?;
+    progress(&app, profile_id, "checking_java", 0, 0);
+    let client = client()?;
+    let (_, major) = server_download(&client, &version_id).await?;
+    let java = match &profile.target {
+        ServerTarget::Local { .. } => {
+            if !matches!(local_sessions.status(profile_id)?.state, LocalServerState::Stopped) {
+                return Err("Stop this server before changing its Java runtime.".into());
+            }
+            let root = profiles.local_root()?.ok_or_else(||
+                "Set this computer's Minecraft root on the Servers page first.".to_owned())?;
+            let root = fs::canonicalize(root).map_err(|_|
+                "Create the configured Minecraft root folder before installing Java.".to_owned())?;
+            install_local_java(&client, &app, profile_id, &root, major).await?
+        }
+        ServerTarget::Remote { environment_id, .. } => {
+            let environment = profiles.environment(*environment_id)?;
+            if environment.root_directory.is_empty() {
+                return Err("Set this remote environment's Minecraft root first.".into());
+            }
+            install_remote_java(&client, &app, &profile, &environment,
+                Arc::clone(remote_sessions.inner()), major).await?
+        }
+    };
+    update_java_launch(&profile, &java, &profiles)?;
+    progress(&app, profile_id, "complete", 0, 0);
+    Ok(format!("Java {major} is configured for this server. The server jar and other files were not changed."))
 }
 
 #[tauri::command]
@@ -588,9 +631,7 @@ pub async fn install_vanilla_version(
     progress(&app, profile_id, "complete", download.size, download.size);
     let launch_message = match update_java_launch(&profile, &java, &profiles) {
         Ok(true) => "The server profile now uses its managed Java runtime.".to_owned(),
-        Ok(false) => format!(
-            "The custom launch executable was kept. Set it to {java} to use the managed JDK."
-        ),
+        Ok(false) => "The custom launch command now receives the managed Java runtime.".to_owned(),
         Err(error) => format!(
             "The jar and Java runtime were installed, but the launch profile could not be updated: {error}. Set its executable to {java}."
         ),
