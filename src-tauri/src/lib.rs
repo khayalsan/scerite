@@ -75,6 +75,7 @@ pub fn run() {
             remote_ssh::list_remote_worlds,
             remote_ssh::read_remote_server_file,
             remote_ssh::read_remote_server_log_start,
+            remote_ssh::detect_remote_fabric_version,
             remote_ssh::write_remote_server_file,
         ])
         .run(tauri::generate_context!())

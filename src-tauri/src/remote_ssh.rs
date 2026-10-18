@@ -573,6 +573,62 @@ pub async fn read_remote_server_log_start(
 }
 
 #[tauri::command]
+pub async fn detect_remote_fabric_version(
+    profile_id: Uuid,
+    profiles: State<'_, ServerProfileStore>,
+    remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<Option<String>, String> {
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    if profile.installed_software.as_deref() != Some("fabric") {
+        return Ok(None);
+    }
+    run_remote(profile, environment.clone(), Arc::clone(remote_sessions.inner()), move |session, profile| {
+        let sftp = session.sftp()?;
+        let root = remote_root_with_sftp(&sftp, &environment.root_directory)?;
+        let server = remote_root_with_sftp(&sftp, configured_remote_root(profile)?)?;
+        let installed = format!("{server}/fabric-server-launch.jar");
+        if !matches!(sftp.lstat(Path::new(&installed)), Ok(metadata) if metadata.file_type() == FileType::File) {
+            return Ok(None);
+        }
+        let cache = format!("{root}/cache/fabric");
+        if !matches!(sftp.lstat(Path::new(&cache)), Ok(metadata) if metadata.file_type() == FileType::Dir) {
+            return Ok(None);
+        }
+        let versions = match sftp.read_dir(Path::new(&cache)) {
+            Ok(versions) => versions,
+            Err(_) => return Ok(None),
+        };
+        let mut match_version = None;
+        for (version, metadata) in versions.into_iter().take(100) {
+            if metadata.file_type() != FileType::Dir || !crate::vanilla_install::safe_version(&version) {
+                continue;
+            }
+            let builds = match sftp.read_dir(Path::new(&format!("{cache}/{version}"))) {
+                Ok(builds) => builds,
+                Err(_) => continue,
+            };
+            for (build, metadata) in builds.into_iter().take(100) {
+                if metadata.file_type() != FileType::Dir || !crate::vanilla_install::safe_version(&build) {
+                    continue;
+                }
+                let candidate = format!("{cache}/{version}/{build}/fabric-server-launch.jar");
+                if !matches!(sftp.lstat(Path::new(&candidate)), Ok(metadata) if metadata.file_type() == FileType::File) {
+                    continue;
+                }
+                let compared = execute(session, &format!("cmp -s -- {} {}", shell_quote(&installed), shell_quote(&candidate)))?;
+                if compared.exit_code == 0 {
+                    if match_version.as_deref().is_some_and(|found| found != version) {
+                        return Ok(None);
+                    }
+                    match_version = Some(version.clone());
+                }
+            }
+        }
+        Ok(match_version)
+    }).await
+}
+
+#[tauri::command]
 pub async fn write_remote_server_file(
     profile_id: Uuid,
     relative_path: String,

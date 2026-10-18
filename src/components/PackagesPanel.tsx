@@ -18,6 +18,40 @@ const loaders: Record<PackageKind, { id: string; label: string }[]> = {
 
 function errorText(error: unknown) { return error instanceof Error ? error.message : String(error); }
 
+function minecraftVersion(text: string) {
+  return text.match(/(?:Starting minecraft server version|Loading Minecraft)\s+([0-9][a-zA-Z0-9._-]*)/i)?.[1] ?? null;
+}
+
+async function detectMinecraftVersion(profileId: string, remote: boolean) {
+  try {
+    const log = await invoke<string>(remote ? "read_remote_server_log_start" : "read_local_server_log_start", { profileId });
+    const version = minecraftVersion(log);
+    if (version) return version;
+  } catch { /* A server may not have created its log yet. */ }
+
+  if (remote) {
+    try {
+      const console = await invoke<{ lines: string[] }>("remote_server_console", { profileId });
+      const version = minecraftVersion(console.lines.join("\n"));
+      if (version) return version;
+    } catch { /* Stopped servers have no live console. */ }
+    try {
+      const version = await invoke<string | null>("detect_remote_fabric_version", { profileId });
+      if (version) return version;
+    } catch { /* The server may not have a matching managed download. */ }
+  }
+
+  for (const path of ["libraries/net/fabricmc/intermediary", ".fabric/remappedJars"]) {
+    try {
+      const entries = await serverFiles.list(remote, profileId, path);
+      const versions = entries.filter((entry) => entry.directory && /^[0-9][a-zA-Z0-9._-]*$/.test(entry.name));
+      if (versions.length === 1) return versions[0].name;
+    } catch { /* This server may not have that loader directory. */ }
+  }
+
+  return null;
+}
+
 export function PackagesPanel({ profileId, remote, canInstall, kind, software, installedVersion }: { profileId: string; remote: boolean; canInstall: boolean; kind: PackageKind; software?: string | null; installedVersion?: string | null }) {
   const fixedLoader = packageLoader(kind, software);
   const availableLoaders = fixedLoader ? loaders[kind].filter((item) => item.id === fixedLoader) : loaders[kind];
@@ -75,13 +109,12 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software, i
     let active = true;
     setVersionLoading(true);
     setVersionError(null);
-    void invoke<string>(remote ? "read_remote_server_log_start" : "read_local_server_log_start", { profileId }).then((log) => {
+    void detectMinecraftVersion(profileId, remote).then((version) => {
       if (!active) return;
-      const version = log.match(/(?:Starting minecraft server version|Loading Minecraft)\s+([0-9][a-zA-Z0-9._-]*)/i)?.[1];
       setGameVersion(version ?? "");
-      if (!version) setVersionError("Minecraft version was not found in the server log. Start the server once, then retry.");
+      if (!version) setVersionError("Could not determine this server’s Minecraft version from its installed files or console. Start it, then retry while it is running.");
     }).catch((cause) => {
-      if (active) { setGameVersion(""); setVersionError(`Could not detect the Minecraft version from logs/latest.log: ${errorText(cause)}`); }
+      if (active) { setGameVersion(""); setVersionError(`Could not detect the Minecraft version: ${errorText(cause)}`); }
     }).finally(() => { if (active) setVersionLoading(false); });
     return () => { active = false; };
   }, [profileId, remote, installedVersion, versionRetry]);
