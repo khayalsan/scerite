@@ -7,6 +7,8 @@ pub struct ServerProfile {
     pub id: Uuid,
     pub name: String,
     pub target: ServerTarget,
+    #[serde(default)]
+    pub installed_software: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

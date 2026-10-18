@@ -861,6 +861,7 @@ pub async fn install_server_software(
             }
         }
     }
+    profiles.set_installed_software(profile_id, &loader)?;
     let launch = if loader == "quilt" {
         update_java_launch(&profile, &java, &profiles, "quilt-server-launch.jar")
     } else if loader == "forge" || loader == "neoforge" {

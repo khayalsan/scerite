@@ -4,22 +4,24 @@ import { invoke } from "@tauri-apps/api/core";
 import { Download, Package, RefreshCw, Search } from "lucide-react";
 import { serverFiles } from "../lib/serverFiles";
 import type { ServerFileEntry } from "../lib/serverFiles";
+import { packageLoader } from "../lib/serverSoftware";
+import type { PackageKind } from "../lib/serverSoftware";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 
-type Kind = "mod" | "plugin";
 type Project = { id: string; title: string; description: string; author: string };
 type Version = { id: string; name: string; versionNumber: string; requiredDependencies: number };
 
-const loaders: Record<Kind, { id: string; label: string }[]> = {
+const loaders: Record<PackageKind, { id: string; label: string }[]> = {
   mod: [{ id: "fabric", label: "Fabric" }, { id: "quilt", label: "Quilt" }, { id: "forge", label: "Forge" }, { id: "neoforge", label: "NeoForge" }],
   plugin: [{ id: "paper", label: "Paper" }, { id: "purpur", label: "Purpur" }, { id: "spigot", label: "Spigot" }, { id: "bukkit", label: "Bukkit" }, { id: "folia", label: "Folia" }],
 };
 
 function errorText(error: unknown) { return error instanceof Error ? error.message : String(error); }
 
-export function PackagesPanel({ profileId, remote, canInstall }: { profileId: string; remote: boolean; canInstall: boolean }) {
-  const [kind, setKind] = useState<Kind>("mod");
-  const [loader, setLoader] = useState("fabric");
+export function PackagesPanel({ profileId, remote, canInstall, kind, software }: { profileId: string; remote: boolean; canInstall: boolean; kind: PackageKind; software?: string | null }) {
+  const fixedLoader = packageLoader(kind, software);
+  const availableLoaders = fixedLoader ? loaders[kind].filter((item) => item.id === fixedLoader) : loaders[kind];
+  const [loader, setLoader] = useState(fixedLoader ?? loaders[kind][0].id);
   const [gameVersion, setGameVersion] = useState("");
   const [query, setQuery] = useState("");
   const [projects, setProjects] = useState<Project[]>([]);
@@ -59,19 +61,6 @@ export function PackagesPanel({ profileId, remote, canInstall }: { profileId: st
     void refreshInstalled(active);
     return () => { active = false; };
   }, [profileId, remote, folder]);
-
-  function changeKind(next: Kind) {
-    setKind(next);
-    setLoader(loaders[next][0].id);
-    setProjects([]);
-    setHasSearched(false);
-    versionRequest.current += 1;
-    setSelectedProject(null);
-    setVersions([]);
-    setSelectedVersionId("");
-    setError(null);
-    setMessage(null);
-  }
 
   function changeCompatibility(nextVersion: string, nextLoader: string) {
     setGameVersion(nextVersion);
@@ -133,14 +122,10 @@ export function PackagesPanel({ profileId, remote, canInstall }: { profileId: st
 
   const selectedVersion = versions.find((version) => version.id === selectedVersionId);
 
-  return <section className="packages-panel" aria-label="Mods and plugins">
+  return <section className="packages-panel" aria-label={kind === "mod" ? "Mods" : "Plugins"}>
     <header className="packages-header">
-      <div><h2>Mods & plugins</h2><p>Browse compatible Modrinth releases and install them into this server.</p></div>
+      <div><h2>{kind === "mod" ? "Mods" : "Plugins"}</h2><p>Browse compatible Modrinth releases and install them into this server.</p></div>
     </header>
-    <div className="packages-kind" aria-label="Package type">
-      <button type="button" className={`button ${kind === "mod" ? "button-primary" : "button-secondary"}`} aria-pressed={kind === "mod"} onClick={() => changeKind("mod")} disabled={busy || searching}>Mods</button>
-      <button type="button" className={`button ${kind === "plugin" ? "button-primary" : "button-secondary"}`} aria-pressed={kind === "plugin"} onClick={() => changeKind("plugin")} disabled={busy || searching}>Plugins</button>
-    </div>
     <div className="packages-layout">
       <div className="packages-catalog">
         <h3>Find {kind === "mod" ? "a mod" : "a plugin"}</h3>
@@ -148,11 +133,13 @@ export function PackagesPanel({ profileId, remote, canInstall }: { profileId: st
         <form className="packages-search-form" onSubmit={(event) => void search(event)}>
           <label htmlFor="package-game-version">Minecraft version</label>
           <input id="package-game-version" value={gameVersion} onChange={(event) => changeCompatibility(event.target.value, loader)} placeholder="e.g. 1.21.11" required disabled={busy} />
-          <label htmlFor="package-loader">Server loader</label>
-          <Select value={loader} onValueChange={(value) => changeCompatibility(gameVersion, value ?? loaders[kind][0].id)} disabled={busy}>
-            <SelectTrigger id="package-loader"><SelectValue>{(value) => loaders[kind].find((item) => item.id === value)?.label ?? "Choose loader"}</SelectValue></SelectTrigger>
-            <SelectContent>{loaders[kind].map((item) => <SelectItem key={item.id} value={item.id}>{item.label}</SelectItem>)}</SelectContent>
-          </Select>
+          {fixedLoader ? <div className="packages-fixed-loader"><span>Server loader</span><strong>{availableLoaders[0]?.label ?? fixedLoader}</strong></div> : <>
+            <label htmlFor="package-loader">Server loader</label>
+            <Select value={loader} onValueChange={(value) => changeCompatibility(gameVersion, value ?? availableLoaders[0].id)} disabled={busy}>
+              <SelectTrigger id="package-loader"><SelectValue>{(value) => loaders[kind].find((item) => item.id === value)?.label ?? "Choose loader"}</SelectValue></SelectTrigger>
+              <SelectContent>{availableLoaders.map((item) => <SelectItem key={item.id} value={item.id}>{item.label}</SelectItem>)}</SelectContent>
+            </Select>
+          </>}
           <label htmlFor="package-query">Search Modrinth</label>
           <div className="packages-query"><input id="package-query" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={kind === "mod" ? "Search mods" : "Search plugins"} minLength={2} maxLength={100} required disabled={busy} /><button className="button button-primary" type="submit" disabled={searching || busy}><Search size={15} aria-hidden="true" /> {searching ? "Searching…" : "Search"}</button></div>
         </form>

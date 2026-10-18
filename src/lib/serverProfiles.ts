@@ -20,6 +20,7 @@ export interface ServerProfile {
   id: string;
   name: string;
   target: ServerTarget;
+  installedSoftware?: string | null;
 }
 
 export const serverProfiles = {

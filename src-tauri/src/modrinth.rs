@@ -357,6 +357,20 @@ pub async fn install_modrinth_version(
         .find(|profile| profile.id == profile_id)
         .ok_or("Server profile was not found.")?;
     profile.target.validate()?;
+    if let Some(software) = profile.installed_software.as_deref() {
+        let supported_loader = if let Some(variant) = software.strip_prefix("arclight-") {
+            if kind == "plugin" { Some("bukkit") } else { Some(variant) }
+        } else if kind == "mod" && matches!(software, "fabric" | "quilt" | "forge" | "neoforge") {
+            Some(software)
+        } else if kind == "plugin" && matches!(software, "paper" | "purpur" | "spigot" | "bukkit" | "folia") {
+            Some(software)
+        } else {
+            None
+        };
+        if supported_loader != Some(loader.as_str()) {
+            return Err("This package type is not supported by the installed server software.".into());
+        }
+    }
     if matches!(profile.target, ServerTarget::Local { .. })
         && !matches!(
             local_sessions.status(profile_id)?.state,
