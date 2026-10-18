@@ -1,4 +1,5 @@
 mod remote_ssh;
+mod java_runtime;
 mod server_files;
 mod server_profiles;
 mod server_sessions;
