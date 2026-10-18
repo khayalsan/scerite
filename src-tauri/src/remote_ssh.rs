@@ -27,9 +27,11 @@ use tokio::{
 };
 use uuid::Uuid;
 
+use crate::eula;
 use crate::server_profiles::{
     LocalLaunchConfig, ServerEnvironment, ServerProfile, ServerProfileStore, ServerTarget,
 };
+use crate::java_runtime::JavaPackage;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_FILE_BYTES: u64 = 1024 * 1024;
@@ -243,7 +245,9 @@ pub async fn start_remote_server(
     remote_sessions: State<'_, Arc<RemoteSessionManager>>,
 ) -> Result<RemoteServerStatus, String> {
     let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
-    run_remote(profile, environment, Arc::clone(remote_sessions.inner()), |session, profile| {
+    let auto_accept_eula = profiles.auto_accept_eula()?;
+    let environment_root = environment.root_directory.clone();
+    run_remote(profile, environment, Arc::clone(remote_sessions.inner()), move |session, profile| {
         let ServerTarget::Remote { directory, launch, .. } = &profile.target else {
             return Err("Remote server controls are only available for remote profiles.".into());
         };
@@ -262,7 +266,22 @@ pub async fn start_remote_server(
         if remote_directory_has_java_process(session, &root)? {
             return Err("A Java process is already using the remote server folder outside scerite. Stop it there before starting this profile.".into());
         }
-        let command = launch_command(launch);
+        if auto_accept_eula {
+            enable_remote_eula(session, &root)?;
+        }
+        let managed_java = if let Some(java) = launch.managed_java.as_deref() {
+            let runtime_root = remote_root(session, &environment_root)?;
+            let actual = session.sftp()?.realpath(Path::new(java))?;
+            if !Path::new(&actual).starts_with(Path::new(&runtime_root).join("runtimes/java")) {
+                return Err("The managed Java executable is outside the configured runtime folder.".into());
+            }
+            let usable = execute(session, &format!("test -x {}", shell_quote(&actual)))?;
+            if usable.exit_code != 0 {
+                return Err("The managed Java executable is missing or is not executable.".into());
+            }
+            Some(actual)
+        } else { None };
+        let command = launch_command(launch, managed_java.as_deref());
         let tmux_command = format!(
             "tmux new-session -d -s {} -c {} {}",
             shell_quote(&session_name(profile.id)),
@@ -424,6 +443,62 @@ pub async fn list_remote_server_files(
         entries.sort_by(|left, right| right.directory.cmp(&left.directory).then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase())));
         Ok(entries)
     })
+    .await
+}
+
+#[tauri::command]
+pub async fn list_remote_worlds(
+    profile_id: Uuid,
+    profiles: State<'_, ServerProfileStore>,
+    remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<Vec<RemoteServerFileEntry>, String> {
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    run_remote(
+        profile,
+        environment,
+        Arc::clone(remote_sessions.inner()),
+        move |session, profile| {
+            let sftp = session
+                .sftp()
+                .map_err(|error| format!("Could not open SFTP: {error}"))?;
+            let root = remote_root_with_sftp(&sftp, configured_remote_root(profile)?)?;
+            let entries = sftp
+                .read_dir(Path::new(&root))
+                .map_err(|error| format!("Could not list remote worlds: {error}"))?;
+            if entries.len() > MAX_DIRECTORY_ENTRIES {
+                return Err(format!(
+                    "The server folder has more than {MAX_DIRECTORY_ENTRIES} entries."
+                ));
+            }
+            let mut worlds = Vec::new();
+            for (name, attributes) in entries {
+                if attributes.file_type() != FileType::Dir
+                    || name.is_empty()
+                    || name == "."
+                    || name == ".."
+                    || name.contains('/')
+                    || name.chars().any(char::is_control)
+                {
+                    continue;
+                }
+                let level_path = format!("{root}/{name}/level.dat");
+                if !sftp
+                    .lstat(Path::new(&level_path))
+                    .is_ok_and(|metadata| metadata.file_type() == FileType::File)
+                {
+                    continue;
+                }
+                worlds.push(RemoteServerFileEntry {
+                    path: name.clone(),
+                    name,
+                    directory: true,
+                    size: 0,
+                });
+            }
+            worlds.sort_by_key(|world| world.name.to_lowercase());
+            Ok(worlds)
+        },
+    )
     .await
 }
 
@@ -905,6 +980,41 @@ impl RemoteConnection {
 }
 
 impl RemoteSftp {
+    fn upload_file_exclusive(&self, path: &Path, source: &Path) -> Result<(), String> {
+        let path = path.to_string_lossy().to_string();
+        self.runtime.block_on(async {
+            let mut attrs = FileAttributes::empty();
+            attrs.set_regular(true);
+            attrs.permissions = Some(0o100600);
+            let mut remote = self
+                .inner
+                .open_with_flags_and_attributes(
+                    path,
+                    OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::EXCLUDE,
+                    attrs,
+                )
+                .await
+                .map_err(|error| error.to_string())?;
+            let mut local = tokio::fs::File::open(source)
+                .await
+                .map_err(|error| error.to_string())?;
+            let mut buffer = [0_u8; 65536];
+            loop {
+                let count = local
+                    .read(&mut buffer)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                if count == 0 {
+                    break;
+                }
+                remote
+                    .write_all(&buffer[..count])
+                    .await
+                    .map_err(|error| error.to_string())?;
+            }
+            remote.close().await.map_err(|error| error.to_string())
+        })
+    }
     fn realpath(&self, path: &Path) -> Result<String, String> {
         self.runtime
             .block_on(self.inner.canonicalize(path.to_string_lossy().to_string()))
@@ -1042,6 +1152,372 @@ impl RemoteSftp {
     }
 }
 
+pub(crate) async fn install_remote_jar(
+    profile: ServerProfile,
+    environment: ServerEnvironment,
+    sessions: Arc<RemoteSessionManager>,
+    directory: String,
+    source: PathBuf,
+    version: String,
+    sha1: String,
+    cache_kind: String,
+    filename: String,
+) -> Result<(), String> {
+    run_remote(profile, environment.clone(), sessions, move |session, profile| {
+        let sftp = session.sftp()?;
+        let root = remote_root_with_sftp(&sftp, &environment.root_directory)?;
+        if remote_is_running(session, profile)? == Some(true) {
+            return Err("Stop this server before installing a version.".into());
+        }
+        let tools = execute(session, "command -v sha1sum >/dev/null && command -v cp >/dev/null && command -v ln >/dev/null")?;
+        if tools.exit_code != 0 {
+            return Err("Remote installation needs sha1sum, cp, and ln on the Linux host.".into());
+        }
+        let servers = format!("{root}/servers");
+        let created = execute(session, &format!("mkdir -p -- {}", shell_quote(&servers)))?;
+        if created.exit_code != 0 { return Err(remote_command_error("Could not create remote servers folder", created)); }
+        let servers = remote_root_with_sftp(&sftp, &servers)?;
+        if Path::new(&servers).parent() != Some(Path::new(&root)) {
+            return Err("The remote servers folder resolves outside the configured Minecraft root.".into());
+        }
+        let requested = Path::new(&directory);
+        let parent = requested.parent().ok_or_else(|| "Set an absolute remote server folder.".to_owned())?;
+        let parent = remote_root_with_sftp(&sftp, &parent.to_string_lossy())?;
+        if parent != servers { return Err("The server folder must be directly inside this environment's Minecraft root/servers folder.".into()); }
+        let target = match remote_root_with_sftp(&sftp, &directory) {
+            Ok(target) => target,
+            Err(_) => {
+                let create = execute(session, &format!("mkdir -- {}", shell_quote(&directory)))?;
+                if create.exit_code != 0 { return Err(remote_command_error("Could not create remote server folder", create)); }
+                remote_root_with_sftp(&sftp, &directory)?
+            }
+        };
+        if Path::new(&target).parent() != Some(Path::new(&servers)) {
+            return Err("The server folder must be directly inside this environment's Minecraft root/servers folder.".into());
+        }
+        if remote_directory_has_java_process(session, &target)? {
+            return Err("Stop this server before installing a version.".into());
+        }
+        let destination = format!("{target}/{filename}");
+        let absent = execute(session, &format!("test ! -e {} && test ! -L {}", shell_quote(&destination), shell_quote(&destination)))?;
+        if absent.exit_code != 0 { return Err(format!("{filename} already exists. Existing server files are not overwritten.")); }
+        let cache_dir = format!("{root}/cache/{cache_kind}/{version}");
+        let created = execute(session, &format!("mkdir -p -- {}", shell_quote(&cache_dir)))?;
+        if created.exit_code != 0 { return Err(remote_command_error("Could not create remote Minecraft cache", created)); }
+        let canonical_cache = remote_root_with_sftp(&sftp, &cache_dir)?;
+        if !canonical_cache.starts_with(&format!("{root}/cache/")) {
+            return Err("The remote cache resolves outside the configured Minecraft root.".into());
+        }
+        let cached = format!("{canonical_cache}/{filename}");
+        let cached_exists = execute(session, &format!("test -e {} || test -L {}", shell_quote(&cached), shell_quote(&cached)))?;
+        if cached_exists.exit_code == 0 {
+            let hash = execute(session, &format!("test ! -L {} && sha1sum -- {}", shell_quote(&cached), shell_quote(&cached)))?;
+            if hash.exit_code != 0 || !String::from_utf8_lossy(&hash.stdout).starts_with(&sha1) {
+                return Err("The remote cached jar has a different checksum. Remove that cache file before retrying.".into());
+            }
+        } else {
+            let upload = format!("{canonical_cache}/.servercrafter-{}.tmp", Uuid::new_v4());
+            let result = (|| {
+                sftp.upload_file_exclusive(Path::new(&upload), &source)
+                    .map_err(|error| format!("Could not upload server jar: {error}"))?;
+                let hash = execute(session, &format!("sha1sum -- {}", shell_quote(&upload)))?;
+                if hash.exit_code != 0 || !String::from_utf8_lossy(&hash.stdout).starts_with(&sha1) {
+                return Err("The uploaded server jar did not match the downloaded file.".into());
+                }
+                let link = execute(session, &format!("ln -- {} {}", shell_quote(&upload), shell_quote(&cached)))?;
+                if link.exit_code != 0 { return Err(remote_command_error("Could not cache remote server jar", link)); }
+                Ok(())
+            })();
+            let _ = sftp.unlink(Path::new(&upload));
+            result?;
+        }
+        let temporary = format!("{target}/.servercrafter-{}.tmp", Uuid::new_v4());
+        let install = (|| {
+            let copy = execute(session, &format!("cp -- {} {}", shell_quote(&cached), shell_quote(&temporary)))?;
+            if copy.exit_code != 0 { return Err(remote_command_error("Could not copy cached jar into server folder", copy)); }
+            let link = execute(session, &format!("ln -- {} {}", shell_quote(&temporary), shell_quote(&destination)))?;
+            if link.exit_code != 0 { return Err(remote_command_error("Could not install server.jar", link)); }
+            Ok(())
+        })();
+        let _ = sftp.unlink(Path::new(&temporary));
+        install?;
+        Ok(())
+    }).await
+}
+
+pub(crate) async fn install_remote_loader(
+    profile: ServerProfile,
+    environment: ServerEnvironment,
+    sessions: Arc<RemoteSessionManager>,
+    directory: String,
+    source: PathBuf,
+    loader: String,
+    version: String,
+    build: String,
+    quilt_loader: Option<String>,
+    java: String,
+    sha1: String,
+) -> Result<(), String> {
+    run_remote(profile, environment.clone(), sessions, move |session, profile| {
+        let sftp = session.sftp()?;
+        let root = remote_root_with_sftp(&sftp, &environment.root_directory)?;
+        if remote_is_running(session, profile)? == Some(true) {
+            return Err("Stop this server before installing software.".into());
+        }
+        let servers = format!("{root}/servers");
+        let created = execute(session, &format!("mkdir -p -- {}", shell_quote(&servers)))?;
+        if created.exit_code != 0 { return Err(remote_command_error("Could not create servers folder", created)); }
+        let servers = remote_root_with_sftp(&sftp, &servers)?;
+        if Path::new(&servers).parent() != Some(Path::new(&root)) {
+            return Err("The servers folder resolves outside the Minecraft root.".into());
+        }
+        let requested = Path::new(&directory);
+        let parent = requested.parent().ok_or("Set an absolute remote server folder.")?;
+        let parent = remote_root_with_sftp(&sftp, &parent.to_string_lossy())?;
+        if parent != servers { return Err("The server folder must be directly inside the Minecraft root/servers folder.".into()); }
+        let target = match remote_root_with_sftp(&sftp, &directory) {
+            Ok(target) => target,
+            Err(_) => {
+                let created = execute(session, &format!("mkdir -- {}", shell_quote(&directory)))?;
+                if created.exit_code != 0 { return Err(remote_command_error("Could not create server folder", created)); }
+                remote_root_with_sftp(&sftp, &directory)?
+            }
+        };
+        if Path::new(&target).parent() != Some(Path::new(&servers)) {
+            return Err("The server folder must be directly inside the Minecraft root/servers folder.".into());
+        }
+        if remote_directory_has_java_process(session, &target)? {
+            return Err("Stop this server before installing software.".into());
+        }
+        if sftp.read_dir(Path::new(&target))?.iter().any(|(name, _)| name != "." && name != "..") {
+            return Err("Forge, NeoForge, and Quilt installers require an empty server folder. Existing files were not changed.".into());
+        }
+        let cache = format!("{root}/cache/{loader}/{version}/{build}");
+        let created = execute(session, &format!("mkdir -p -- {}", shell_quote(&cache)))?;
+        if created.exit_code != 0 { return Err(remote_command_error("Could not create loader cache", created)); }
+        let cache = remote_root_with_sftp(&sftp, &cache)?;
+        if !cache.starts_with(&format!("{root}/cache/")) { return Err("The loader cache resolves outside the Minecraft root.".into()); }
+        let installer = format!("{cache}/installer.jar");
+        match sftp.lstat(Path::new(&installer)) {
+            Ok(stat) if stat.file_type() != FileType::File => return Err("The cached installer is not a regular file.".into()),
+            Ok(_) => {
+                let hash = execute(session, &format!("sha1sum -- {}", shell_quote(&installer)))?;
+                if hash.exit_code != 0 || !String::from_utf8_lossy(&hash.stdout).starts_with(&sha1) {
+                    return Err("The cached installer has a different checksum. Remove it before retrying.".into());
+                }
+            }
+            Err(_) => {
+                sftp.upload_file_exclusive(Path::new(&installer), &source)
+                    .map_err(|error| format!("Could not upload loader installer: {error}"))?;
+                let hash = execute(session, &format!("sha1sum -- {}", shell_quote(&installer)))?;
+                if hash.exit_code != 0 || !String::from_utf8_lossy(&hash.stdout).starts_with(&sha1) {
+                    return Err("The uploaded loader installer failed its checksum check.".into());
+                }
+            }
+        }
+        let args = if loader == "quilt" {
+            format!("install server {} {} --download-server {}", shell_quote(&version), shell_quote(quilt_loader.as_deref().ok_or("Quilt loader version is missing.")?), shell_quote("--install-dir=\".\""))
+        } else {
+            "--installServer".to_owned()
+        };
+        let log = format!("{target}/.servercrafter-install.log");
+        let command = format!("cd {} && {} -jar {} {} > {} 2>&1", shell_quote(&target), shell_quote(&java), shell_quote(&installer), args, shell_quote(&log));
+        let installed = execute(session, &command)?;
+        if installed.exit_code != 0 {
+            let tail = execute(session, &format!("tail -n 30 -- {}", shell_quote(&log)))?;
+            let detail = String::from_utf8_lossy(&tail.stdout);
+            return Err(format!("{loader} installer failed. {} See {log} for details.", detail.chars().take(2000).collect::<String>()));
+        }
+        let expected = if loader == "quilt" {
+            format!("{target}/quilt-server-launch.jar")
+        } else {
+            let family = if loader == "forge" { "net/minecraftforge/forge" } else { "net/neoforged/neoforge" };
+            format!("{target}/libraries/{family}/{build}/unix_args.txt")
+        };
+        if !sftp.lstat(Path::new(&expected)).is_ok_and(|stat| stat.file_type() == FileType::File) {
+            return Err(format!("{loader} installer finished without creating its launch files. See {log} for details."));
+        }
+        let _ = sftp.unlink(Path::new(&log));
+        Ok(())
+    }).await
+}
+
+pub(crate) async fn remote_java_arch(
+    profile: ServerProfile,
+    environment: ServerEnvironment,
+    sessions: Arc<RemoteSessionManager>,
+) -> Result<&'static str, String> {
+    run_remote(profile, environment, sessions, |session, profile| {
+        if remote_is_running(session, profile)? == Some(true) {
+            return Err("Stop this server before installing a version.".into());
+        }
+        if let ServerTarget::Remote { directory, .. } = &profile.target {
+            if !directory.is_empty() {
+                let present = execute(session, &format!("test -d {}", shell_quote(directory)))?;
+                if present.exit_code == 0 {
+                    let root = remote_root(session, directory)?;
+                    if remote_directory_has_java_process(session, &root)? {
+                        return Err("Stop this server before installing a version.".into());
+                    }
+                }
+            }
+        }
+        let result = execute(session, "uname -m")?;
+        if result.exit_code != 0 { return Err(remote_command_error("Could not detect remote CPU architecture", result)); }
+        match String::from_utf8_lossy(&result.stdout).trim() {
+            "x86_64" | "amd64" => Ok("x64"),
+            "aarch64" | "arm64" => Ok("aarch64"),
+            _ => Err("This remote CPU architecture has no managed Temurin JDK build.".into()),
+        }
+    }).await
+}
+
+fn remote_java_paths(session: &RemoteConnection, environment: &ServerEnvironment, package: &JavaPackage) -> Result<(String, String, String), String> {
+    let root = remote_root(session, &environment.root_directory)?;
+    let parent = format!("{root}/runtimes/java/{}/{}", package.major, package.platform);
+    let runtime = format!("{parent}/{}", package.build);
+    let java = format!("{runtime}/bin/java");
+    Ok((root, runtime, java))
+}
+
+fn ensure_remote_managed_dirs(session: &RemoteConnection, sftp: &RemoteSftp, root: &str, parts: &[&str]) -> Result<String, String> {
+    let mut current = root.to_owned();
+    for part in parts {
+        if part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_')) {
+            return Err("The remote Java folder name is invalid.".into());
+        }
+        let candidate = format!("{current}/{part}");
+        let exists = execute(session, &format!("test -e {} || test -L {}", shell_quote(&candidate), shell_quote(&candidate)))?;
+        if exists.exit_code == 0 {
+            let attrs = sftp.lstat(Path::new(&candidate))?;
+            if attrs.file_type() != FileType::Dir { return Err("A remote managed Java folder is a file or symbolic link.".into()); }
+        } else {
+            let create = execute(session, &format!("mkdir -- {}", shell_quote(&candidate)))?;
+            if create.exit_code != 0 { return Err(remote_command_error("Could not create remote Java folder", create)); }
+        }
+        let canonical = remote_root_with_sftp(sftp, &candidate)?;
+        if Path::new(&canonical).parent() != Some(Path::new(&current)) {
+            return Err("A remote Java folder resolves outside the configured Minecraft root.".into());
+        }
+        current = canonical;
+    }
+    Ok(current)
+}
+
+fn existing_remote_java(session: &RemoteConnection, environment: &ServerEnvironment, package: &JavaPackage) -> Result<Option<String>, String> {
+    let (root, runtime, java) = remote_java_paths(session, environment, package)?;
+    let exists = execute(session, &format!("test -e {} || test -L {}", shell_quote(&runtime), shell_quote(&runtime)))?;
+    if exists.exit_code != 0 { return Ok(None); }
+    let canonical = remote_root(session, &runtime)?;
+    if !canonical.starts_with(&format!("{root}/runtimes/java/")) {
+        return Err("The remote Java runtime resolves outside the configured Minecraft root.".into());
+    }
+    let usable = execute(session, &format!("test -x {}", shell_quote(&java)))?;
+    if usable.exit_code != 0 { return Err("The managed remote JDK folder exists but its Java executable is missing. Remove that incomplete folder before retrying.".into()); }
+    let actual_java = session.sftp()?.realpath(Path::new(&java))?;
+    if !actual_java.starts_with(&format!("{canonical}/")) {
+        return Err("The managed remote Java executable resolves outside its runtime folder.".into());
+    }
+    Ok(Some(java))
+}
+
+pub(crate) async fn remote_java_status(
+    profile: ServerProfile,
+    environment: ServerEnvironment,
+    sessions: Arc<RemoteSessionManager>,
+    package: JavaPackage,
+) -> Result<Option<String>, String> {
+    run_remote(profile, environment.clone(), sessions, move |session, _| {
+        let root = remote_root(session, &environment.root_directory)?;
+        remove_legacy_remote_java_cache(session, &root)?;
+        existing_remote_java(session, &environment, &package)
+    }).await
+}
+
+fn remove_legacy_remote_java_cache(session: &RemoteConnection, root: &str) -> Result<(), String> {
+    let sftp = session.sftp()?;
+    let cache = format!("{}/cache", root.trim_end_matches('/'));
+    let java_cache = format!("{cache}/java");
+    for path in [&cache, &java_cache] {
+        let exists = execute(session, &format!("test -e {} || test -L {}", shell_quote(path), shell_quote(path)))?;
+        if exists.exit_code != 0 {
+            return Ok(());
+        }
+        let metadata = sftp.lstat(Path::new(path))?;
+        if metadata.file_type() != FileType::Dir {
+            return Err("The old remote Java cache contains a symbolic link or non-folder path. Remove it manually.".into());
+        }
+        let canonical = remote_root_with_sftp(&sftp, path)?;
+        if canonical != *path {
+            return Err("The old remote Java cache resolves outside the configured Minecraft root.".into());
+        }
+    }
+    let removed = execute(session, &format!("rm -rf -- {}", shell_quote(&java_cache)))?;
+    if removed.exit_code != 0 {
+        return Err(remote_command_error("Could not remove the old remote Java cache", removed));
+    }
+    Ok(())
+}
+
+pub(crate) async fn install_remote_java(
+    profile: ServerProfile,
+    environment: ServerEnvironment,
+    sessions: Arc<RemoteSessionManager>,
+    package: JavaPackage,
+    source: PathBuf,
+    top: String,
+) -> Result<String, String> {
+    run_remote(profile, environment.clone(), sessions, move |session, _| {
+        if let Some(java) = existing_remote_java(session, &environment, &package)? { return Ok(java); }
+        let tools = execute(session, "command -v sha256sum >/dev/null && command -v tar >/dev/null && command -v mv >/dev/null && command -v rm >/dev/null")?;
+        if tools.exit_code != 0 { return Err("Remote Java installation needs sha256sum, tar, mv, and rm on the Linux host.".into()); }
+        let (root, runtime, java) = remote_java_paths(session, &environment, &package)?;
+        let sftp = session.sftp()?;
+        let major = package.major.to_string();
+        let canonical_parent = ensure_remote_managed_dirs(session, &sftp, &root, &["runtimes", "java", &major, &package.platform])?;
+        if !canonical_parent.starts_with(&format!("{root}/runtimes/java/")) {
+            return Err("The remote Java folder resolves outside the configured Minecraft root.".into());
+        }
+        let upload = format!("{canonical_parent}/.servercrafter-{}-jdk.tar.gz", Uuid::new_v4());
+        let result = (|| {
+            sftp.upload_file_exclusive(Path::new(&upload), &source).map_err(|error| format!("Could not upload JDK archive: {error}"))?;
+            let hash = execute(session, &format!("sha256sum -- {}", shell_quote(&upload)))?;
+            if hash.exit_code != 0 || !String::from_utf8_lossy(&hash.stdout).starts_with(&package.sha256) {
+                return Err("The uploaded JDK archive did not match Adoptium's SHA-256 checksum.".into());
+            }
+            let staging = format!("{canonical_parent}/.servercrafter-{}.tmp", Uuid::new_v4());
+            let create = execute(session, &format!("mkdir -- {}", shell_quote(&staging)))?;
+            if create.exit_code != 0 { return Err(remote_command_error("Could not stage remote JDK", create)); }
+            let staged_result = (|| {
+                let staged = remote_root_with_sftp(&sftp, &staging)?;
+                if Path::new(&staged).parent() != Some(Path::new(&canonical_parent)) {
+                    return Err("The remote JDK staging folder resolves outside the managed runtime folder.".into());
+                }
+                let extract = execute(session, &format!("tar -xzf {} -C {}", shell_quote(&upload), shell_quote(&staging)))?;
+                if extract.exit_code != 0 { return Err(remote_command_error("Could not extract remote JDK", extract)); }
+                let extracted = format!("{staging}/{top}");
+                let candidate = format!("{extracted}/bin/java");
+                let verify = execute(session, &format!("test -x {} && test ! -e {} && test ! -L {}", shell_quote(&candidate), shell_quote(&runtime), shell_quote(&runtime)))?;
+                if verify.exit_code != 0 { return Err("The remote JDK archive is missing Java or the runtime folder already exists.".into()); }
+                let move_result = execute(session, &format!("mv -T -- {} {}", shell_quote(&extracted), shell_quote(&runtime)))?;
+                if move_result.exit_code != 0 { return Err(remote_command_error("Could not finish installing remote JDK", move_result)); }
+                Ok(())
+            })();
+            let cleanup = execute(session, &format!("rm -rf -- {}", shell_quote(&staging)));
+            staged_result?;
+            let cleanup = cleanup?;
+            if cleanup.exit_code != 0 {
+                return Err(remote_command_error("Could not remove remote JDK staging files", cleanup));
+            }
+            Ok(())
+        })();
+        let cleanup = sftp.unlink(Path::new(&upload));
+        result?;
+        cleanup.map_err(|error| format!("Java was installed, but its temporary remote archive could not be removed: {error}"))?;
+        Ok(java)
+    }).await
+}
+
 struct RemoteCommandOutput {
     stdout: Vec<u8>,
     stderr: Vec<u8>,
@@ -1057,13 +1533,61 @@ fn remote_command_error(context: &str, output: RemoteCommandOutput) -> String {
     }
 }
 
-fn launch_command(launch: &LocalLaunchConfig) -> String {
+fn enable_remote_eula(session: &RemoteConnection, root: &str) -> Result<(), String> {
+    let sftp = session.sftp()?;
+    let path = format!("{}/eula.txt", root.trim_end_matches('/'));
+    let exists = execute(session, &format!("test -e {} || test -L {}", shell_quote(&path), shell_quote(&path)))?;
+    let current = if exists.exit_code == 0 {
+        let metadata = sftp.lstat(Path::new(&path))?;
+        if metadata.file_type() != FileType::File {
+            return Err("Remote eula.txt must be a regular file, not a symbolic link.".into());
+        }
+        if metadata.size.unwrap_or(0) > eula::MAX_EULA_BYTES {
+            return Err("Remote eula.txt is unexpectedly large and was not changed.".into());
+        }
+        let bytes = sftp.read_file(Path::new(&path))?;
+        if bytes.len() as u64 > eula::MAX_EULA_BYTES {
+            return Err("Remote eula.txt is unexpectedly large and was not changed.".into());
+        }
+        Some(String::from_utf8(bytes)
+            .map_err(|_| "Remote eula.txt is not UTF-8 text and was not changed.".to_owned())?)
+    } else {
+        None
+    };
+    let Some(updated) = eula::enabled_content(current.as_deref()) else {
+        return Ok(());
+    };
+    let temporary = format!("{}/.servercrafter-{}.tmp", root.trim_end_matches('/'), Uuid::new_v4());
+    if let Err(error) = sftp.write_file_exclusive(Path::new(&temporary), updated.as_bytes()) {
+        let _ = sftp.unlink(Path::new(&temporary));
+        return Err(format!("Could not prepare remote eula.txt: {error}"));
+    }
+    let result = if current.is_some() {
+        sftp.posix_rename(Path::new(&temporary), Path::new(&path))
+    } else {
+        sftp.rename(Path::new(&temporary), Path::new(&path))
+    };
+    if let Err(error) = result {
+        let _ = sftp.unlink(Path::new(&temporary));
+        return Err(format!("Could not enable remote eula.txt: {error}"));
+    }
+    Ok(())
+}
+
+fn launch_command(launch: &LocalLaunchConfig, managed_java: Option<&str>) -> String {
     let command = std::iter::once(launch.executable.trim())
         .chain(launch.arguments.iter().map(String::as_str))
         .map(shell_quote)
         .collect::<Vec<_>>()
         .join(" ");
-    format!("exec {command}")
+    if let Some(java) = managed_java {
+        let bin = Path::new(java).parent().expect("validated Java has a bin folder");
+        let home = bin.parent().expect("validated Java has a runtime folder");
+        format!("export JAVA_HOME={}; export PATH={}:\"$PATH\"; exec {command}",
+            shell_quote(&home.to_string_lossy()), shell_quote(&bin.to_string_lossy()))
+    } else {
+        format!("exec {command}")
+    }
 }
 
 fn shell_quote(value: &str) -> String {

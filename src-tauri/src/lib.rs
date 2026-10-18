@@ -1,7 +1,11 @@
 mod remote_ssh;
+mod eula;
+mod java_runtime;
 mod server_files;
 mod server_profiles;
 mod server_sessions;
+mod vanilla_install;
+mod software_install;
 
 use server_profiles::{ServerProfileStore, commands};
 use server_sessions::{LocalSessionManager, commands as session_commands};
@@ -30,6 +34,14 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            vanilla_install::list_vanilla_versions,
+            vanilla_install::install_vanilla_version,
+            software_install::install_server_software,
+            vanilla_install::use_managed_java,
+            commands::get_local_install_root,
+            commands::get_auto_accept_eula,
+            commands::set_auto_accept_eula,
+            commands::set_local_install_root,
             commands::list_server_environments,
             commands::create_server_environment,
             commands::update_server_environment,
@@ -44,6 +56,7 @@ pub fn run() {
             session_commands::local_server_console,
             session_commands::send_local_console_input,
             server_files::list_local_server_files,
+            server_files::list_local_worlds,
             server_files::read_local_server_file,
             server_files::write_local_server_file,
             remote_ssh::test_remote_connection,
@@ -54,6 +67,7 @@ pub fn run() {
             remote_ssh::remote_server_console,
             remote_ssh::send_remote_console_input,
             remote_ssh::list_remote_server_files,
+            remote_ssh::list_remote_worlds,
             remote_ssh::read_remote_server_file,
             remote_ssh::write_remote_server_file,
         ])

@@ -3,13 +3,15 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type { FormEvent } from "react";
-import { ArrowLeft, FileKey, FolderOpen, HardDrive, Network, Palette, Plus, Settings, SlidersHorizontal, Terminal, X } from "lucide-react";
-import { serverEnvironments, serverProfiles } from "./lib/serverProfiles";
+import { ArrowLeft, Download, FileKey, FolderOpen, Globe2, HardDrive, Network, Palette, Plus, Settings, SlidersHorizontal, Terminal, X } from "lucide-react";
+import { appSettings, localInstallRoot, serverEnvironments, serverProfiles } from "./lib/serverProfiles";
 import type { ServerEnvironment, ServerProfile, ServerTarget } from "./lib/serverProfiles";
 import { serverSessions } from "./lib/serverSessions";
 import type { LocalServerStatus, RemoteServerStatus } from "./lib/serverSessions";
 import { LocalFilesPanel } from "./components/LocalFilesPanel";
+import { WorldsPanel } from "./components/WorldsPanel";
 import { ServerPropertiesPanel } from "./components/ServerPropertiesPanel";
+import { ServerInstallPanel } from "./components/ServerInstallPanel";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select";
 import "./App.css";
 
@@ -24,6 +26,7 @@ type ProfileDraft = {
 
 type EnvironmentDraft = {
   name: string;
+  rootDirectory: string;
   host: string;
   port: string;
   username: string;
@@ -52,7 +55,7 @@ function readSavedTheme(): ThemeId {
   }
 }
 
-type ServerTab = "console" | "files" | "properties" | "settings";
+type ServerTab = "console" | "files" | "worlds" | "properties" | "install" | "settings";
 
 const emptyDraft: ProfileDraft = {
   name: "",
@@ -65,6 +68,7 @@ const emptyDraft: ProfileDraft = {
 
 const emptyEnvironmentDraft: EnvironmentDraft = {
   name: "",
+  rootDirectory: "",
   host: "",
   port: "22",
   username: "",
@@ -101,8 +105,11 @@ function parseLaunchArguments(value: string): string[] {
   return launchArguments;
 }
 
-function targetFor(draft: ProfileDraft): ServerTarget {
+function targetFor(draft: ProfileDraft, previous?: ServerProfile): ServerTarget {
   const launchArguments = parseLaunchArguments(draft.arguments);
+  const managedJava = previous?.target.kind === draft.kind &&
+    (draft.kind === "local" || previous.target.kind === "remote" && previous.target.environmentId === draft.environmentId)
+    ? previous.target.launch.managedJava : undefined;
 
   if (draft.kind === "remote") {
     return {
@@ -112,6 +119,7 @@ function targetFor(draft: ProfileDraft): ServerTarget {
       launch: {
         executable: draft.executable.trim(),
         arguments: launchArguments,
+        managedJava,
       },
     };
   }
@@ -122,6 +130,7 @@ function targetFor(draft: ProfileDraft): ServerTarget {
     launch: {
       executable: draft.executable.trim(),
       arguments: launchArguments,
+      managedJava,
     },
   };
 }
@@ -159,6 +168,13 @@ function App() {
   const selectedProfileId = pathname.startsWith("/servers/") ? pathname.slice("/servers/".length) : null;
   const [profiles, setProfiles] = useState<ServerProfile[]>([]);
   const [environments, setEnvironments] = useState<ServerEnvironment[]>([]);
+  const [localRoot, setLocalRoot] = useState<string | null>(null);
+  const [autoAcceptEula, setAutoAcceptEula] = useState<boolean | null>(null);
+  const [eulaSettingError, setEulaSettingError] = useState<string | null>(null);
+  const [isSavingEulaSetting, setIsSavingEulaSetting] = useState(false);
+  const [localRootDraft, setLocalRootDraft] = useState("");
+  const [localRootError, setLocalRootError] = useState<string | null>(null);
+  const [isSavingLocalRoot, setIsSavingLocalRoot] = useState(false);
   const [environmentFilterId, setEnvironmentFilterId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -171,6 +187,7 @@ function App() {
   const [consoleProfileId, setConsoleProfileId] = useState<string | null>(null);
   const [filesProfileId, setFilesProfileId] = useState<string | null>(null);
   const [propertiesProfileId, setPropertiesProfileId] = useState<string | null>(null);
+  const [installProfileId, setInstallProfileId] = useState<string | null>(null);
   const [consoleOutput, setConsoleOutput] = useState("");
   const [consoleInput, setConsoleInput] = useState("");
   const consoleCursor = useRef(0);
@@ -219,12 +236,17 @@ function App() {
     setIsLoading(true);
     setLoadError(null);
     try {
-      const [savedProfiles, savedEnvironments] = await Promise.all([
+      const [savedProfiles, savedEnvironments, savedLocalRoot, savedAutoAcceptEula] = await Promise.all([
         serverProfiles.list(),
         serverEnvironments.list(),
+        localInstallRoot.get(),
+        appSettings.getAutoAcceptEula(),
       ]);
       setProfiles(savedProfiles);
       setEnvironments(savedEnvironments);
+      setLocalRoot(savedLocalRoot);
+      setAutoAcceptEula(savedAutoAcceptEula);
+      setLocalRootDraft(savedLocalRoot ?? "");
     } catch (error) {
       setLoadError(errorText(error));
     } finally {
@@ -337,6 +359,30 @@ function App() {
       if (typeof selected === "string") setDraft((current) => ({ ...current, directory: selected }));
     } catch (error) {
       setFormError(errorText(error));
+    }
+  }
+
+  async function selectLocalRoot() {
+    try {
+      const selected = await openDialog({ directory: true, multiple: false, title: "Choose local Minecraft root" });
+      if (typeof selected === "string") setLocalRootDraft(selected);
+    } catch (error) {
+      setLocalRootError(errorText(error));
+    }
+  }
+
+  async function saveLocalRoot(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setLocalRootError(null);
+    setIsSavingLocalRoot(true);
+    try {
+      const saved = await localInstallRoot.set(localRootDraft);
+      setLocalRoot(saved);
+      setLocalRootDraft(saved);
+    } catch (error) {
+      setLocalRootError(errorText(error));
+    } finally {
+      setIsSavingLocalRoot(false);
     }
   }
 
@@ -516,6 +562,7 @@ function App() {
     setEditingEnvironment(environment ?? null);
     setEnvironmentDraft(environment ? {
       name: environment.name,
+      rootDirectory: environment.rootDirectory,
       host: environment.host,
       port: String(environment.port),
       username: environment.username,
@@ -544,6 +591,7 @@ function App() {
         ? await serverEnvironments.update(
           editingEnvironment.id,
           environmentDraft.name,
+          environmentDraft.rootDirectory,
           environmentDraft.host,
           Number(environmentDraft.port),
           environmentDraft.username,
@@ -551,6 +599,7 @@ function App() {
         )
         : await serverEnvironments.create(
           environmentDraft.name,
+          environmentDraft.rootDirectory,
           environmentDraft.host,
           Number(environmentDraft.port),
           environmentDraft.username,
@@ -622,7 +671,7 @@ function App() {
 
     try {
       const saved = editingProfile
-        ? await serverProfiles.update(editingProfile.id, draft.name, targetFor(draft))
+        ? await serverProfiles.update(editingProfile.id, draft.name, targetFor(draft, editingProfile))
         : await serverProfiles.create(draft.name, targetFor(draft));
 
       setConnectedRemotes((current) => {
@@ -689,6 +738,11 @@ function App() {
           <label className="field field-wide">
             <span>Environment name</span>
             <input autoFocus maxLength={80} value={environmentDraft.name} onChange={(event) => setEnvironmentDraft({ ...environmentDraft, name: event.currentTarget.value })} placeholder="Production server" required />
+          </label>
+          <label className="field field-wide">
+            <span>Minecraft root folder</span>
+            <input value={environmentDraft.rootDirectory} onChange={(event) => setEnvironmentDraft({ ...environmentDraft, rootDirectory: event.currentTarget.value })} placeholder="/home/ubuntu/minecraft" required />
+            <small>Versions download to cache/minecraft under this folder. The folder must exist on the remote machine.</small>
           </label>
           <label className="field field-wide">
             <span>Host name or address</span>
@@ -966,8 +1020,14 @@ function App() {
               <button className={`server-tab${activeServerTab === "files" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "files" ? "page" : undefined} onClick={() => { setActiveServerTab("files"); if (filesProfileId !== selectedProfile.id) toggleFiles(selectedProfile); }}>
                 <FolderOpen size={16} aria-hidden="true" /> Files
               </button>
+              <button className={`server-tab${activeServerTab === "worlds" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "worlds" ? "page" : undefined} onClick={() => setActiveServerTab("worlds")}>
+                <Globe2 size={16} aria-hidden="true" /> Worlds
+              </button>
               <button className={`server-tab${activeServerTab === "properties" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "properties" ? "page" : undefined} onClick={() => { setActiveServerTab("properties"); setPropertiesProfileId(selectedProfile.id); }}>
                 <SlidersHorizontal size={16} aria-hidden="true" /> Properties
+              </button>
+              <button className={`server-tab${activeServerTab === "install" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "install" ? "page" : undefined} onClick={() => { setActiveServerTab("install"); setInstallProfileId(selectedProfile.id); }}>
+                <Download size={16} aria-hidden="true" /> Install
               </button>
               <button className={`server-tab${activeServerTab === "settings" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "settings" ? "page" : undefined} onClick={() => {
                 setActiveServerTab("settings");
@@ -1051,6 +1111,59 @@ function App() {
         {!selectedProfileId && isEnvironmentFormOpen && renderEnvironmentForm()}
         {!selectedProfileId && isFormOpen && !isEnvironmentFormOpen && renderProfileForm()}
 
+        {!selectedProfileId && (
+          <section className="app-settings-section" aria-labelledby="app-settings-title">
+            <div className="environment-section-heading">
+              <h2 id="app-settings-title">App settings</h2>
+            </div>
+            <label className="app-setting-row">
+              <span className="app-setting-copy">
+                <strong>Auto enable EULA</strong>
+                <small>Turn off if you really wanna read the EULA and accept before running the server</small>
+              </span>
+              <span className="property-switch">
+                <input
+                  type="checkbox"
+                  checked={autoAcceptEula ?? true}
+                  disabled={autoAcceptEula === null || isSavingEulaSetting}
+                  onChange={(event) => {
+                    const enabled = event.currentTarget.checked;
+                    setIsSavingEulaSetting(true);
+                    setEulaSettingError(null);
+                    void appSettings.setAutoAcceptEula(enabled).then(setAutoAcceptEula)
+                      .catch((error: unknown) => setEulaSettingError(errorText(error)))
+                      .finally(() => setIsSavingEulaSetting(false));
+                  }}
+                />
+                <span aria-hidden="true" />
+              </span>
+            </label>
+            {eulaSettingError && <p className="form-error" role="alert">{eulaSettingError}</p>}
+          </section>
+        )}
+
+        {!selectedProfileId && (
+          <section className="local-root-section" aria-labelledby="local-root-title">
+            <div className="environment-section-heading">
+              <h2 id="local-root-title">This computer</h2>
+            </div>
+            <form className="local-root-form" onSubmit={(event) => void saveLocalRoot(event)}>
+              <label className="field">
+                <span>Minecraft root folder</span>
+                <div className="path-control">
+                  <input value={localRootDraft} onChange={(event) => setLocalRootDraft(event.currentTarget.value)} placeholder="C:\\Minecraft" required />
+                  <button className="button button-secondary" type="button" onClick={() => void selectLocalRoot()} aria-label="Browse for local Minecraft root"><FolderOpen size={15} />Browse</button>
+                </div>
+                <small>Vanilla versions are cached in cache/minecraft beneath this folder.</small>
+              </label>
+              <button className="button button-secondary" type="submit" disabled={isSavingLocalRoot || !localRootDraft.trim() || localRootDraft === localRoot}>
+                {isSavingLocalRoot ? "Saving…" : "Save root"}
+              </button>
+            </form>
+            {localRootError && <p className="form-error" role="alert">{localRootError}</p>}
+          </section>
+        )}
+
         {!selectedProfileId && environments.length > 0 && (
           <section className="environment-section" aria-label="Remote environments">
             <div className="environment-section-heading">
@@ -1067,6 +1180,7 @@ function App() {
                     <button className="environment-card-main" type="button" onClick={() => setEnvironmentFilterId(isSelected ? null : environment.id)}>
                       <span className="environment-card-title">{environment.name}</span>
                       <span className="environment-card-address">{environment.username}@{environment.host}:{environment.port}</span>
+                      <span className="environment-card-address">{environment.rootDirectory || "Set a Minecraft root to install versions"}</span>
                       <span className="environment-card-count">{serverCount} {serverCount === 1 ? "server" : "servers"}</span>
                     </button>
                     <div className="environment-card-actions">
@@ -1228,6 +1342,9 @@ function App() {
                             </div>
                           )}
                         </section>
+                        <section className="server-tab-panel" hidden={activeServerTab !== "worlds"} aria-label="Server worlds">
+                          {activeServerTab === "worlds" && <WorldsPanel key={profile.id} profileId={profile.id} remote={!isLocal} />}
+                        </section>
                         <section className="server-tab-panel server-properties-tab" hidden={activeServerTab !== "properties"} aria-label="Server properties">
                           {propertiesProfileId === profile.id && (
                             <ServerPropertiesPanel
@@ -1236,6 +1353,9 @@ function App() {
                               canEdit={isLocal ? status?.state === "stopped" : remoteState === "stopped"}
                             />
                           )}
+                        </section>
+                        <section className="server-tab-panel" hidden={activeServerTab !== "install"} aria-label="Install Minecraft">
+                          {installProfileId === profile.id && <ServerInstallPanel profileId={profile.id} remote={!isLocal} rootConfigured={isLocal ? !!localRoot : !!environments.find((environment) => environment.id === (target.kind === "remote" ? target.environmentId : ""))?.rootDirectory} canInstall={isLocal ? state === "stopped" : remoteState === "stopped"} onUpdated={async () => setProfiles(await serverProfiles.list())} />}
                         </section>
                         <section className={`server-tab-panel server-settings-panel${isFormOpen && editingProfile?.id === profile.id ? " server-settings-editing" : ""}`} hidden={activeServerTab !== "settings"} aria-label="Server settings">
                           {isFormOpen && editingProfile?.id === profile.id ? renderProfileForm() : (

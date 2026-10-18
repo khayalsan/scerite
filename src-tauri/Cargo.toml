@@ -1,6 +1,6 @@
 [package]
 name = "scerite"
-version = "0.1.0"
+version = "0.2.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2024"
@@ -23,11 +23,18 @@ tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+sha1 = "0.11"
+sha2 = "0.10"
+flate2 = "1"
+tar = "0.4"
+zip = { version = "2", default-features = false, features = ["deflate"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 interprocess = "2.4.5"
 russh = { version = "0.64.1", default-features = false, features = ["ring", "flate2", "rsa"] }
 russh-sftp = "3.0.1"
-tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "time", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "time", "sync", "fs"] }
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

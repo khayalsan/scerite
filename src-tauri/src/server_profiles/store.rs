@@ -1,6 +1,6 @@
 use std::{
     fs, io,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Mutex, MutexGuard},
 };
 
@@ -11,13 +11,32 @@ use super::model::{
     LocalLaunchConfig, ServerEnvironment, ServerProfile, ServerTarget, validate_name,
 };
 
-#[derive(Default, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ProfileData {
+    #[serde(default = "default_auto_accept_eula")]
+    auto_accept_eula: bool,
+    #[serde(default)]
+    local_root: Option<String>,
     #[serde(default)]
     environments: Vec<ServerEnvironment>,
     #[serde(default)]
     profiles: Vec<ServerProfile>,
+}
+
+fn default_auto_accept_eula() -> bool {
+    true
+}
+
+impl Default for ProfileData {
+    fn default() -> Self {
+        Self {
+            auto_accept_eula: true,
+            local_root: None,
+            environments: Vec::new(),
+            profiles: Vec::new(),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -88,6 +107,40 @@ impl ServerProfileStore {
         Ok(self.lock()?.profiles.clone())
     }
 
+    pub fn local_root(&self) -> Result<Option<String>, String> {
+        Ok(self.lock()?.local_root.clone())
+    }
+
+    pub fn auto_accept_eula(&self) -> Result<bool, String> {
+        Ok(self.lock()?.auto_accept_eula)
+    }
+
+    pub fn set_auto_accept_eula(&self, enabled: bool) -> Result<bool, String> {
+        let mut current = self.lock()?;
+        let mut data = current.clone();
+        data.auto_accept_eula = enabled;
+        self.save(&data)?;
+        *current = data;
+        Ok(enabled)
+    }
+
+    pub fn set_local_root(&self, root_directory: String) -> Result<String, String> {
+        let root_directory = root_directory.trim().to_owned();
+        let path = Path::new(&root_directory);
+        if !path.is_absolute()
+            || path.parent().is_none()
+            || root_directory.chars().any(char::is_control)
+        {
+            return Err("Choose an absolute Minecraft root folder on this computer.".into());
+        }
+        let mut current = self.lock()?;
+        let mut data = current.clone();
+        data.local_root = Some(root_directory.clone());
+        self.save(&data)?;
+        *current = data;
+        Ok(root_directory)
+    }
+
     pub fn list_environments(&self) -> Result<Vec<ServerEnvironment>, String> {
         Ok(self.lock()?.environments.clone())
     }
@@ -104,6 +157,7 @@ impl ServerProfileStore {
     pub fn create_environment(
         &self,
         name: String,
+        root_directory: String,
         host: String,
         port: u16,
         username: String,
@@ -112,6 +166,7 @@ impl ServerProfileStore {
         let environment = ServerEnvironment {
             id: Uuid::new_v4(),
             name,
+            root_directory,
             host,
             port,
             username,
@@ -132,6 +187,7 @@ impl ServerProfileStore {
         &self,
         id: Uuid,
         name: String,
+        root_directory: String,
         host: String,
         port: u16,
         username: String,
@@ -140,6 +196,7 @@ impl ServerProfileStore {
         let environment = ServerEnvironment {
             id,
             name,
+            root_directory,
             host,
             port,
             username,
@@ -332,6 +389,7 @@ fn migrate_legacy_profiles(profiles: Vec<LegacyServerProfile>) -> ProfileData {
                         let environment = ServerEnvironment {
                             id: Uuid::new_v4(),
                             name: host.clone(),
+                            root_directory: String::new(),
                             host,
                             port,
                             username,

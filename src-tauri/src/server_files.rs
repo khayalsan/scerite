@@ -23,6 +23,41 @@ pub struct ServerFileEntry {
 }
 
 #[tauri::command]
+pub fn list_local_worlds(
+    profile_id: Uuid,
+    profiles: State<'_, ServerProfileStore>,
+) -> Result<Vec<ServerFileEntry>, String> {
+    let root = local_server_root(profile_id, &profiles)?;
+    let mut worlds = Vec::new();
+    for entry in
+        fs::read_dir(&root).map_err(|error| format!("Could not read the server folder: {error}"))?
+    {
+        let entry = entry.map_err(|error| format!("Could not read a server file entry: {error}"))?;
+        if !entry
+            .file_type()
+            .map_err(|error| format!("Could not inspect a server folder: {error}"))?
+            .is_dir()
+        {
+            continue;
+        }
+        if !fs::symlink_metadata(entry.path().join("level.dat"))
+            .is_ok_and(|metadata| metadata.file_type().is_file())
+        {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        worlds.push(ServerFileEntry {
+            path: name.clone(),
+            name,
+            directory: true,
+            size: 0,
+        });
+    }
+    worlds.sort_by_key(|world| world.name.to_lowercase());
+    Ok(worlds)
+}
+
+#[tauri::command]
 pub fn list_local_server_files(
     profile_id: Uuid,
     relative_path: String,

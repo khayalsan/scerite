@@ -20,6 +20,7 @@ use tauri::State;
 use uuid::Uuid;
 
 use crate::server_profiles::{ServerProfileStore, ServerTarget};
+use crate::eula;
 
 const MANAGER_ARGUMENT: &str = "--scerite-session-manager";
 const TOKEN_FILE: &str = "session-manager.token";
@@ -150,12 +151,17 @@ impl LocalSessionManager {
         directory: String,
         executable: String,
         arguments: Vec<String>,
+        managed_java: Option<String>,
     ) -> Result<LocalServerStatus, String> {
+        if managed_java.is_some() && self.request(ManagerRequest::Ping)?.protocol_version < 2 {
+            return Err("The local session manager is from an older Scerite build. Stop its servers and restart the session manager before starting with managed Java.".into());
+        }
         self.request(ManagerRequest::Start {
             profile_id,
             directory,
             executable,
             arguments,
+            managed_java,
         })?
         .status
         .ok_or_else(|| "The session manager returned no server status.".to_owned())
@@ -198,6 +204,7 @@ enum ManagerRequest {
         directory: String,
         executable: String,
         arguments: Vec<String>,
+        managed_java: Option<String>,
     },
     Stop {
         profile_id: Uuid,
@@ -223,6 +230,8 @@ struct ManagerResponse {
     status: Option<LocalServerStatus>,
     console: Option<LocalConsoleSnapshot>,
     error: Option<String>,
+    #[serde(default)]
+    protocol_version: u8,
 }
 
 impl ManagerResponse {
@@ -231,6 +240,7 @@ impl ManagerResponse {
             status: Some(status),
             console: None,
             error: None,
+            protocol_version: 2,
         }
     }
 
@@ -239,6 +249,7 @@ impl ManagerResponse {
             status: None,
             console: Some(console),
             error: None,
+            protocol_version: 2,
         }
     }
 
@@ -247,6 +258,7 @@ impl ManagerResponse {
             status: None,
             console: None,
             error: None,
+            protocol_version: 2,
         }
     }
 
@@ -255,6 +267,7 @@ impl ManagerResponse {
             status: None,
             console: None,
             error: Some(error),
+            protocol_version: 2,
         }
     }
 }
@@ -390,7 +403,8 @@ fn handle_request(
             directory,
             executable,
             arguments,
-        } => start_session(profile_id, directory, executable, arguments, sessions),
+            managed_java,
+        } => start_session(profile_id, directory, executable, arguments, managed_java, sessions),
         ManagerRequest::Stop { profile_id } => stop_session(profile_id, sessions),
         ManagerRequest::Console {
             profile_id,
@@ -423,6 +437,7 @@ fn start_session(
     directory: String,
     executable: String,
     arguments: Vec<String>,
+    managed_java: Option<String>,
     sessions: &Arc<Mutex<HashMap<Uuid, ManagedSession>>>,
 ) -> ManagerResponse {
     let directory = match Path::new(&directory).canonicalize() {
@@ -464,6 +479,18 @@ fn start_session(
     }
 
     let mut command = Command::new(executable);
+    if let Some(java) = managed_java {
+        let bin = Path::new(&java).parent().expect("validated Java has a bin folder");
+        let home = bin.parent().expect("validated Java has a runtime folder");
+        let path = std::env::join_paths(std::iter::once(bin.to_path_buf()).chain(
+            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+        )).map_err(|error| format!("Could not set the managed Java path: {error}"));
+        let path = match path {
+            Ok(path) => path,
+            Err(error) => return ManagerResponse::error(error),
+        };
+        command.env("JAVA_HOME", home).env("PATH", path);
+    }
     command
         .args(arguments)
         .current_dir(&directory)
@@ -701,7 +728,24 @@ pub mod commands {
         let ServerTarget::Local { directory, launch } = profile.target else {
             unreachable!("require_local_profile only returns local targets")
         };
-        manager.start(profile.id, directory, launch.executable, launch.arguments)
+        if profiles.auto_accept_eula()?
+            && matches!(manager.status(profile_id)?.state, LocalServerState::Stopped)
+        {
+            eula::enable_local(&directory)?;
+        }
+        let managed_java = if let Some(java) = launch.managed_java {
+            let root = profiles.local_root()?.ok_or_else(||
+                "Set this computer's Minecraft root before using managed Java.".to_owned())?;
+            let root = fs::canonicalize(root)
+                .map_err(|error| format!("Could not resolve the Minecraft root: {error}"))?;
+            let java = fs::canonicalize(&java)
+                .map_err(|error| format!("Could not find the managed Java runtime: {error}"))?;
+            if !java.starts_with(root.join("runtimes").join("java")) || !java.is_file() {
+                return Err("The managed Java executable is outside the configured runtime folder.".into());
+            }
+            Some(java.to_string_lossy().into_owned())
+        } else { None };
+        manager.start(profile.id, directory, launch.executable, launch.arguments, managed_java)
     }
 
     #[tauri::command]

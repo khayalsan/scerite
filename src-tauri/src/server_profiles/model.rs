@@ -14,6 +14,8 @@ pub struct ServerProfile {
 pub struct ServerEnvironment {
     pub id: Uuid,
     pub name: String,
+    #[serde(default)]
+    pub root_directory: String,
     pub host: String,
     pub port: u16,
     pub username: String,
@@ -24,6 +26,9 @@ pub struct ServerEnvironment {
 impl ServerEnvironment {
     pub fn validate(&self) -> Result<(), String> {
         validate_environment_name(&self.name)?;
+        if !valid_remote_directory(&self.root_directory) {
+            return Err("Enter an absolute Minecraft root folder for this environment.".into());
+        }
         if self.host.trim().is_empty()
             || self.host.starts_with('-')
             || self.host.chars().any(|character| {
@@ -55,6 +60,7 @@ impl ServerEnvironment {
 
     pub fn normalized(mut self) -> Self {
         self.name = self.name.trim().to_owned();
+        self.root_directory = self.root_directory.trim().trim_end_matches('/').to_owned();
         self.host = self.host.trim().to_owned();
         self.username = self.username.trim().to_owned();
         self.identity_file = self.identity_file.and_then(|path| {
@@ -88,6 +94,8 @@ pub enum ServerTarget {
 pub struct LocalLaunchConfig {
     pub executable: String,
     pub arguments: Vec<String>,
+    #[serde(default)]
+    pub managed_java: Option<String>,
 }
 
 impl ServerTarget {
@@ -114,15 +122,7 @@ impl ServerTarget {
                 directory,
                 launch,
             } => {
-                let trimmed_directory = directory.trim().trim_end_matches('/');
-                if !directory.trim().is_empty()
-                    && (trimmed_directory.is_empty()
-                        || !directory.starts_with('/')
-                        || directory.chars().any(char::is_control)
-                        || trimmed_directory[1..]
-                            .split('/')
-                            .any(|part| part.is_empty() || matches!(part, "." | "..")))
-                {
+                if !directory.trim().is_empty() && !valid_remote_directory(directory) {
                     return Err(
                         "Enter an absolute remote server directory without parent traversal."
                             .into(),
@@ -148,6 +148,7 @@ impl ServerTarget {
                 launch: LocalLaunchConfig {
                     executable: launch.executable.trim().to_owned(),
                     arguments: launch.arguments,
+                    managed_java: launch.managed_java,
                 },
             },
             Self::Remote {
@@ -167,10 +168,21 @@ impl ServerTarget {
                 launch: LocalLaunchConfig {
                     executable: launch.executable.trim().to_owned(),
                     arguments: launch.arguments,
+                    managed_java: launch.managed_java,
                 },
             },
         }
     }
+}
+
+fn valid_remote_directory(directory: &str) -> bool {
+    let trimmed = directory.trim().trim_end_matches('/');
+    !trimmed.is_empty()
+        && trimmed.starts_with('/')
+        && !trimmed.chars().any(char::is_control)
+        && trimmed[1..]
+            .split('/')
+            .all(|part| !part.is_empty() && !matches!(part, "." | ".."))
 }
 
 pub fn validate_name(name: &str) -> Result<(), String> {

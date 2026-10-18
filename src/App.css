@@ -192,6 +192,52 @@
   margin: -10px 0 34px;
 }
 
+.local-root-section,
+.app-settings-section {
+  margin: -10px 0 34px;
+  padding: 14px;
+  border: 1px solid var(--app-line);
+  border-radius: 10px;
+  background: var(--app-paper);
+}
+
+.app-setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  max-width: 760px;
+  cursor: pointer;
+}
+
+.app-setting-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.app-setting-copy small {
+  color: var(--muted-foreground);
+  line-height: 1.4;
+}
+
+.local-root-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  max-width: 760px;
+}
+
+@media (max-width: 560px) {
+  .local-root-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .local-root-form > .button {
+    justify-self: start;
+  }
+}
+
 .environment-section-heading {
   display: flex;
   align-items: center;
@@ -852,6 +898,19 @@
 .server-tab-panel[hidden] {
   display: none;
 }
+
+.install-panel {
+  display: grid;
+  gap: 1.5rem;
+  max-width: 38rem;
+  padding: 1.5rem;
+}
+
+.install-panel h2 { margin: 0 0 .5rem; }
+.install-panel p { color: var(--muted-foreground); line-height: 1.5; }
+.install-form { display: grid; gap: .75rem; max-width: 22rem; }
+.install-version-trigger { width: 100%; }
+.install-success { color: var(--success, #74c69d) !important; }
 
 .server-tab-empty,
 .server-settings-panel {
@@ -1560,6 +1619,59 @@
   font-size: 12px;
 }
 
+.worlds-panel {
+  display: grid;
+  gap: 16px;
+  margin: 0 0 16px 53px;
+  padding: 18px;
+  border: 1px solid var(--app-line);
+  border-radius: 9px;
+  background: var(--app-ground);
+}
+
+.worlds-header,
+.worlds-browser-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.worlds-header h2 { margin: 0 0 4px; font-size: 17px; }
+.worlds-header p { margin: 0; color: var(--app-muted); font-size: 12px; }
+.worlds-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 9px; }
+
+.world-card {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-height: 66px;
+  padding: 12px;
+  border: 1px solid var(--app-line);
+  border-radius: 8px;
+  color: var(--app-ink);
+  background: var(--app-paper);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.world-card:hover,
+.world-card-selected { border-color: var(--app-accent); }
+.world-card > svg { flex: 0 0 auto; color: var(--app-accent); }
+.world-card span { display: grid; min-width: 0; gap: 3px; }
+.world-card strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.world-card small { color: var(--app-muted); font-size: 11px; }
+.world-card:focus-visible { outline: 3px solid color-mix(in srgb, var(--app-accent) 32%, transparent); outline-offset: 2px; }
+
+.worlds-browser { min-width: 0; }
+.worlds-browser-heading { margin-bottom: 8px; color: var(--app-ink); font-size: 12px; }
+.worlds-browser-heading strong { overflow-wrap: anywhere; }
+.worlds-preview { display: grid; min-width: 0; align-content: start; gap: 12px; padding: 13px; }
+.worlds-preview strong { color: var(--app-ink); font-size: 12px; }
+.worlds-preview p { margin: 0; color: var(--app-muted); font-size: 12px; }
+.worlds-preview pre { overflow: auto; max-height: 420px; margin: 0; color: var(--app-ink); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+
 .row-actions,
 .remove-confirm {
   display: flex;
@@ -1801,6 +1913,8 @@
     flex-basis: calc(100% - 44px);
     margin-left: 44px;
   }
+
+  .worlds-panel { margin-left: 44px; }
 
   .files-browser {
     grid-template-columns: 1fr;
