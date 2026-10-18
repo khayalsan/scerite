@@ -24,8 +24,8 @@ export interface ServerProfile {
 
 export const serverProfiles = {
   list: () => invoke<ServerProfile[]>("list_server_profiles"),
-  create: (name: string, target: ServerTarget) =>
-    invoke<ServerProfile>("create_server_profile", { name, target }),
+  create: (name: string, target: ServerTarget, autoDirectory = false) =>
+    invoke<ServerProfile>("create_server_profile", { name, target, autoDirectory }),
   update: (id: string, name: string, target: ServerTarget) =>
     invoke<ServerProfile>("update_server_profile", { id, name, target }),
   delete: (id: string) => invoke<void>("delete_server_profile", { id }),

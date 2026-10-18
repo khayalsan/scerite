@@ -242,10 +242,20 @@ impl ServerProfileStore {
 
         let mut current = self.lock()?;
         validate_environment_reference(&current, &target)?;
+        let target = target.normalized();
+        if let ServerTarget::Remote { environment_id, directory, .. } = &target {
+            if current.profiles.iter().any(|profile| matches!(
+                &profile.target,
+                ServerTarget::Remote { environment_id: existing_environment, directory: existing_directory, .. }
+                    if existing_environment == environment_id && existing_directory == directory
+            )) {
+                return Err("This remote server folder already has a saved profile.".into());
+            }
+        }
         let profile = ServerProfile {
             id: Uuid::new_v4(),
             name: name.trim().to_owned(),
-            target: target.normalized(),
+            target,
         };
         let mut data = current.clone();
         data.profiles.push(profile.clone());
@@ -265,6 +275,16 @@ impl ServerProfileStore {
 
         let mut current = self.lock()?;
         validate_environment_reference(&current, &target)?;
+        let target = target.normalized();
+        if let ServerTarget::Remote { environment_id, directory, .. } = &target {
+            if current.profiles.iter().any(|profile| profile.id != id && matches!(
+                &profile.target,
+                ServerTarget::Remote { environment_id: existing_environment, directory: existing_directory, .. }
+                    if existing_environment == environment_id && existing_directory == directory
+            )) {
+                return Err("This remote server folder already has a saved profile.".into());
+            }
+        }
         let mut data = current.clone();
         let profile = data
             .profiles
@@ -272,7 +292,7 @@ impl ServerProfileStore {
             .find(|profile| profile.id == id)
             .ok_or_else(|| "Server profile was not found.".to_owned())?;
         profile.name = name.trim().to_owned();
-        profile.target = target.normalized();
+        profile.target = target;
         let updated = profile.clone();
         self.save(&data)?;
         *current = data;

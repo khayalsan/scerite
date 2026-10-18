@@ -23,6 +23,7 @@ type ProfileDraft = {
   executable: string;
   arguments: string;
   environmentId: string;
+  manualDirectory: boolean;
 };
 
 type EnvironmentDraft = {
@@ -65,6 +66,7 @@ const emptyDraft: ProfileDraft = {
   executable: "",
   arguments: "",
   environmentId: "",
+  manualDirectory: false,
 };
 
 const emptyEnvironmentDraft: EnvironmentDraft = {
@@ -106,6 +108,14 @@ function parseLaunchArguments(value: string): string[] {
   return launchArguments;
 }
 
+function serverFolderName(name: string): string {
+  return Array.from(name.trim())
+    .map((character) => /[\p{L}\p{N}]/u.test(character) ? character.toLowerCase() : "-")
+    .join("")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
 function targetFor(draft: ProfileDraft, previous?: ServerProfile): ServerTarget {
   const launchArguments = parseLaunchArguments(draft.arguments);
   const managedJava = previous?.target.kind === draft.kind &&
@@ -116,7 +126,7 @@ function targetFor(draft: ProfileDraft, previous?: ServerProfile): ServerTarget 
     return {
       kind: "remote",
       environmentId: draft.environmentId,
-      directory: draft.directory.trim(),
+      directory: draft.manualDirectory ? draft.directory.trim() : "",
       launch: {
         executable: draft.executable.trim(),
         arguments: launchArguments,
@@ -144,6 +154,7 @@ function draftFor(profile: ServerProfile): ProfileDraft {
       kind: "remote",
       environmentId: profile.target.environmentId,
       directory: profile.target.directory,
+      manualDirectory: true,
       executable: profile.target.launch.executable,
       arguments: profile.target.launch.arguments.join("\n"),
     };
@@ -673,7 +684,7 @@ function App() {
     try {
       const saved = editingProfile
         ? await serverProfiles.update(editingProfile.id, draft.name, targetFor(draft, editingProfile))
-        : await serverProfiles.create(draft.name, targetFor(draft));
+        : await serverProfiles.create(draft.name, targetFor(draft), draft.kind === "remote" && !draft.manualDirectory);
 
       setConnectedRemotes((current) => {
         const next = { ...current };
@@ -818,7 +829,7 @@ function App() {
                     name="target-kind"
                     value="local"
                     checked={draft.kind === "local"}
-                    onChange={() => setDraft({ ...draft, kind: "local" })}
+                    onChange={() => setDraft({ ...draft, kind: "local", manualDirectory: false, directory: "" })}
                   />
                   <span>On this computer</span>
                 </label>
@@ -828,7 +839,7 @@ function App() {
                     name="target-kind"
                     value="remote"
                     checked={draft.kind === "remote"}
-                    onChange={() => setDraft({ ...draft, kind: "remote" })}
+                    onChange={() => setDraft({ ...draft, kind: "remote", manualDirectory: false, directory: "" })}
                   />
                   <span>Remote with SSH</span>
                 </label>
@@ -895,15 +906,28 @@ function App() {
                   <button className="button button-secondary" type="button" onClick={() => openNewEnvironment()}>
                     <Plus size={15} aria-hidden="true" /> Add remote environment
                   </button>
-                  <label className="field field-wide">
-                    <span>Remote server folder <small>(needed for start and files)</small></span>
-                    <input
-                      value={draft.directory}
-                      onChange={(event) => setDraft({ ...draft, directory: event.currentTarget.value })}
-                      placeholder="/home/minecraft/survival"
-                    />
-                    <small>Use an absolute Linux path. File access stays inside this folder.</small>
-                  </label>
+                  {!editingProfile && <fieldset className="field field-wide target-choice">
+                    <legend>Server folder</legend>
+                    <label className={!draft.manualDirectory ? "choice choice-selected" : "choice"}>
+                      <input type="radio" name="remote-folder-mode" checked={!draft.manualDirectory} onChange={() => setDraft({ ...draft, manualDirectory: false })} />
+                      <span>Create or use a folder in this environment</span>
+                    </label>
+                    <label className={draft.manualDirectory ? "choice choice-selected" : "choice"}>
+                      <input type="radio" name="remote-folder-mode" checked={draft.manualDirectory} onChange={() => setDraft({ ...draft, manualDirectory: true })} />
+                      <span>Use an existing folder</span>
+                    </label>
+                  </fieldset>}
+                  {draft.manualDirectory ? <label className="field field-wide">
+                    <span>Remote server folder</span>
+                    <input value={draft.directory} onChange={(event) => setDraft({ ...draft, directory: event.currentTarget.value })} placeholder="/home/minecraft/servers/survival-world" required />
+                    <small>Enter the absolute Linux path of an existing server folder.</small>
+                  </label> : <p className="field field-wide managed-folder-preview">
+                    {(() => {
+                      const root = environments.find((environment) => environment.id === draft.environmentId)?.rootDirectory;
+                      const folder = serverFolderName(draft.name);
+                      return root && folder ? `Server folder: ${root.replace(/\/$/, "")}/servers/${folder}` : "Enter a server name and choose an environment to see its folder.";
+                    })()}
+                  </p>}
                   <label className="field field-wide">
                     <span>Launch executable <small>(needed to start)</small></span>
                     <input

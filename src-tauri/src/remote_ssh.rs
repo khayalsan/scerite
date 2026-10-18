@@ -652,6 +652,79 @@ fn remote_connection_config(environment: &ServerEnvironment) -> RemoteConnection
     }
 }
 
+pub async fn prepare_remote_server_directory(
+    environment: ServerEnvironment,
+    name: String,
+    sessions: Arc<RemoteSessionManager>,
+) -> Result<String, String> {
+    let mut slug = String::new();
+    let mut separator = false;
+    for character in name.trim().chars() {
+        if character.is_alphanumeric() {
+            if separator && !slug.is_empty() {
+                slug.push('-');
+            }
+            slug.extend(character.to_lowercase());
+            separator = false;
+        } else {
+            separator = true;
+        }
+    }
+    if slug.is_empty() {
+        return Err("The server name needs a letter or number for its folder name. Choose a custom folder instead.".into());
+    }
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let config = remote_connection_config(&environment);
+        let connection = RemoteConnection {
+            handle: connect_remote(&sessions.runtime, &config.host, config.port, &config.username, config.identity_file.as_deref())?,
+            runtime: Arc::clone(&sessions.runtime),
+        };
+        let sftp = connection.sftp()?;
+        let root = remote_root_with_sftp(&sftp, &environment.root_directory)?;
+        let mut parent = root;
+        for part in ["servers", slug.as_str()] {
+            let path = format!("{parent}/{part}");
+            let exists = execute(&connection, &format!("test -e {} || test -L {}", shell_quote(&path), shell_quote(&path)))?;
+            if exists.exit_code == 0 {
+                if sftp.lstat(Path::new(&path))?.file_type() != FileType::Dir {
+                    return Err("A managed server folder is a file or symbolic link. Choose another server name or a custom folder.".into());
+                }
+            } else {
+                let created = execute(&connection, &format!("mkdir -- {}", shell_quote(&path)))?;
+                if created.exit_code != 0 {
+                    return Err(remote_command_error("Could not create the remote server folder", created));
+                }
+            }
+            let canonical = remote_root_with_sftp(&sftp, &path)?;
+            if Path::new(&canonical).parent() != Some(Path::new(&parent)) {
+                return Err("The managed server folder resolves outside the configured Minecraft root.".into());
+            }
+            parent = canonical;
+        }
+        Ok(parent)
+    })
+    .await
+    .map_err(|error| format!("Remote folder setup failed to finish: {error}"))?
+}
+
+pub async fn verify_remote_server_directory(
+    environment: ServerEnvironment,
+    directory: String,
+    sessions: Arc<RemoteSessionManager>,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let config = remote_connection_config(&environment);
+        let connection = RemoteConnection {
+            handle: connect_remote(&sessions.runtime, &config.host, config.port, &config.username, config.identity_file.as_deref())?,
+            runtime: Arc::clone(&sessions.runtime),
+        };
+        remote_root(&connection, &directory)
+    })
+    .await
+    .map_err(|error| format!("Remote folder check failed to finish: {error}"))?
+}
+
 fn connect_remote(
     runtime: &Runtime,
     host: &str,

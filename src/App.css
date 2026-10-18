@@ -502,6 +502,16 @@
   grid-column: 1 / -1;
 }
 
+.managed-folder-preview {
+  margin: 0;
+  padding: 11px 12px;
+  border: 1px solid var(--app-line);
+  border-radius: 8px;
+  background: var(--secondary);
+  font-weight: 450;
+  overflow-wrap: anywhere;
+}
+
 .path-control {
   display: flex;
   min-width: 0;
