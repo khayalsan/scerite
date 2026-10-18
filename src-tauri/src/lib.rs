@@ -40,7 +40,8 @@ pub fn run() {
             software_install::install_server_software,
             modrinth::search_modrinth,
             modrinth::list_modrinth_versions,
-            modrinth::install_modrinth_version,
+            modrinth::preview_modrinth_install,
+            modrinth::install_modrinth_plan,
             vanilla_install::use_managed_java,
             commands::get_local_install_root,
             commands::get_auto_accept_eula,
@@ -62,6 +63,7 @@ pub fn run() {
             server_files::list_local_server_files,
             server_files::list_local_worlds,
             server_files::read_local_server_file,
+            server_files::read_local_server_log_start,
             server_files::write_local_server_file,
             remote_ssh::test_remote_connection,
             remote_ssh::test_remote_connection_draft,
@@ -73,6 +75,8 @@ pub fn run() {
             remote_ssh::list_remote_server_files,
             remote_ssh::list_remote_worlds,
             remote_ssh::read_remote_server_file,
+            remote_ssh::read_remote_server_log_start,
+            remote_ssh::detect_remote_fabric_version,
             remote_ssh::write_remote_server_file,
         ])
         .run(tauri::generate_context!())

@@ -20,12 +20,25 @@ export interface ServerProfile {
   id: string;
   name: string;
   target: ServerTarget;
+  installedSoftware?: string | null;
+  installedVersion?: string | null;
+  installedPackages?: InstalledPackage[];
+}
+
+export interface InstalledPackage {
+  kind: string;
+  projectId: string;
+  versionId: string;
+  title: string;
+  filename: string;
+  requiredBy: string[];
+  direct: boolean;
 }
 
 export const serverProfiles = {
   list: () => invoke<ServerProfile[]>("list_server_profiles"),
-  create: (name: string, target: ServerTarget) =>
-    invoke<ServerProfile>("create_server_profile", { name, target }),
+  create: (name: string, target: ServerTarget, autoDirectory = false) =>
+    invoke<ServerProfile>("create_server_profile", { name, target, autoDirectory }),
   update: (id: string, name: string, target: ServerTarget) =>
     invoke<ServerProfile>("update_server_profile", { id, name, target }),
   delete: (id: string) => invoke<void>("delete_server_profile", { id }),

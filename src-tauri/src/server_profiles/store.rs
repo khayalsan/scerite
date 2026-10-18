@@ -242,10 +242,23 @@ impl ServerProfileStore {
 
         let mut current = self.lock()?;
         validate_environment_reference(&current, &target)?;
+        let target = target.normalized();
+        if let ServerTarget::Remote { environment_id, directory, .. } = &target {
+            if current.profiles.iter().any(|profile| matches!(
+                &profile.target,
+                ServerTarget::Remote { environment_id: existing_environment, directory: existing_directory, .. }
+                    if existing_environment == environment_id && existing_directory == directory
+            )) {
+                return Err("This remote server folder already has a saved profile.".into());
+            }
+        }
         let profile = ServerProfile {
             id: Uuid::new_v4(),
             name: name.trim().to_owned(),
-            target: target.normalized(),
+            target,
+            installed_software: None,
+            installed_version: None,
+            installed_packages: Vec::new(),
         };
         let mut data = current.clone();
         data.profiles.push(profile.clone());
@@ -265,6 +278,16 @@ impl ServerProfileStore {
 
         let mut current = self.lock()?;
         validate_environment_reference(&current, &target)?;
+        let target = target.normalized();
+        if let ServerTarget::Remote { environment_id, directory, .. } = &target {
+            if current.profiles.iter().any(|profile| profile.id != id && matches!(
+                &profile.target,
+                ServerTarget::Remote { environment_id: existing_environment, directory: existing_directory, .. }
+                    if existing_environment == environment_id && existing_directory == directory
+            )) {
+                return Err("This remote server folder already has a saved profile.".into());
+            }
+        }
         let mut data = current.clone();
         let profile = data
             .profiles
@@ -272,11 +295,57 @@ impl ServerProfileStore {
             .find(|profile| profile.id == id)
             .ok_or_else(|| "Server profile was not found.".to_owned())?;
         profile.name = name.trim().to_owned();
-        profile.target = target.normalized();
+        let same_directory = match (&profile.target, &target) {
+            (ServerTarget::Local { directory: old, .. }, ServerTarget::Local { directory: new, .. }) => old == new,
+            (ServerTarget::Remote { environment_id: old_environment, directory: old, .. }, ServerTarget::Remote { environment_id: new_environment, directory: new, .. }) => old_environment == new_environment && old == new,
+            _ => false,
+        };
+        if !same_directory {
+            profile.installed_software = None;
+            profile.installed_version = None;
+            profile.installed_packages.clear();
+        }
+        profile.target = target;
         let updated = profile.clone();
         self.save(&data)?;
         *current = data;
         Ok(updated)
+    }
+
+    pub fn set_installed_software(&self, id: Uuid, software: &str, version: &str) -> Result<(), String> {
+        let mut current = self.lock()?;
+        let mut data = current.clone();
+        let profile = data.profiles.iter_mut().find(|profile| profile.id == id)
+            .ok_or("Server profile was not found.")?;
+        if profile.installed_software.as_deref() != Some(software) || profile.installed_version.as_deref() != Some(version) {
+            profile.installed_packages.clear();
+        }
+        profile.installed_software = Some(software.to_owned());
+        profile.installed_version = Some(version.to_owned());
+        self.save(&data)?;
+        *current = data;
+        Ok(())
+    }
+
+    pub fn record_installed_package(&self, id: Uuid, package: super::model::InstalledPackage) -> Result<(), String> {
+        let mut current = self.lock()?;
+        let mut data = current.clone();
+        let profile = data.profiles.iter_mut().find(|profile| profile.id == id)
+            .ok_or("Server profile was not found.")?;
+        if let Some(existing) = profile.installed_packages.iter_mut().find(|existing| existing.kind == package.kind && existing.project_id == package.project_id) {
+            existing.required_by.extend(package.required_by);
+            existing.required_by.sort();
+            existing.required_by.dedup();
+            existing.direct |= package.direct;
+            existing.filename = package.filename;
+            existing.version_id = package.version_id;
+            existing.title = package.title;
+        } else {
+            profile.installed_packages.push(package);
+        }
+        self.save(&data)?;
+        *current = data;
+        Ok(())
     }
 
     pub fn delete(&self, id: Uuid) -> Result<(), String> {
@@ -411,6 +480,9 @@ fn migrate_legacy_profiles(profiles: Vec<LegacyServerProfile>) -> ProfileData {
             id: legacy.id,
             name: legacy.name,
             target,
+            installed_software: None,
+            installed_version: None,
+            installed_packages: Vec::new(),
         });
     }
     data

@@ -3,7 +3,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type { FormEvent } from "react";
-import { ArrowLeft, Download, FileKey, FolderOpen, Globe2, HardDrive, Network, Package, Palette, Plus, Settings, SlidersHorizontal, Terminal, X } from "lucide-react";
+import { ArrowLeft, Download, FileKey, FolderOpen, Globe2, HardDrive, Network, Package, Palette, Plus, Puzzle, Settings, SlidersHorizontal, Terminal, X } from "lucide-react";
 import { appSettings, localInstallRoot, serverEnvironments, serverProfiles } from "./lib/serverProfiles";
 import type { ServerEnvironment, ServerProfile, ServerTarget } from "./lib/serverProfiles";
 import { serverSessions } from "./lib/serverSessions";
@@ -13,6 +13,9 @@ import { WorldsPanel } from "./components/WorldsPanel";
 import { ServerPropertiesPanel } from "./components/ServerPropertiesPanel";
 import { ServerInstallPanel } from "./components/ServerInstallPanel";
 import { PackagesPanel } from "./components/PackagesPanel";
+import { serverFiles } from "./lib/serverFiles";
+import { packageSupportForSoftware, packageSupportFromFiles } from "./lib/serverSoftware";
+import type { PackageSupport } from "./lib/serverSoftware";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select";
 import "./App.css";
 
@@ -23,6 +26,7 @@ type ProfileDraft = {
   executable: string;
   arguments: string;
   environmentId: string;
+  manualDirectory: boolean;
 };
 
 type EnvironmentDraft = {
@@ -56,7 +60,7 @@ function readSavedTheme(): ThemeId {
   }
 }
 
-type ServerTab = "console" | "files" | "worlds" | "properties" | "packages" | "install" | "settings";
+type ServerTab = "console" | "files" | "worlds" | "properties" | "mods" | "plugins" | "install" | "settings";
 
 const emptyDraft: ProfileDraft = {
   name: "",
@@ -65,6 +69,7 @@ const emptyDraft: ProfileDraft = {
   executable: "",
   arguments: "",
   environmentId: "",
+  manualDirectory: false,
 };
 
 const emptyEnvironmentDraft: EnvironmentDraft = {
@@ -106,6 +111,14 @@ function parseLaunchArguments(value: string): string[] {
   return launchArguments;
 }
 
+function serverFolderName(name: string): string {
+  return Array.from(name.trim())
+    .map((character) => /[\p{L}\p{N}]/u.test(character) ? character.toLowerCase() : "-")
+    .join("")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
 function targetFor(draft: ProfileDraft, previous?: ServerProfile): ServerTarget {
   const launchArguments = parseLaunchArguments(draft.arguments);
   const managedJava = previous?.target.kind === draft.kind &&
@@ -116,7 +129,7 @@ function targetFor(draft: ProfileDraft, previous?: ServerProfile): ServerTarget 
     return {
       kind: "remote",
       environmentId: draft.environmentId,
-      directory: draft.directory.trim(),
+      directory: draft.manualDirectory ? draft.directory.trim() : "",
       launch: {
         executable: draft.executable.trim(),
         arguments: launchArguments,
@@ -144,6 +157,7 @@ function draftFor(profile: ServerProfile): ProfileDraft {
       kind: "remote",
       environmentId: profile.target.environmentId,
       directory: profile.target.directory,
+      manualDirectory: true,
       executable: profile.target.launch.executable,
       arguments: profile.target.launch.arguments.join("\n"),
     };
@@ -212,6 +226,33 @@ function App() {
   const [isRemoving, setIsRemoving] = useState(false);
   const [activeServerTab, setActiveServerTab] = useState<ServerTab>("console");
   const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId);
+  const [legacyPackageSupport, setLegacyPackageSupport] = useState<{ profileId: string; support: PackageSupport } | null>(null);
+  const packageSupport = packageSupportForSoftware(selectedProfile?.installedSoftware)
+    ?? (legacyPackageSupport?.profileId === selectedProfileId ? legacyPackageSupport.support : null);
+  const selectedRemoteConnected = selectedProfile ? connectedRemotes[selectedProfile.id] : false;
+
+  useEffect(() => {
+    if (!selectedProfile || selectedProfile.installedSoftware) return;
+    if (selectedProfile.target.kind === "remote" && !selectedRemoteConnected) {
+      setLegacyPackageSupport({ profileId: selectedProfile.id, support: packageSupportFromFiles(selectedProfile, []) });
+      return;
+    }
+    let active = true;
+    void serverFiles.list(selectedProfile.target.kind === "remote", selectedProfile.id, "")
+      .then((entries) => {
+        if (active) setLegacyPackageSupport({ profileId: selectedProfile.id, support: packageSupportFromFiles(selectedProfile, entries) });
+      })
+      .catch(() => {
+        if (active) setLegacyPackageSupport({ profileId: selectedProfile.id, support: { mods: false, plugins: false } });
+      });
+    return () => { active = false; };
+  }, [selectedProfile?.id, selectedProfile?.installedSoftware, selectedProfile?.target.directory, selectedRemoteConnected]);
+
+  useEffect(() => {
+    if (packageSupport && ((activeServerTab === "mods" && !packageSupport.mods) || (activeServerTab === "plugins" && !packageSupport.plugins))) {
+      setActiveServerTab("console");
+    }
+  }, [activeServerTab, packageSupport?.mods, packageSupport?.plugins]);
   const visibleProfiles = !selectedProfileId && environmentFilterId
     ? profiles.filter((profile) => profile.target.kind === "remote" && profile.target.environmentId === environmentFilterId)
     : profiles;
@@ -673,7 +714,7 @@ function App() {
     try {
       const saved = editingProfile
         ? await serverProfiles.update(editingProfile.id, draft.name, targetFor(draft, editingProfile))
-        : await serverProfiles.create(draft.name, targetFor(draft));
+        : await serverProfiles.create(draft.name, targetFor(draft), draft.kind === "remote" && !draft.manualDirectory);
 
       setConnectedRemotes((current) => {
         const next = { ...current };
@@ -818,7 +859,7 @@ function App() {
                     name="target-kind"
                     value="local"
                     checked={draft.kind === "local"}
-                    onChange={() => setDraft({ ...draft, kind: "local" })}
+                    onChange={() => setDraft({ ...draft, kind: "local", manualDirectory: false, directory: "" })}
                   />
                   <span>On this computer</span>
                 </label>
@@ -828,7 +869,7 @@ function App() {
                     name="target-kind"
                     value="remote"
                     checked={draft.kind === "remote"}
-                    onChange={() => setDraft({ ...draft, kind: "remote" })}
+                    onChange={() => setDraft({ ...draft, kind: "remote", manualDirectory: false, directory: "" })}
                   />
                   <span>Remote with SSH</span>
                 </label>
@@ -895,15 +936,28 @@ function App() {
                   <button className="button button-secondary" type="button" onClick={() => openNewEnvironment()}>
                     <Plus size={15} aria-hidden="true" /> Add remote environment
                   </button>
-                  <label className="field field-wide">
-                    <span>Remote server folder <small>(needed for start and files)</small></span>
-                    <input
-                      value={draft.directory}
-                      onChange={(event) => setDraft({ ...draft, directory: event.currentTarget.value })}
-                      placeholder="/home/minecraft/survival"
-                    />
-                    <small>Use an absolute Linux path. File access stays inside this folder.</small>
-                  </label>
+                  {!editingProfile && <fieldset className="field field-wide target-choice">
+                    <legend>Server folder</legend>
+                    <label className={!draft.manualDirectory ? "choice choice-selected" : "choice"}>
+                      <input type="radio" name="remote-folder-mode" checked={!draft.manualDirectory} onChange={() => setDraft({ ...draft, manualDirectory: false })} />
+                      <span>Create or use a folder in this environment</span>
+                    </label>
+                    <label className={draft.manualDirectory ? "choice choice-selected" : "choice"}>
+                      <input type="radio" name="remote-folder-mode" checked={draft.manualDirectory} onChange={() => setDraft({ ...draft, manualDirectory: true })} />
+                      <span>Use an existing folder</span>
+                    </label>
+                  </fieldset>}
+                  {draft.manualDirectory ? <label className="field field-wide">
+                    <span>Remote server folder</span>
+                    <input value={draft.directory} onChange={(event) => setDraft({ ...draft, directory: event.currentTarget.value })} placeholder="/home/minecraft/servers/survival-world" required />
+                    <small>Enter the absolute Linux path of an existing server folder.</small>
+                  </label> : <p className="field field-wide managed-folder-preview">
+                    {(() => {
+                      const root = environments.find((environment) => environment.id === draft.environmentId)?.rootDirectory;
+                      const folder = serverFolderName(draft.name);
+                      return root && folder ? `Server folder: ${root.replace(/\/$/, "")}/servers/${folder}` : "Enter a server name and choose an environment to see its folder.";
+                    })()}
+                  </p>}
                   <label className="field field-wide">
                     <span>Launch executable <small>(needed to start)</small></span>
                     <input
@@ -1024,9 +1078,12 @@ function App() {
               <button className={`server-tab${activeServerTab === "worlds" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "worlds" ? "page" : undefined} onClick={() => setActiveServerTab("worlds")}>
                 <Globe2 size={16} aria-hidden="true" /> Worlds
               </button>
-              <button className={`server-tab${activeServerTab === "packages" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "packages" ? "page" : undefined} onClick={() => setActiveServerTab("packages")}>
-                <Package size={16} aria-hidden="true" /> Mods & plugins
-              </button>
+              {packageSupport?.mods && <button className={`server-tab${activeServerTab === "mods" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "mods" ? "page" : undefined} onClick={() => setActiveServerTab("mods")}>
+                <Package size={16} aria-hidden="true" /> Mods
+              </button>}
+              {packageSupport?.plugins && <button className={`server-tab${activeServerTab === "plugins" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "plugins" ? "page" : undefined} onClick={() => setActiveServerTab("plugins")}>
+                <Puzzle size={16} aria-hidden="true" /> Plugins
+              </button>}
               <button className={`server-tab${activeServerTab === "properties" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "properties" ? "page" : undefined} onClick={() => { setActiveServerTab("properties"); setPropertiesProfileId(selectedProfile.id); }}>
                 <SlidersHorizontal size={16} aria-hidden="true" /> Properties
               </button>
@@ -1349,9 +1406,12 @@ function App() {
                         <section className="server-tab-panel" hidden={activeServerTab !== "worlds"} aria-label="Server worlds">
                           {activeServerTab === "worlds" && <WorldsPanel key={profile.id} profileId={profile.id} remote={!isLocal} />}
                         </section>
-                        <section className="server-tab-panel" hidden={activeServerTab !== "packages"} aria-label="Server mods and plugins">
-                          {activeServerTab === "packages" && <PackagesPanel key={profile.id} profileId={profile.id} remote={!isLocal} canInstall={isLocal ? state === "stopped" : remoteState === "stopped"} />}
-                        </section>
+                        {packageSupport?.mods && <section className="server-tab-panel" hidden={activeServerTab !== "mods"} aria-label="Server mods">
+                          {activeServerTab === "mods" && <PackagesPanel key={`${profile.id}-mods`} kind="mod" software={profile.installedSoftware} installedVersion={profile.installedVersion} profileId={profile.id} remote={!isLocal} canInstall={isLocal ? state === "stopped" : remoteState === "stopped"} />}
+                        </section>}
+                        {packageSupport?.plugins && <section className="server-tab-panel" hidden={activeServerTab !== "plugins"} aria-label="Server plugins">
+                          {activeServerTab === "plugins" && <PackagesPanel key={`${profile.id}-plugins`} kind="plugin" software={profile.installedSoftware} installedVersion={profile.installedVersion} profileId={profile.id} remote={!isLocal} canInstall={isLocal ? state === "stopped" : remoteState === "stopped"} />}
+                        </section>}
                         <section className="server-tab-panel server-properties-tab" hidden={activeServerTab !== "properties"} aria-label="Server properties">
                           {propertiesProfileId === profile.id && (
                             <ServerPropertiesPanel

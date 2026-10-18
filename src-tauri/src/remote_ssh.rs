@@ -544,6 +544,145 @@ pub async fn read_remote_server_file(
 }
 
 #[tauri::command]
+pub async fn read_remote_server_log_start(
+    profile_id: Uuid,
+    profiles: State<'_, ServerProfileStore>,
+    remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<String, String> {
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    run_remote(
+        profile,
+        environment,
+        Arc::clone(remote_sessions.inner()),
+        move |session, profile| {
+            let sftp = session.sftp().map_err(|error| format!("Could not open SFTP: {error}"))?;
+            let root = remote_root_with_sftp(&sftp, configured_remote_root(profile)?)?;
+            let requested = resolve_remote_relative(&root, "logs/latest.log", false)?;
+            reject_remote_symlink_path(&sftp, &root, &requested)?;
+            let canonical = canonical_inside(&sftp, &root, &requested)?;
+            let metadata = sftp.lstat(Path::new(&canonical))
+                .map_err(|error| format!("Could not inspect the server log: {error}"))?;
+            if metadata.file_type() != FileType::File {
+                return Err("The server log is not a regular file.".into());
+            }
+            let bytes = sftp.read_prefix(Path::new(&canonical), 256 * 1024)
+                .map_err(|error| format!("Could not read the server log: {error}"))?;
+            Ok(String::from_utf8_lossy(&bytes).into_owned())
+        },
+    ).await
+}
+
+pub(crate) async fn remote_package_names(
+    profile: ServerProfile,
+    environment: ServerEnvironment,
+    sessions: Arc<RemoteSessionManager>,
+    folder: &str,
+) -> Result<Vec<String>, String> {
+    let folder = folder.to_owned();
+    run_remote(profile, environment, sessions, move |session, profile| {
+        let sftp = session.sftp()?;
+        let root = remote_root_with_sftp(&sftp, configured_remote_root(profile)?)?;
+        let path = resolve_remote_relative(&root, &folder, false)?;
+        let metadata = match sftp.lstat(Path::new(&path)) {
+            Ok(metadata) => metadata,
+            Err(_) => return Ok(Vec::new()),
+        };
+        if metadata.file_type() != FileType::Dir {
+            return Err("The package path is not a folder.".into());
+        }
+        Ok(sftp.read_dir(Path::new(&path))?.into_iter()
+            .filter(|(_, metadata)| metadata.file_type() == FileType::File)
+            .map(|(name, _)| name)
+            .collect())
+    }).await
+}
+
+pub(crate) async fn remote_package_sha512(
+    profile: ServerProfile,
+    environment: ServerEnvironment,
+    sessions: Arc<RemoteSessionManager>,
+    folder: &str,
+    filename: &str,
+) -> Result<String, String> {
+    let folder = folder.to_owned();
+    let filename = filename.to_owned();
+    run_remote(profile, environment, sessions, move |session, profile| {
+        let sftp = session.sftp()?;
+        let root = remote_root_with_sftp(&sftp, configured_remote_root(profile)?)?;
+        let path = resolve_remote_relative(&root, &format!("{folder}/{filename}"), false)?;
+        reject_remote_symlink_path(&sftp, &root, &path)?;
+        let canonical = canonical_inside(&sftp, &root, &path)?;
+        if sftp.lstat(Path::new(&canonical))?.file_type() != FileType::File {
+            return Err("The existing package is not a regular file.".into());
+        }
+        let result = execute(session, &format!("sha512sum -- {}", shell_quote(&canonical)))?;
+        if result.exit_code != 0 { return Err(remote_command_error("Could not hash the existing package", result)); }
+        let output = String::from_utf8_lossy(&result.stdout);
+        let hash = output.split_whitespace().next().unwrap_or_default();
+        if hash.len() != 128 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err("The remote package hash is invalid.".into());
+        }
+        Ok(hash.to_ascii_lowercase())
+    }).await
+}
+
+#[tauri::command]
+pub async fn detect_remote_fabric_version(
+    profile_id: Uuid,
+    profiles: State<'_, ServerProfileStore>,
+    remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<Option<String>, String> {
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    if profile.installed_software.as_deref() != Some("fabric") {
+        return Ok(None);
+    }
+    run_remote(profile, environment.clone(), Arc::clone(remote_sessions.inner()), move |session, profile| {
+        let sftp = session.sftp()?;
+        let root = remote_root_with_sftp(&sftp, &environment.root_directory)?;
+        let server = remote_root_with_sftp(&sftp, configured_remote_root(profile)?)?;
+        let installed = format!("{server}/fabric-server-launch.jar");
+        if !matches!(sftp.lstat(Path::new(&installed)), Ok(metadata) if metadata.file_type() == FileType::File) {
+            return Ok(None);
+        }
+        let cache = format!("{root}/cache/fabric");
+        if !matches!(sftp.lstat(Path::new(&cache)), Ok(metadata) if metadata.file_type() == FileType::Dir) {
+            return Ok(None);
+        }
+        let versions = match sftp.read_dir(Path::new(&cache)) {
+            Ok(versions) => versions,
+            Err(_) => return Ok(None),
+        };
+        let mut match_version = None;
+        for (version, metadata) in versions.into_iter().take(100) {
+            if metadata.file_type() != FileType::Dir || !crate::vanilla_install::safe_version(&version) {
+                continue;
+            }
+            let builds = match sftp.read_dir(Path::new(&format!("{cache}/{version}"))) {
+                Ok(builds) => builds,
+                Err(_) => continue,
+            };
+            for (build, metadata) in builds.into_iter().take(100) {
+                if metadata.file_type() != FileType::Dir || !crate::vanilla_install::safe_version(&build) {
+                    continue;
+                }
+                let candidate = format!("{cache}/{version}/{build}/fabric-server-launch.jar");
+                if !matches!(sftp.lstat(Path::new(&candidate)), Ok(metadata) if metadata.file_type() == FileType::File) {
+                    continue;
+                }
+                let compared = execute(session, &format!("cmp -s -- {} {}", shell_quote(&installed), shell_quote(&candidate)))?;
+                if compared.exit_code == 0 {
+                    if match_version.as_deref().is_some_and(|found| found != version) {
+                        return Ok(None);
+                    }
+                    match_version = Some(version.clone());
+                }
+            }
+        }
+        Ok(match_version)
+    }).await
+}
+
+#[tauri::command]
 pub async fn write_remote_server_file(
     profile_id: Uuid,
     relative_path: String,
@@ -650,6 +789,85 @@ fn remote_connection_config(environment: &ServerEnvironment) -> RemoteConnection
         username: environment.username.clone(),
         identity_file: environment.identity_file.clone(),
     }
+}
+
+pub async fn prepare_remote_server_directory(
+    environment: ServerEnvironment,
+    name: String,
+    sessions: Arc<RemoteSessionManager>,
+) -> Result<String, String> {
+    let mut slug = String::new();
+    let mut separator = false;
+    for character in name.trim().chars() {
+        if character.is_alphanumeric() {
+            if separator && !slug.is_empty() {
+                slug.push('-');
+            }
+            slug.extend(character.to_lowercase());
+            separator = false;
+        } else {
+            separator = true;
+        }
+    }
+    if slug.is_empty() {
+        return Err("The server name needs a letter or number for its folder name. Choose a custom folder instead.".into());
+    }
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let config = remote_connection_config(&environment);
+        let connection = RemoteConnection {
+            handle: connect_remote(&sessions.runtime, &config.host, config.port, &config.username, config.identity_file.as_deref())?,
+            runtime: Arc::clone(&sessions.runtime),
+        };
+        let sftp = connection.sftp()?;
+        let created = execute(&connection, &format!("mkdir -p -- {}", shell_quote(&environment.root_directory)))?;
+        if created.exit_code != 0 {
+            return Err(remote_command_error("Could not create the configured Minecraft root", created));
+        }
+        let root = remote_root_with_sftp(&sftp, &environment.root_directory)
+            .map_err(|error| format!("Could not verify the configured Minecraft root: {error}"))?;
+        let mut parent = root;
+        for part in ["servers", slug.as_str()] {
+            let path = format!("{parent}/{part}");
+            let exists = execute(&connection, &format!("test -e {} || test -L {}", shell_quote(&path), shell_quote(&path)))?;
+            if exists.exit_code == 0 {
+                if sftp.lstat(Path::new(&path))?.file_type() != FileType::Dir {
+                    return Err("A managed server folder is a file or symbolic link. Choose another server name or a custom folder.".into());
+                }
+            } else {
+                let created = execute(&connection, &format!("mkdir -- {}", shell_quote(&path)))?;
+                if created.exit_code != 0 {
+                    return Err(remote_command_error("Could not create the remote server folder", created));
+                }
+            }
+            let canonical = remote_root_with_sftp(&sftp, &path)
+                .map_err(|error| format!("Could not verify the managed server folder {path}: {error}"))?;
+            if Path::new(&canonical).parent() != Some(Path::new(&parent)) {
+                return Err("The managed server folder resolves outside the configured Minecraft root.".into());
+            }
+            parent = canonical;
+        }
+        Ok(parent)
+    })
+    .await
+    .map_err(|error| format!("Remote folder setup failed to finish: {error}"))?
+}
+
+pub async fn verify_remote_server_directory(
+    environment: ServerEnvironment,
+    directory: String,
+    sessions: Arc<RemoteSessionManager>,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let config = remote_connection_config(&environment);
+        let connection = RemoteConnection {
+            handle: connect_remote(&sessions.runtime, &config.host, config.port, &config.username, config.identity_file.as_deref())?,
+            runtime: Arc::clone(&sessions.runtime),
+        };
+        remote_root(&connection, &directory)
+    })
+    .await
+    .map_err(|error| format!("Remote folder check failed to finish: {error}"))?
 }
 
 fn connect_remote(
@@ -1075,13 +1293,16 @@ impl RemoteSftp {
         })
     }
     fn read_file(&self, path: &Path) -> Result<Vec<u8>, String> {
+        self.read_prefix(path, MAX_FILE_BYTES as usize + 1)
+    }
+    fn read_prefix(&self, path: &Path, limit: usize) -> Result<Vec<u8>, String> {
         let path = path.to_string_lossy().to_string();
         self.runtime.block_on(async {
             let mut file = self.inner.open(path).await.map_err(|e| e.to_string())?;
             let mut bytes = Vec::new();
             let mut buffer = [0_u8; 8192];
-            while bytes.len() <= MAX_FILE_BYTES as usize {
-                let remaining = (MAX_FILE_BYTES as usize + 1 - bytes.len()).min(buffer.len());
+            while bytes.len() < limit {
+                let remaining = (limit - bytes.len()).min(buffer.len());
                 let count = file
                     .read(&mut buffer[..remaining])
                     .await
@@ -1157,9 +1378,11 @@ pub(crate) async fn install_remote_jar(
     environment: ServerEnvironment,
     sessions: Arc<RemoteSessionManager>,
     directory: String,
-    source: PathBuf,
+    source: Option<PathBuf>,
+    url: String,
     version: String,
     sha1: String,
+    sha256: Option<String>,
     cache_kind: String,
     filename: String,
 ) -> Result<(), String> {
@@ -1211,17 +1434,28 @@ pub(crate) async fn install_remote_jar(
         let cached = format!("{canonical_cache}/{filename}");
         let cached_exists = execute(session, &format!("test -e {} || test -L {}", shell_quote(&cached), shell_quote(&cached)))?;
         if cached_exists.exit_code == 0 {
-            let hash = execute(session, &format!("test ! -L {} && sha1sum -- {}", shell_quote(&cached), shell_quote(&cached)))?;
-            if hash.exit_code != 0 || !String::from_utf8_lossy(&hash.stdout).starts_with(&sha1) {
+            let valid = if sha1.is_empty() && sha256.is_none() {
+                remote_jar_looks_valid(session, &cached)?
+            } else {
+                let (command, expected) = if let Some(ref expected) = sha256 { ("sha256sum", expected.as_str()) } else { ("sha1sum", sha1.as_str()) };
+                let hash = execute(session, &format!("test ! -L {} && {command} -- {}", shell_quote(&cached), shell_quote(&cached)))?;
+                remote_hash_matches(&hash, expected)
+            };
+            if !valid {
                 return Err("The remote cached jar has a different checksum. Remove that cache file before retrying.".into());
             }
         } else {
             let upload = format!("{canonical_cache}/.servercrafter-{}.tmp", Uuid::new_v4());
             let result = (|| {
-                sftp.upload_file_exclusive(Path::new(&upload), &source)
-                    .map_err(|error| format!("Could not upload server jar: {error}"))?;
-                let hash = execute(session, &format!("sha1sum -- {}", shell_quote(&upload)))?;
-                if hash.exit_code != 0 || !String::from_utf8_lossy(&hash.stdout).starts_with(&sha1) {
+                download_or_upload(session, &sftp, &upload, &url, source.as_deref())?;
+                let valid = if sha1.is_empty() && sha256.is_none() {
+                    remote_jar_looks_valid(session, &upload)?
+                } else {
+                    let (command, expected) = if let Some(ref expected) = sha256 { ("sha256sum", expected.as_str()) } else { ("sha1sum", sha1.as_str()) };
+                    let hash = execute(session, &format!("{command} -- {}", shell_quote(&upload)))?;
+                    remote_hash_matches(&hash, expected)
+                };
+                if !valid {
                 return Err("The uploaded server jar did not match the downloaded file.".into());
                 }
                 let link = execute(session, &format!("ln -- {} {}", shell_quote(&upload), shell_quote(&cached)))?;
@@ -1250,13 +1484,15 @@ pub(crate) async fn install_remote_loader(
     environment: ServerEnvironment,
     sessions: Arc<RemoteSessionManager>,
     directory: String,
-    source: PathBuf,
+    source: Option<PathBuf>,
+    url: String,
     loader: String,
     version: String,
     build: String,
     quilt_loader: Option<String>,
     java: String,
     sha1: String,
+    sha256: Option<String>,
 ) -> Result<(), String> {
     run_remote(profile, environment.clone(), sessions, move |session, profile| {
         let sftp = session.sftp()?;
@@ -1301,16 +1537,27 @@ pub(crate) async fn install_remote_loader(
         match sftp.lstat(Path::new(&installer)) {
             Ok(stat) if stat.file_type() != FileType::File => return Err("The cached installer is not a regular file.".into()),
             Ok(_) => {
-                let hash = execute(session, &format!("sha1sum -- {}", shell_quote(&installer)))?;
-                if hash.exit_code != 0 || !String::from_utf8_lossy(&hash.stdout).starts_with(&sha1) {
+                let valid = if sha1.is_empty() && sha256.is_none() {
+                    remote_jar_looks_valid(session, &installer)?
+                } else {
+                    let (command, expected) = if let Some(ref expected) = sha256 { ("sha256sum", expected.as_str()) } else { ("sha1sum", sha1.as_str()) };
+                    let hash = execute(session, &format!("{command} -- {}", shell_quote(&installer)))?;
+                    remote_hash_matches(&hash, expected)
+                };
+                if !valid {
                     return Err("The cached installer has a different checksum. Remove it before retrying.".into());
                 }
             }
             Err(_) => {
-                sftp.upload_file_exclusive(Path::new(&installer), &source)
-                    .map_err(|error| format!("Could not upload loader installer: {error}"))?;
-                let hash = execute(session, &format!("sha1sum -- {}", shell_quote(&installer)))?;
-                if hash.exit_code != 0 || !String::from_utf8_lossy(&hash.stdout).starts_with(&sha1) {
+                download_or_upload(session, &sftp, &installer, &url, source.as_deref())?;
+                let valid = if sha1.is_empty() && sha256.is_none() {
+                    remote_jar_looks_valid(session, &installer)?
+                } else {
+                    let (command, expected) = if let Some(ref expected) = sha256 { ("sha256sum", expected.as_str()) } else { ("sha1sum", sha1.as_str()) };
+                    let hash = execute(session, &format!("{command} -- {}", shell_quote(&installer)))?;
+                    remote_hash_matches(&hash, expected)
+                };
+                if !valid {
                     return Err("The uploaded loader installer failed its checksum check.".into());
                 }
             }
@@ -1348,8 +1595,10 @@ pub(crate) async fn install_remote_package(
     sessions: Arc<RemoteSessionManager>,
     folder: String,
     filename: String,
-    source: PathBuf,
+    source: Option<PathBuf>,
     sha1: String,
+    url: String,
+    sha512: Option<String>,
 ) -> Result<(), String> {
     run_remote(profile, environment, sessions, move |session, profile| {
         match remote_is_running(session, profile)? {
@@ -1373,11 +1622,11 @@ pub(crate) async fn install_remote_package(
         if sftp.lstat(Path::new(&destination)).is_ok() { return Err(format!("{filename} already exists. Existing packages are never replaced.")); }
         let temporary = format!("{directory}/.servercrafter-{}.tmp", Uuid::new_v4());
         let result = (|| {
-            sftp.upload_file_exclusive(Path::new(&temporary), &source)
-                .map_err(|error| format!("Could not upload package: {error}"))?;
-            let hash = execute(session, &format!("sha1sum -- {}", shell_quote(&temporary)))?;
-            if hash.exit_code != 0 || !String::from_utf8_lossy(&hash.stdout).starts_with(&sha1) {
-                return Err("The uploaded package failed its checksum check.".into());
+            download_or_upload(session, &sftp, &temporary, &url, source.as_deref())?;
+            let (command, expected) = if let Some(ref expected) = sha512 { ("sha512sum", expected.as_str()) } else { ("sha1sum", sha1.as_str()) };
+            let hash = execute(session, &format!("{command} -- {}", shell_quote(&temporary)))?;
+            if !remote_hash_matches(&hash, expected) {
+                return Err("The package failed its checksum check.".into());
             }
             let linked = execute(session, &format!("ln -- {} {}", shell_quote(&temporary), shell_quote(&destination)))?;
             if linked.exit_code != 0 { return Err(remote_command_error("Could not install package", linked)); }
@@ -1510,7 +1759,7 @@ pub(crate) async fn install_remote_java(
     environment: ServerEnvironment,
     sessions: Arc<RemoteSessionManager>,
     package: JavaPackage,
-    source: PathBuf,
+    source: Option<PathBuf>,
     top: String,
 ) -> Result<String, String> {
     run_remote(profile, environment.clone(), sessions, move |session, _| {
@@ -1526,11 +1775,24 @@ pub(crate) async fn install_remote_java(
         }
         let upload = format!("{canonical_parent}/.servercrafter-{}-jdk.tar.gz", Uuid::new_v4());
         let result = (|| {
-            sftp.upload_file_exclusive(Path::new(&upload), &source).map_err(|error| format!("Could not upload JDK archive: {error}"))?;
+            download_or_upload(session, &sftp, &upload, &package.link, source.as_deref())?;
             let hash = execute(session, &format!("sha256sum -- {}", shell_quote(&upload)))?;
-            if hash.exit_code != 0 || !String::from_utf8_lossy(&hash.stdout).starts_with(&package.sha256) {
-                return Err("The uploaded JDK archive did not match Adoptium's SHA-256 checksum.".into());
+            if !remote_hash_matches(&hash, &package.sha256) {
+                return Err("The JDK archive did not match Adoptium's SHA-256 checksum.".into());
             }
+            let archive_top = if top.is_empty() {
+                let listed = execute(session, &format!("tar -tzf {} | head -n 20", shell_quote(&upload)))?;
+                let listing = String::from_utf8_lossy(&listed.stdout);
+                let first = listing
+                    .lines()
+                    .map(|line| line.trim_start_matches("./").split('/').next().unwrap_or_default())
+                    .find(|part| !part.is_empty() && *part != ".")
+                    .ok_or("The JDK archive has no top-level folder.")?;
+                if first.len() > 80 || !first.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_' | b'+')) {
+                    return Err("The JDK archive has an unsafe top-level folder.".into());
+                }
+                first.to_owned()
+            } else { top.clone() };
             let staging = format!("{canonical_parent}/.servercrafter-{}.tmp", Uuid::new_v4());
             let create = execute(session, &format!("mkdir -- {}", shell_quote(&staging)))?;
             if create.exit_code != 0 { return Err(remote_command_error("Could not stage remote JDK", create)); }
@@ -1541,7 +1803,7 @@ pub(crate) async fn install_remote_java(
                 }
                 let extract = execute(session, &format!("tar -xzf {} -C {}", shell_quote(&upload), shell_quote(&staging)))?;
                 if extract.exit_code != 0 { return Err(remote_command_error("Could not extract remote JDK", extract)); }
-                let extracted = format!("{staging}/{top}");
+                let extracted = format!("{staging}/{archive_top}");
                 let candidate = format!("{extracted}/bin/java");
                 let verify = execute(session, &format!("test -x {} && test ! -e {} && test ! -L {}", shell_quote(&candidate), shell_quote(&runtime), shell_quote(&runtime)))?;
                 if verify.exit_code != 0 { return Err("The remote JDK archive is missing Java or the runtime folder already exists.".into()); }
@@ -1638,6 +1900,47 @@ fn launch_command(launch: &LocalLaunchConfig, managed_java: Option<&str>) -> Str
 
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+pub(crate) const REMOTE_DOWNLOAD_UNAVAILABLE: &str = "Remote download unavailable";
+
+fn remote_hash_matches(result: &RemoteCommandOutput, expected: &str) -> bool {
+    result.exit_code == 0
+        && String::from_utf8_lossy(&result.stdout)
+            .split_whitespace()
+            .next()
+            .is_some_and(|hash| hash.eq_ignore_ascii_case(expected))
+}
+
+fn remote_jar_looks_valid(session: &RemoteConnection, path: &str) -> Result<bool, String> {
+    let quoted = shell_quote(path);
+    let result = execute(session, &format!(
+        "test -f {quoted} && test ! -L {quoted} && size=$(wc -c < {quoted}) && test \"$size\" -ge 1024 && test \"$size\" -le 536870912 && test \"$(head -c 2 {quoted})\" = PK"
+    ))?;
+    Ok(result.exit_code == 0)
+}
+
+fn download_or_upload(
+    session: &RemoteConnection,
+    sftp: &RemoteSftp,
+    destination: &str,
+    url: &str,
+    source: Option<&Path>,
+) -> Result<(), String> {
+    if let Some(source) = source {
+        return sftp.upload_file_exclusive(Path::new(destination), source)
+            .map_err(|error| format!("Could not upload file: {error}"));
+    }
+    let command = format!(
+        "if command -v curl >/dev/null 2>&1; then curl --fail --location --silent --show-error --proto '=https' --proto-redir '=https' --max-redirs 5 --connect-timeout 15 --max-time 1800 --output {} -- {}; elif command -v wget >/dev/null 2>&1; then wget --https-only --max-redirect=5 --timeout=30 --output-document={} -- {}; else exit 127; fi",
+        shell_quote(destination), shell_quote(url), shell_quote(destination), shell_quote(url)
+    );
+    let result = execute(session, &command)?;
+    if result.exit_code != 0 {
+        let _ = sftp.unlink(Path::new(destination));
+        return Err(format!("{REMOTE_DOWNLOAD_UNAVAILABLE}: the remote host could not fetch the file over HTTPS."));
+    }
+    Ok(())
 }
 
 fn session_name(profile_id: Uuid) -> String {

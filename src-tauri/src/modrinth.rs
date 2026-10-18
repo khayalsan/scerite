@@ -1,4 +1,5 @@
 use std::{
+    collections::{HashMap, HashSet, VecDeque},
     fs,
     io::{Read, Write},
     path::Path,
@@ -14,7 +15,7 @@ use uuid::Uuid;
 
 use crate::{
     remote_ssh::{self, RemoteSessionManager},
-    server_profiles::{ServerProfileStore, ServerTarget},
+    server_profiles::{InstalledPackage, ServerProfile, ServerProfileStore, ServerTarget},
     server_sessions::{LocalServerState, LocalSessionManager},
     vanilla_install::{client, safe_version},
 };
@@ -28,6 +29,8 @@ pub struct CatalogProject {
     title: String,
     description: String,
     author: String,
+    icon_url: Option<String>,
+    downloads: u64,
 }
 
 #[derive(Serialize)]
@@ -37,6 +40,32 @@ pub struct CatalogVersion {
     name: String,
     version_number: String,
     required_dependencies: usize,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallPlanEntry {
+    project_id: String,
+    version_id: String,
+    title: String,
+    version_number: String,
+    filename: String,
+    required_by: Vec<String>,
+    already_installed: bool,
+    direct: bool,
+}
+
+struct ResolvedPackage {
+    entry: InstallPlanEntry,
+    file: Value,
+    requires: Vec<String>,
+}
+
+struct DependencyRequest {
+    project_id: Option<String>,
+    version_id: Option<String>,
+    parent_id: Option<String>,
+    parent_title: Option<String>,
 }
 
 fn package_folder(kind: &str) -> Result<&'static str, String> {
@@ -87,14 +116,18 @@ pub async fn search_modrinth(
     kind: String,
     game_version: String,
     loader: String,
+    index: String,
 ) -> Result<Vec<CatalogProject>, String> {
     package_folder(&kind)?;
     if !valid_loader(&kind, &loader) || !safe_version(&game_version) {
         return Err("Choose a valid Minecraft version and loader.".into());
     }
     let query = query.trim();
-    if query.len() < 2 || query.len() > 100 {
-        return Err("Enter 2 to 100 characters to search.".into());
+    if (!query.is_empty() && query.len() < 2) || query.len() > 100 {
+        return Err("Enter at least 2 characters, or leave search empty to browse.".into());
+    }
+    if !matches!(index.as_str(), "relevance" | "downloads" | "updated") {
+        return Err("Choose a valid search order.".into());
     }
     let facets = serde_json::json!([
         [format!("project_type:{kind}")],
@@ -113,19 +146,27 @@ pub async fn search_modrinth(
     url.query_pairs_mut()
         .append_pair("query", query)
         .append_pair("facets", &facets.to_string())
-        .append_pair("limit", "20");
+        .append_pair("index", &index)
+        .append_pair("limit", "40");
     let data = get_json(&client()?, url).await?;
     let hits = data["hits"]
         .as_array()
         .ok_or("Modrinth returned an invalid search response.")?;
     Ok(hits
         .iter()
+        .filter(|hit| {
+            hit["project_type"].as_str() == Some(kind.as_str())
+                && hit["categories"].as_array().is_some_and(|items| items.iter().any(|item| item.as_str() == Some(loader.as_str())))
+                && hit["versions"].as_array().is_some_and(|items| items.iter().any(|item| item.as_str() == Some(game_version.as_str())))
+        })
         .filter_map(|hit| {
             Some(CatalogProject {
                 id: hit["project_id"].as_str()?.to_owned(),
                 title: hit["title"].as_str()?.to_owned(),
                 description: hit["description"].as_str().unwrap_or_default().to_owned(),
                 author: hit["author"].as_str().unwrap_or_default().to_owned(),
+                icon_url: hit["icon_url"].as_str().filter(|url| url.starts_with("https://cdn.modrinth.com/")).map(str::to_owned),
+                downloads: hit["downloads"].as_u64().unwrap_or(0),
             })
         })
         .collect())
@@ -331,8 +372,233 @@ fn install_local_package(
     result
 }
 
+async fn package_names(
+    profile: &ServerProfile,
+    folder: &str,
+    profiles: &ServerProfileStore,
+    remote_sessions: &Arc<RemoteSessionManager>,
+) -> Result<HashSet<String>, String> {
+    let names = match &profile.target {
+        ServerTarget::Local { directory, .. } => {
+            let root = fs::canonicalize(directory).map_err(|_| "The server folder could not be opened.")?;
+            let path = root.join(folder);
+            if !path.exists() { Vec::new() } else {
+                if !path.is_dir() || fs::canonicalize(&path).map_err(|error| error.to_string())? != path {
+                    return Err("The package folder is not a regular folder inside this server.".into());
+                }
+                fs::read_dir(path).map_err(|error| format!("Could not list installed packages: {error}"))?
+                    .filter_map(|entry| entry.ok().filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file())).map(|entry| entry.file_name().to_string_lossy().into_owned()))
+                    .collect()
+            }
+        }
+        ServerTarget::Remote { environment_id, .. } => {
+            let environment = profiles.environment(*environment_id)?;
+            remote_ssh::remote_package_names(profile.clone(), environment, Arc::clone(remote_sessions), folder).await?
+        }
+    };
+    Ok(names.into_iter().collect())
+}
+
+fn installable_file<'a>(version: &'a Value) -> Result<&'a Value, String> {
+    let files = version["files"].as_array().ok_or("Modrinth did not provide package files.")?;
+    files.iter().find(|file| file["primary"] == true && file["filename"].as_str().is_some_and(|name| name.ends_with(".jar")))
+        .or_else(|| files.iter().find(|file| file["filename"].as_str().is_some_and(|name| name.ends_with(".jar"))))
+        .ok_or_else(|| "A required package has no installable JAR file.".into())
+}
+
+fn server_compatible(version: &Value, game_version: &str, loader: &str) -> bool {
+    version["game_versions"].as_array().is_some_and(|items| items.iter().any(|item| item.as_str() == Some(game_version)))
+        && version["loaders"].as_array().is_some_and(|items| items.iter().any(|item| item.as_str() == Some(loader)))
+        && !matches!(version["environment"].as_str(), Some("client_only" | "singleplayer_only"))
+}
+
+fn order_packages(index: usize, packages: &[ResolvedPackage], lookup: &HashMap<String, usize>, visiting: &mut HashSet<usize>, done: &mut HashSet<usize>, order: &mut Vec<usize>) -> Result<(), String> {
+    if done.contains(&index) { return Ok(()); }
+    if !visiting.insert(index) { return Err("Required packages contain a dependency cycle.".into()); }
+    for dependency in &packages[index].requires {
+        let next = *lookup.get(dependency).ok_or("A required package could not be resolved.")?;
+        order_packages(next, packages, lookup, visiting, done, order)?;
+    }
+    visiting.remove(&index);
+    done.insert(index);
+    order.push(index);
+    Ok(())
+}
+
+async fn existing_package_matches(
+    profile: &ServerProfile,
+    folder: &str,
+    filename: &str,
+    expected: &str,
+    profiles: &ServerProfileStore,
+    remote_sessions: &Arc<RemoteSessionManager>,
+) -> Result<bool, String> {
+    if expected.len() != 128 || !expected.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("Modrinth provided an invalid package checksum.".into());
+    }
+    let actual = match &profile.target {
+        ServerTarget::Local { directory, .. } => {
+            let root = fs::canonicalize(directory).map_err(|_| "The server folder could not be opened.")?;
+            let path = root.join(folder).join(filename);
+            if fs::symlink_metadata(&path).map_err(|error| error.to_string())?.file_type().is_symlink() {
+                return Err("The existing package is a symbolic link.".into());
+            }
+            let path = fs::canonicalize(path).map_err(|error| format!("Could not inspect existing package: {error}"))?;
+            if !path.starts_with(root.join(folder)) { return Err("The package leaves the server folder.".into()); }
+            let mut file = fs::File::open(path).map_err(|error| format!("Could not read existing package: {error}"))?;
+            let mut digest = Sha512::new();
+            let mut buffer = [0_u8; 8192];
+            loop {
+                let count = file.read(&mut buffer).map_err(|error| format!("Could not read existing package: {error}"))?;
+                if count == 0 { break; }
+                digest.update(&buffer[..count]);
+            }
+            format!("{:x}", digest.finalize())
+        }
+        ServerTarget::Remote { environment_id, .. } => {
+            let environment = profiles.environment(*environment_id)?;
+            remote_ssh::remote_package_sha512(profile.clone(), environment, Arc::clone(remote_sessions), folder, filename).await?
+        }
+    };
+    Ok(actual.eq_ignore_ascii_case(expected))
+}
+
+async fn resolve_install_plan(
+    client: &reqwest::Client,
+    profile: &ServerProfile,
+    kind: &str,
+    game_version: &str,
+    loader: &str,
+    project_id: &str,
+    version_id: &str,
+    existing_names: &HashSet<String>,
+    profiles: &ServerProfileStore,
+    remote_sessions: &Arc<RemoteSessionManager>,
+) -> Result<Vec<ResolvedPackage>, String> {
+    let mut queue = VecDeque::from([DependencyRequest { project_id: Some(project_id.to_owned()), version_id: Some(version_id.to_owned()), parent_id: None, parent_title: None }]);
+    let mut packages: Vec<ResolvedPackage> = Vec::new();
+    let mut lookup: HashMap<String, usize> = HashMap::new();
+    while let Some(request) = queue.pop_front() {
+        if queue.len() > 128 { return Err("This package lists too many dependencies to install safely.".into()); }
+        let version = if let Some(ref id) = request.version_id {
+            if !catalog_id(id) { return Err("A required package has an invalid version ID.".into()); }
+            get_json(client, api_url(&format!("version/{id}"))?).await?
+        } else {
+            let id = request.project_id.as_deref().ok_or("A required dependency has no Modrinth project or version ID.")?;
+            if !catalog_id(id) { return Err("A required package has an invalid project ID.".into()); }
+            let versions = get_json(client, versions_url(id, game_version, loader)?).await?;
+            versions.as_array().and_then(|items| {
+                items.iter().find(|item| server_compatible(item, game_version, loader) && item["version_type"] == "release")
+                    .or_else(|| items.iter().find(|item| server_compatible(item, game_version, loader)))
+            }).cloned()
+                .ok_or_else(|| format!("A required dependency has no server release for Minecraft {game_version} and {loader}."))?
+        };
+        let id = version["project_id"].as_str().ok_or("A required version has no project ID.")?;
+        if !catalog_id(id) || request.project_id.as_deref().is_some_and(|expected| expected != id) {
+            return Err("A dependency refers to a different Modrinth project than its version.".into());
+        }
+        let selected_id = version["id"].as_str().ok_or("A required version has no ID.")?;
+        if !catalog_id(selected_id) { return Err("A required package has an invalid version ID.".into()); }
+        if !server_compatible(&version, game_version, loader) {
+            return Err(format!("A required package is not compatible with Minecraft {game_version}, {loader}, and a dedicated server."));
+        }
+        if let Some(&index) = lookup.get(id) {
+            if packages[index].entry.version_id != selected_id {
+                return Err("Required packages request conflicting versions of the same project.".into());
+            }
+            if let Some(parent) = request.parent_title {
+                packages[index].entry.required_by.push(parent);
+            }
+            if let Some(parent_id) = request.parent_id {
+                packages[*lookup.get(&parent_id).ok_or("A dependency parent was not resolved.")?].requires.push(id.to_owned());
+            }
+            continue;
+        }
+        if packages.len() >= 32 { return Err("This install requires more than 32 packages. Install it manually.".into()); }
+        let project = get_json(client, api_url(&format!("project/{id}"))?).await?;
+        if project["id"].as_str() != Some(id) || project["project_type"].as_str() != Some(kind) {
+            return Err("A required dependency has the wrong Modrinth project type.".into());
+        }
+        let title = project["title"].as_str().unwrap_or(id).to_owned();
+        let file = installable_file(&version)?.clone();
+        let suggested_filename = safe_filename(file["filename"].as_str().unwrap_or_default(), id, selected_id);
+        let installed = profile.installed_packages.iter().find(|item| item.kind == kind && item.project_id == id && existing_names.contains(&item.filename));
+        let filename = installed.map(|item| item.filename.clone()).unwrap_or(suggested_filename);
+        if packages.iter().any(|item| item.entry.filename == filename) {
+            return Err(format!("Multiple packages use the filename {filename}. Rename the existing package before installing."));
+        }
+        if installed.is_some_and(|item| item.version_id != selected_id) {
+            return Err(format!("{title} is already installed at another version. Remove its JAR before installing this release."));
+        }
+        let already_installed = if existing_names.contains(&filename) {
+            let expected = file["hashes"]["sha512"].as_str().ok_or("Modrinth did not provide a package checksum.")?;
+            if !existing_package_matches(profile, package_folder(kind)?, &filename, expected, profiles, remote_sessions).await? {
+                return Err(format!("{filename} already exists but does not match Modrinth's checksum. Remove it before installing."));
+            }
+            true
+        } else { false };
+        let index = packages.len();
+        lookup.insert(id.to_owned(), index);
+        packages.push(ResolvedPackage {
+            entry: InstallPlanEntry { project_id: id.to_owned(), version_id: selected_id.to_owned(), title: title.clone(), version_number: version["version_number"].as_str().unwrap_or_default().to_owned(), filename, required_by: request.parent_title.into_iter().collect(), already_installed, direct: request.parent_id.is_none() },
+            file,
+            requires: Vec::new(),
+        });
+        if let Some(parent_id) = request.parent_id {
+            packages[*lookup.get(&parent_id).ok_or("A dependency parent was not resolved.")?].requires.push(id.to_owned());
+        }
+        if let Some(dependencies) = version["dependencies"].as_array() {
+            for dependency in dependencies.iter().filter(|item| item["dependency_type"] == "required") {
+                let dependency_project = dependency["project_id"].as_str().map(str::to_owned);
+                let dependency_version = dependency["version_id"].as_str().map(str::to_owned);
+                if dependency_project.is_none() && dependency_version.is_none() {
+                    return Err(format!("{title} requires an external dependency that Modrinth cannot download automatically."));
+                }
+                queue.push_back(DependencyRequest { project_id: dependency_project, version_id: dependency_version, parent_id: Some(id.to_owned()), parent_title: Some(title.clone()) });
+            }
+        }
+    }
+    let mut order = Vec::new();
+    order_packages(0, &packages, &lookup, &mut HashSet::new(), &mut HashSet::new(), &mut order)?;
+    let mut packages: Vec<_> = packages.into_iter().map(Some).collect();
+    let mut ordered = Vec::new();
+    for index in order {
+        let mut package = packages[index].take().ok_or("A package was resolved twice.")?;
+        package.entry.required_by.sort();
+        package.entry.required_by.dedup();
+        ordered.push(package);
+    }
+    Ok(ordered)
+}
+
+fn package_profile(profiles: &ServerProfileStore, profile_id: Uuid, kind: &str, game_version: &str, loader: &str, project_id: &str, version_id: &str) -> Result<ServerProfile, String> {
+    package_folder(kind)?;
+    if !valid_loader(kind, loader) || !safe_version(game_version) || !catalog_id(project_id) || !catalog_id(version_id) {
+        return Err("The selected package or server compatibility is invalid.".into());
+    }
+    let profile = profiles.list()?.into_iter().find(|profile| profile.id == profile_id)
+        .ok_or("Server profile was not found.")?;
+    profile.target.validate()?;
+    if profile.installed_version.as_deref().is_some_and(|version| version != game_version) {
+        return Err("This package release does not match the server's installed Minecraft version.".into());
+    }
+    if let Some(software) = profile.installed_software.as_deref() {
+        let supported_loader = if let Some(variant) = software.strip_prefix("arclight-") {
+            if kind == "plugin" { Some("bukkit") } else { Some(variant) }
+        } else if kind == "mod" && matches!(software, "fabric" | "quilt" | "forge" | "neoforge") {
+            Some(software)
+        } else if kind == "plugin" && matches!(software, "paper" | "purpur" | "spigot" | "bukkit" | "folia") {
+            Some(software)
+        } else { None };
+        if supported_loader != Some(loader) {
+            return Err("This package type is not supported by the installed server software.".into());
+        }
+    }
+    Ok(profile)
+}
+
 #[tauri::command]
-pub async fn install_modrinth_version(
+pub async fn preview_modrinth_install(
     profile_id: Uuid,
     kind: String,
     game_version: String,
@@ -340,99 +606,116 @@ pub async fn install_modrinth_version(
     project_id: String,
     version_id: String,
     profiles: State<'_, ServerProfileStore>,
-    local_sessions: State<'_, LocalSessionManager>,
     remote_sessions: State<'_, Arc<RemoteSessionManager>>,
-) -> Result<String, String> {
-    let folder = package_folder(&kind)?;
-    if !valid_loader(&kind, &loader)
-        || !safe_version(&game_version)
-        || !catalog_id(&project_id)
-        || !catalog_id(&version_id)
-    {
-        return Err("The selected catalog version is invalid.".into());
+) -> Result<Vec<InstallPlanEntry>, String> {
+    let profile = package_profile(&profiles, profile_id, &kind, &game_version, &loader, &project_id, &version_id)?;
+    let names = package_names(&profile, package_folder(&kind)?, &profiles, &remote_sessions).await?;
+    let plan = resolve_install_plan(&client()?, &profile, &kind, &game_version, &loader, &project_id, &version_id, &names, &profiles, &remote_sessions).await?;
+    Ok(plan.into_iter().map(|item| item.entry).collect())
+}
+
+async fn install_planned_package(
+    client: &reqwest::Client,
+    profile: &ServerProfile,
+    package: &ResolvedPackage,
+    kind: &str,
+    profiles: &ServerProfileStore,
+    local_sessions: &LocalSessionManager,
+    remote_sessions: &Arc<RemoteSessionManager>,
+) -> Result<(), String> {
+    let folder = package_folder(kind)?;
+    let file = &package.file;
+    let filename = &package.entry.filename;
+    if let ServerTarget::Remote { environment_id, .. } = &profile.target {
+        let url = file["url"].as_str().ok_or("Modrinth did not provide a download URL.")?;
+        let parsed = reqwest::Url::parse(url).map_err(|_| "The package download URL is invalid.")?;
+        if parsed.scheme() != "https" || parsed.host_str() != Some("cdn.modrinth.com") || parsed.port().is_some()
+            || !parsed.username().is_empty() || parsed.password().is_some() {
+            return Err("The package download is not hosted on the approved Modrinth CDN.".into());
+        }
+        let sha512 = file["hashes"]["sha512"].as_str().ok_or("Modrinth did not provide a SHA-512 checksum.")?;
+        if sha512.len() != 128 || !sha512.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err("Modrinth provided an invalid checksum.".into());
+        }
+        let size = file["size"].as_u64().ok_or("Modrinth did not provide a file size.")?;
+        if size < 1024 || size > MAX_PACKAGE_BYTES {
+            return Err("The package is outside the supported size range (1 KB–128 MB).".into());
+        }
+        let environment = profiles.environment(*environment_id)?;
+        let direct = remote_ssh::install_remote_package(
+            profile.clone(), environment, Arc::clone(remote_sessions), folder.to_owned(),
+            filename.clone(), None, String::new(), url.to_owned(), Some(sha512.to_owned()),
+        ).await;
+        match direct {
+            Ok(()) => return Ok(()),
+            Err(error) if error.starts_with(remote_ssh::REMOTE_DOWNLOAD_UNAVAILABLE) => {}
+            Err(error) => return Err(error),
+        }
     }
-    let profile = profiles
-        .list()?
-        .into_iter()
-        .find(|profile| profile.id == profile_id)
-        .ok_or("Server profile was not found.")?;
-    profile.target.validate()?;
-    if matches!(profile.target, ServerTarget::Local { .. })
-        && !matches!(
-            local_sessions.status(profile_id)?.state,
-            LocalServerState::Stopped
-        )
-    {
-        return Err("Stop the server before installing packages.".into());
-    }
-    let client = client()?;
-    let project = get_json(&client, api_url(&format!("project/{project_id}"))?).await?;
-    if project["id"].as_str() != Some(&project_id)
-        || project["project_type"].as_str() != Some(&kind)
-    {
-        return Err("The selected project is not the requested package type.".into());
-    }
-    let versions = get_json(&client, versions_url(&project_id, &game_version, &loader)?).await?;
-    let version = versions.as_array().and_then(|items| items.iter().find(|item| item["id"].as_str() == Some(&version_id)))
-        .ok_or("This package version is not compatible with the selected Minecraft version and loader.")?;
-    if matches!(
-        version["environment"].as_str(),
-        Some("client_only" | "singleplayer_only")
-    ) {
-        return Err("This package version cannot run on a server.".into());
-    }
-    let files = version["files"]
-        .as_array()
-        .ok_or("Modrinth did not provide package files.")?;
-    let file = files
-        .iter()
-        .find(|file| {
-            file["primary"] == true
-                && file["filename"]
-                    .as_str()
-                    .is_some_and(|name| name.ends_with(".jar"))
-        })
-        .or_else(|| {
-            files.iter().find(|file| {
-                file["filename"]
-                    .as_str()
-                    .is_some_and(|name| name.ends_with(".jar"))
-            })
-        })
-        .ok_or("This version does not contain an installable JAR file.")?;
-    let filename = safe_filename(
-        file["filename"].as_str().unwrap_or_default(),
-        &project_id,
-        &version_id,
-    );
-    let temporary =
-        std::env::temp_dir().join(format!("servercrafter-package-{}.jar", Uuid::new_v4()));
+    let temporary = std::env::temp_dir().join(format!("scerite-package-{}.jar", Uuid::new_v4()));
     let result = async {
-        let sha1 = download_package(&client, file, &temporary).await?;
-        match profile.target {
+        let sha1 = download_package(client, file, &temporary).await?;
+        match &profile.target {
             ServerTarget::Local { .. } => {
-                if !matches!(local_sessions.status(profile_id)?.state, LocalServerState::Stopped) {
+                if !matches!(local_sessions.status(profile.id)?.state, LocalServerState::Stopped) {
                     return Err("The server started during the download. Stop it before installing packages.".into());
                 }
-                install_local_package(&profiles, profile_id, folder, &filename, &temporary)
+                install_local_package(profiles, profile.id, folder, filename, &temporary)
             }
             ServerTarget::Remote { environment_id, .. } => {
-                let environment = profiles.environment(environment_id)?;
-                remote_ssh::install_remote_package(profile, environment, Arc::clone(remote_sessions.inner()), folder.to_owned(), filename.clone(), temporary.clone(), sha1).await
+                let environment = profiles.environment(*environment_id)?;
+                remote_ssh::install_remote_package(profile.clone(), environment, Arc::clone(remote_sessions), folder.to_owned(), filename.clone(), Some(temporary.clone()), sha1, file["url"].as_str().unwrap_or_default().to_owned(), None).await
             }
         }
     }.await;
     let _ = fs::remove_file(&temporary);
-    result?;
-    let dependencies = version["dependencies"].as_array().map_or(0, |items| {
-        items
-            .iter()
-            .filter(|item| item["dependency_type"] == "required")
-            .count()
-    });
-    if dependencies > 0 {
-        Ok(format!("Installed {filename}. This version lists {dependencies} required dependencies; install those before starting the server."))
-    } else {
-        Ok(format!("Installed {filename}."))
+    result
+}
+
+#[tauri::command]
+pub async fn install_modrinth_plan(
+    profile_id: Uuid,
+    kind: String,
+    game_version: String,
+    loader: String,
+    project_id: String,
+    version_id: String,
+    expected_versions: Vec<String>,
+    profiles: State<'_, ServerProfileStore>,
+    local_sessions: State<'_, LocalSessionManager>,
+    remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<String, String> {
+    let profile = package_profile(&profiles, profile_id, &kind, &game_version, &loader, &project_id, &version_id)?;
+    if matches!(profile.target, ServerTarget::Local { .. })
+        && !matches!(local_sessions.status(profile_id)?.state, LocalServerState::Stopped)
+    {
+        return Err("Stop the server before installing packages.".into());
     }
+    let names = package_names(&profile, package_folder(&kind)?, &profiles, &remote_sessions).await?;
+    let client = client()?;
+    let plan = resolve_install_plan(&client, &profile, &kind, &game_version, &loader, &project_id, &version_id, &names, &profiles, &remote_sessions).await?;
+    let actual_versions: Vec<_> = plan.iter().map(|item| item.entry.version_id.clone()).collect();
+    if actual_versions != expected_versions {
+        return Err("The required package list changed. Review the install plan again before confirming.".into());
+    }
+    let mut installed = 0;
+    for package in plan {
+        if !package.entry.already_installed {
+            install_planned_package(&client, &profile, &package, &kind, &profiles, &local_sessions, &remote_sessions)
+                .await
+                .map_err(|error| format!("Could not finish installing packages after {installed} JAR(s): {error}. Refresh the installed list before retrying."))?;
+            installed += 1;
+        }
+        profiles.record_installed_package(profile_id, InstalledPackage {
+            kind: kind.clone(),
+            project_id: package.entry.project_id,
+            version_id: package.entry.version_id,
+            title: package.entry.title,
+            filename: package.entry.filename,
+            required_by: package.entry.required_by,
+            direct: package.entry.direct,
+        })?;
+    }
+    if installed == 0 { Ok("All selected packages are already installed. Dependency labels are up to date.".into()) }
+    else { Ok(format!("Installed {installed} JAR(s), including required dependencies.")) }
 }

@@ -19,6 +19,8 @@ The app can create, edit, list, and remove server profiles. Local servers can be
 
 Remote process control requires `tmux` on the server and a trusted host key in `known_hosts`. Remote file operations stay inside the configured server folder, skip symbolic links, limit text files to 1 MB, and require the managed server to be stopped before writing.
 
+When adding a remote server, Scerite creates the configured Minecraft root if needed, then creates or reuses `<environment root>/servers/<server-name>` with a kebab-case folder name. An existing custom server folder can still be selected instead. Renaming the saved server does not rename its folder.
+
 ## Server software installation
 
 Set one Minecraft root for this computer, or a root for each remote environment. Each selected server folder must be directly inside that root's `servers/` folder. From the server's **Install** tab, choose a Minecraft release or snapshot and server software: Vanilla, Paper, Purpur, Fabric, Quilt, Forge, NeoForge, or an available Arclight Forge/NeoForge/Fabric variant. Availability depends on what each project publishes for the selected Minecraft version. Spigot installation is planned for later.

@@ -786,6 +786,35 @@ pub async fn install_server_software(
             ..
         } => {
             let environment = profiles.environment(*environment_id)?;
+            if artifact.sha256.as_ref().is_some_and(|checksum| checksum.len() != 64 || !checksum.bytes().all(|byte| byte.is_ascii_hexdigit())) {
+                return Err("The server software source returned an invalid checksum.".into());
+            }
+            let mut installed = false;
+            {
+                let direct_url = response(&client, &artifact.url).await?.url().to_string();
+                progress(&app, profile_id, "downloading_remote", 0, artifact.size.unwrap_or(0));
+                let result = if installer {
+                    remote_ssh::install_remote_loader(
+                        profile.clone(), environment.clone(), Arc::clone(remote_sessions.inner()),
+                        directory.clone(), None, direct_url.clone(),
+                        loader.clone(), version_id.clone(), artifact.build.clone(),
+                        quilt_loader.clone(), java.clone(), String::new(), artifact.sha256.clone(),
+                    ).await
+                } else {
+                    remote_ssh::install_remote_jar(
+                        profile.clone(), environment.clone(), Arc::clone(remote_sessions.inner()),
+                        directory.clone(), None, direct_url,
+                        cache_version.clone(), String::new(), artifact.sha256.clone(),
+                        loader.clone(), artifact.filename.into(),
+                    ).await
+                };
+                match result {
+                    Ok(()) => installed = true,
+                    Err(error) if error.starts_with(remote_ssh::REMOTE_DOWNLOAD_UNAVAILABLE) => {}
+                    Err(error) => return Err(error),
+                }
+            }
+            if !installed {
             let temporary =
                 std::env::temp_dir().join(format!("servercrafter-{}.jar", Uuid::new_v4()));
             let result = async {
@@ -798,13 +827,15 @@ pub async fn install_server_software(
                         environment,
                         Arc::clone(remote_sessions.inner()),
                         directory.clone(),
-                        temporary.clone(),
+                        Some(temporary.clone()),
+                        artifact.url.clone(),
                         loader.clone(),
                         version_id.clone(),
                         artifact.build.clone(),
                         quilt_loader,
                         java.clone(),
                         sha1,
+                        artifact.sha256.clone(),
                     )
                     .await
                 } else {
@@ -813,9 +844,11 @@ pub async fn install_server_software(
                         environment,
                         Arc::clone(remote_sessions.inner()),
                         directory.clone(),
-                        temporary.clone(),
+                        Some(temporary.clone()),
+                        artifact.url.clone(),
                         cache_version,
                         sha1,
+                        artifact.sha256.clone(),
                         loader.clone(),
                         artifact.filename.into(),
                     )
@@ -825,8 +858,10 @@ pub async fn install_server_software(
             .await;
             let _ = fs::remove_file(&temporary);
             result?;
+            }
         }
     }
+    profiles.set_installed_software(profile_id, &loader, &version_id)?;
     let launch = if loader == "quilt" {
         update_java_launch(&profile, &java, &profiles, "quilt-server-launch.jar")
     } else if loader == "forge" || loader == "neoforge" {
