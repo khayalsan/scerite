@@ -25,6 +25,12 @@ Remote process control requires `tmux` on the server and a trusted host key in `
 - `npm run build` type-checks TypeScript and builds the frontend.
 - `cargo check --manifest-path src-tauri/Cargo.toml` checks the Rust backend.
 
+## License
+
+ServerCrafter is licensed under the [MIT License](LICENSE).
+
+Copyright (c) 2026 Khayal Alizada
+
 ## Disclaimer
 
 NOT AN OFFICIAL MINECRAFT PRODUCT. NOT APPROVED BY OR ASSOCIATED WITH MOJANG OR MICROSOFT.
