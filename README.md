@@ -43,9 +43,9 @@ The **Mods & plugins** tab lists JAR files in the selected server's `mods/` or `
 
 Installed desktop builds check the latest published GitHub release on startup. When a newer version is available, Scerite asks before downloading and installing it. Development builds do not check for updates. The repository must be public for installed apps to fetch the release without a GitHub credential.
 
-The release workflow runs when a `v<version>` tag is pushed, builds signed updater artifacts for Windows, Linux, and macOS, and creates a draft GitHub release with `latest.json`. Check the artifacts, then publish the draft to make the update available. The tag version must match the version in `package.json`, `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json`.
+Every push to `main` runs the release workflow. It uses the version in `package.json` when it has not been released yet; otherwise it bumps the patch version in the app manifests and commits that bump to `main`. It tags the resulting commit, builds signed updater artifacts for Windows, Linux, and macOS, and publishes a GitHub release with `latest.json`. Repository rules must allow GitHub Actions to push the version commit and tag.
 
-Set the repository Actions secret `TAURI_SIGNING_PRIVATE_KEY` to the contents of the private updater key before pushing a release tag. Keep that key backed up outside the repository; later releases must use the same key. The matching public key is committed in `src-tauri/tauri.conf.json`. Local release builds require `TAURI_SIGNING_PRIVATE_KEY` in the environment too.
+Set the repository Actions secret `TAURI_SIGNING_PRIVATE_KEY` to the contents of the private updater key before merging the workflow. Keep that key backed up outside the repository; later releases must use the same key. The matching public key is committed in `src-tauri/tauri.conf.json`. Local release builds require `TAURI_SIGNING_PRIVATE_KEY` in the environment too.
 
 ## License
 
