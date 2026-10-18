@@ -8,6 +8,8 @@ export interface ServerFileEntry {
 }
 
 export const serverFiles = {
+  worlds: (remote: boolean, profileId: string) =>
+    invoke<ServerFileEntry[]>(remote ? "list_remote_worlds" : "list_local_worlds", { profileId }),
   list: (remote: boolean, profileId: string, relativePath: string) =>
     invoke<ServerFileEntry[]>(remote ? "list_remote_server_files" : "list_local_server_files", { profileId, relativePath }),
   read: (remote: boolean, profileId: string, relativePath: string) =>
