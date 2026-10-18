@@ -52,7 +52,7 @@ export function VanillaInstallPanel({ profileId, remote, rootConfigured, canInst
       ? `Downloading Java ${Math.round(progress.downloaded / progress.total * 100)}%`
     : progress?.phase === "uploading_java" ? "Uploading Java to the remote environment…"
     : progress?.phase === "installing_java" ? "Extracting Java…"
-    : progress?.phase === "java_cached" ? "Using installed Java…"
+    : progress?.phase === "java_installed" ? "Using installed Java…"
     : progress?.phase === "checking_java" ? "Finding a compatible Java version…"
     : progress?.phase === "uploading" ? "Uploading to remote cache…"
     : progress?.phase === "installing" ? "Copying into server folder…"
@@ -63,7 +63,7 @@ export function VanillaInstallPanel({ profileId, remote, rootConfigured, canInst
   return <div className="install-panel">
     <div>
       <h2>Install vanilla Minecraft</h2>
-      <p>Install the Java version required by this release, then download the official server jar. Java is stored in runtimes/java and downloads are kept in cache. Existing server files are preserved.</p>
+      <p>Install the Java version required by this release, then download the official server jar. Java is stored in runtimes/java; only Minecraft jars are kept in cache. Existing server files are preserved.</p>
     </div>
     <div className="install-form">
       <label htmlFor="vanilla-version">Minecraft version</label>

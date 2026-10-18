@@ -1,6 +1,6 @@
 use std::{
     fs,
-    io::{self, Read, Write},
+    io::{self, Write},
     path::{Component, Path, PathBuf},
 };
 
@@ -52,15 +52,6 @@ impl JavaPackage {
             .join(self.major.to_string())
             .join(&self.platform)
             .join(&self.build)
-    }
-
-    pub fn cache_relative(&self) -> PathBuf {
-        PathBuf::from("cache")
-            .join("java")
-            .join(self.major.to_string())
-            .join(&self.platform)
-            .join(&self.build)
-            .join(format!("jdk.{}", self.extension))
     }
 
     pub fn java_relative(&self) -> PathBuf {
@@ -120,6 +111,26 @@ pub fn ensure_managed_directory(root: &Path, relative: &Path) -> Result<PathBuf,
         );
     }
     Ok(canonical)
+}
+
+pub fn remove_legacy_cache(root: &Path) -> Result<(), String> {
+    let cache = root.join("cache");
+    let java_cache = cache.join("java");
+    for path in [&cache, &java_cache] {
+        match fs::symlink_metadata(path) {
+            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
+            Ok(_) => return Err("The old Java cache contains a symbolic link or non-folder path. Remove it manually.".into()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(format!("Could not inspect the old Java cache: {error}")),
+        }
+        let canonical = fs::canonicalize(path)
+            .map_err(|error| format!("Could not resolve the old Java cache: {error}"))?;
+        if canonical.as_path() != path {
+            return Err("The old Java cache resolves outside the configured Minecraft root.".into());
+        }
+    }
+    fs::remove_dir_all(java_cache)
+        .map_err(|error| format!("Could not remove the old Java cache: {error}"))
 }
 
 pub async fn package(
@@ -219,55 +230,13 @@ pub fn archive_client() -> Result<reqwest::Client, String> {
         .map_err(|error| format!("Could not initialize Java downloads: {error}"))
 }
 
-pub fn archive_verified(path: &Path, package: &JavaPackage) -> Result<bool, String> {
-    if fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
-        return Err("The cached JDK archive is a symbolic link. Remove it before retrying.".into());
-    }
-    let Ok(mut file) = fs::File::open(path) else {
-        return Ok(false);
-    };
-    let mut digest = Sha256::new();
-    let mut size = 0_u64;
-    let mut buffer = [0_u8; 65536];
-    loop {
-        let count = file
-            .read(&mut buffer)
-            .map_err(|error| format!("Could not read cached JDK: {error}"))?;
-        if count == 0 {
-            break;
-        }
-        size += count as u64;
-        if size > package.size {
-            return Ok(false);
-        }
-        digest.update(&buffer[..count]);
-    }
-    let actual: String = digest
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
-    Ok(size == package.size && actual.eq_ignore_ascii_case(&package.sha256))
-}
-
 pub async fn download_archive(
     client: &reqwest::Client,
     destination: &Path,
     package: &JavaPackage,
     report: impl Fn(u64, u64),
 ) -> Result<(), String> {
-    if archive_verified(destination, package)? {
-        report(package.size, package.size);
-        return Ok(());
-    }
-    if fs::symlink_metadata(destination).is_ok() {
-        return Err("The cached JDK archive has a different checksum. Remove that cache file before retrying.".into());
-    }
-    if let Some(parent) = destination.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("Could not create Java cache: {error}"))?;
-    }
-    let temporary = destination.with_file_name(format!(".servercrafter-{}.tmp", Uuid::new_v4()));
+    let mut created = false;
     let result = async {
         let mut response = client
             .get(&package.link)
@@ -280,8 +249,9 @@ pub async fn download_archive(
                 response.status()
             ));
         }
-        let mut file = fs::File::create_new(&temporary)
-            .map_err(|error| format!("Could not create Java cache file: {error}"))?;
+        let mut file = fs::File::create_new(destination)
+            .map_err(|error| format!("Could not create temporary JDK archive: {error}"))?;
+        created = true;
         let mut digest = Sha256::new();
         let mut size = 0_u64;
         while let Some(chunk) = response
@@ -299,7 +269,7 @@ pub async fn download_archive(
             report(size, package.size);
         }
         file.sync_all()
-            .map_err(|error| format!("Could not finish caching JDK archive: {error}"))?;
+            .map_err(|error| format!("Could not finish downloading JDK archive: {error}"))?;
         let actual: String = digest
             .finalize()
             .iter()
@@ -308,13 +278,11 @@ pub async fn download_archive(
         if size != package.size || !actual.eq_ignore_ascii_case(&package.sha256) {
             return Err("The JDK archive did not match Adoptium's SHA-256 checksum.".into());
         }
-        fs::rename(&temporary, destination)
-            .map_err(|error| format!("Could not finish caching JDK archive: {error}"))?;
         Ok(())
     }
     .await;
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary);
+    if result.is_err() && created {
+        let _ = fs::remove_file(destination);
     }
     result
 }

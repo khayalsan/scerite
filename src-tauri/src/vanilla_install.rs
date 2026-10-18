@@ -341,41 +341,43 @@ async fn install_local_java(
 ) -> Result<String, String> {
     let (os, arch) = java_runtime::local_platform()?;
     let package = java_runtime::package(client, major, os, arch).await?;
+    java_runtime::remove_legacy_cache(root)?;
     if let Some(java) = java_runtime::installed_local(root, &package)? {
-        progress(app, profile_id, "java_cached", 0, 0);
+        progress(app, profile_id, "java_installed", 0, 0);
         return Ok(java.to_string_lossy().into_owned());
     }
-    let archive = root.join(package.cache_relative());
-    let parent = archive
-        .parent()
-        .ok_or_else(|| "The Java cache path is invalid.".to_owned())?;
-    let relative = parent
-        .strip_prefix(root)
-        .map_err(|_| "The Java cache path is outside the configured Minecraft root.".to_owned())?;
-    let canonical = java_runtime::ensure_managed_directory(root, relative)?;
-    if !canonical.starts_with(root.join("cache").join("java")) {
-        return Err("The Java cache resolves outside the configured Minecraft root.".into());
+    let archive = std::env::temp_dir().join(format!(
+        "servercrafter-{}-jdk.{}",
+        Uuid::new_v4(), package.extension
+    ));
+    let result = async {
+        let download_client = java_runtime::archive_client()?;
+        java_runtime::download_archive(&download_client, &archive, &package, |done, total| {
+            progress(app, profile_id, "downloading_java", done, total);
+        })
+        .await?;
+        progress(
+            app,
+            profile_id,
+            "installing_java",
+            package.size,
+            package.size,
+        );
+        let root = root.to_path_buf();
+        let install_archive = archive.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            let top = java_runtime::validate_archive(&install_archive, &package)?;
+            java_runtime::install_local(&root, &install_archive, &package, &top)
+                .map(|java| java.to_string_lossy().into_owned())
+        })
+        .await
+        .map_err(|error| format!("Java installation did not finish: {error}"))?
     }
-    let download_client = java_runtime::archive_client()?;
-    java_runtime::download_archive(&download_client, &archive, &package, |done, total| {
-        progress(app, profile_id, "downloading_java", done, total);
-    })
-    .await?;
-    progress(
-        app,
-        profile_id,
-        "installing_java",
-        package.size,
-        package.size,
-    );
-    let root = root.to_path_buf();
-    tauri::async_runtime::spawn_blocking(move || {
-        let top = java_runtime::validate_archive(&archive, &package)?;
-        java_runtime::install_local(&root, &archive, &package, &top)
-            .map(|java| java.to_string_lossy().into_owned())
-    })
-    .await
-    .map_err(|error| format!("Java installation did not finish: {error}"))?
+    .await;
+    let cleanup = fs::remove_file(&archive);
+    let java = result?;
+    cleanup.map_err(|error| format!("Java was installed, but its temporary archive could not be removed: {error}"))?;
+    Ok(java)
 }
 
 async fn install_remote_java(
@@ -398,7 +400,7 @@ async fn install_remote_java(
     )
     .await?
     {
-        progress(app, profile.id, "java_cached", 0, 0);
+        progress(app, profile.id, "java_installed", 0, 0);
         return Ok(java);
     }
     let temporary =
