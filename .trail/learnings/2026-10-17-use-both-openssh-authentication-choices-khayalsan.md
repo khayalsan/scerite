@@ -16,4 +16,4 @@ The user chose both remote authentication options. Leave the SSH identity path b
 Do not save private-key passphrases in profile JSON. Do not auto-accept unknown or changed host keys. The initial remote slice tests connectivity only; it does not yet manage tmux sessions or remote files.
 
 ## Watch out
-OpenSSH must be installed and on PATH. Encrypted identity files need to be loaded into the SSH agent before ServerCrafter can use them. The user should verify a server fingerprint before adding it to known_hosts.
+OpenSSH must be installed and on PATH. Encrypted identity files need to be loaded into the SSH agent before scerite can use them. The user should verify a server fingerprint before adding it to known_hosts.

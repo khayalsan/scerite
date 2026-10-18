@@ -260,7 +260,7 @@ pub async fn start_remote_server(
 
         let root = remote_root(session, directory)?;
         if remote_directory_has_java_process(session, &root)? {
-            return Err("A Java process is already using the remote server folder outside ServerCrafter. Stop it there before starting this profile.".into());
+            return Err("A Java process is already using the remote server folder outside scerite. Stop it there before starting this profile.".into());
         }
         let command = launch_command(launch);
         let tmux_command = format!(
@@ -290,7 +290,7 @@ pub async fn stop_remote_server(
         if running != Some(true) {
             if let Some(root) = optional_remote_root(session, profile)? {
                 if remote_directory_has_java_process(session, &root)? {
-                    return Err("The server is running outside ServerCrafter's tmux session. Stop it using its current manager first.".into());
+                    return Err("The server is running outside scerite's tmux session. Stop it using its current manager first.".into());
                 }
             }
             return Ok(RemoteServerStatus { state: "stopped".into(), tmux_available: running.is_some() });
@@ -319,7 +319,7 @@ pub async fn remote_server_console(
         if remote_is_running(session, profile)? != Some(true) {
             if let Some(root) = optional_remote_root(session, profile)? {
                 if remote_directory_has_java_process(session, &root)? {
-                    return Err("The server is running outside ServerCrafter's tmux session; its console is not attached.".into());
+                    return Err("The server is running outside scerite's tmux session; its console is not attached.".into());
                 }
             }
             return Ok(RemoteConsoleSnapshot { lines: Vec::new() });
@@ -359,7 +359,7 @@ pub async fn send_remote_console_input(
         if remote_is_running(session, profile)? != Some(true) {
             if let Some(root) = optional_remote_root(session, profile)? {
                 if remote_directory_has_java_process(session, &root)? {
-                    return Err("The server is running outside ServerCrafter's tmux session; its console is not attached.".into());
+                    return Err("The server is running outside scerite's tmux session; its console is not attached.".into());
                 }
             }
             return Err("The remote server is not running.".into());
@@ -511,7 +511,7 @@ pub async fn write_remote_server_file(
             canonical_inside(&sftp, &root, &destination)?;
         }
 
-        let temporary = format!("{}/.servercrafter-{}.tmp", canonical_parent.trim_end_matches('/'), Uuid::new_v4());
+        let temporary = format!("{}/.scerite-{}.tmp", canonical_parent.trim_end_matches('/'), Uuid::new_v4());
         if let Err(error) = sftp.write_file_exclusive(Path::new(&temporary), content.as_bytes()) {
             let _ = sftp.unlink(Path::new(&temporary));
             return Err(format!("Could not write temporary remote file: {error}"));
@@ -831,7 +831,7 @@ fn remote_directory_has_java_process(
     match result.exit_code {
         0 => Ok(true),
         1 => Ok(false),
-        2 => Err("Remote process information is unavailable, so ServerCrafter cannot confirm the server is stopped.".into()),
+        2 => Err("Remote process information is unavailable, so scerite cannot confirm the server is stopped.".into()),
         127 => Err("The remote Linux server needs readlink to verify whether a Java server process is using this folder.".into()),
         _ => Err(remote_command_error("Could not check remote server processes", result)),
     }
@@ -1071,7 +1071,7 @@ fn shell_quote(value: &str) -> String {
 }
 
 fn session_name(profile_id: Uuid) -> String {
-    format!("servercrafter-{}", profile_id.simple())
+    format!("scerite-{}", profile_id.simple())
 }
 
 fn configured_remote_root(profile: &ServerProfile) -> Result<&str, String> {

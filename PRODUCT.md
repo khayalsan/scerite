@@ -8,11 +8,11 @@ Server owners and administrators managing their Minecraft servers.
 
 ## Product Purpose
 
-ServerCrafter is a cross-platform desktop application for managing local and remote Minecraft servers. Success means users can manage server files and server processes from one app while their servers and worlds remain safe when the desktop app closes or a connection drops.
+scerite is a cross-platform desktop application for managing local and remote Minecraft servers. Success means users can manage server files and server processes from one app while their servers and worlds remain safe when the desktop app closes or a connection drops.
 
 ## Positioning
 
-ServerCrafter manages remote Linux servers through standard SSH, SFTP, and tmux without requiring a custom server-side agent.
+scerite manages remote Linux servers through standard SSH, SFTP, and tmux without requiring a custom server-side agent.
 
 ## Operating Context
 
@@ -30,7 +30,7 @@ Users manage server processes and files on their own computer or on remote Linux
 
 ## Brand Commitments
 
-The product name is ServerCrafter. No other brand assets or visual commitments are established yet.
+The product name is scerite. No other brand assets or visual commitments are established yet.
 
 ## Product Principles
 

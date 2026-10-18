@@ -1,6 +1,6 @@
-﻿# AGENTS.md — ServerCrafter
+﻿# AGENTS.md — scerite
 
-Behavioral guidelines for AI coding agents working on ServerCrafter. These instructions prioritize correctness, simplicity, maintainability, and minimal changes.
+Behavioral guidelines for AI coding agents working on scerite. These instructions prioritize correctness, simplicity, maintainability, and minimal changes.
 
 **Tradeoff:** Favor caution over speed when changes involve security, architecture, or data integrity. For trivial tasks, use judgment and avoid unnecessary ceremony.
 
@@ -82,7 +82,7 @@ For trivial changes, avoid unnecessary planning or lengthy reports.
 
 ## 5. Project Context
 
-ServerCrafter is a cross-platform desktop application for managing local and remote Minecraft servers.
+scerite is a cross-platform desktop application for managing local and remote Minecraft servers.
 
 ### Technology Stack
 

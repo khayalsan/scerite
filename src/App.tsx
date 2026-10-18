@@ -41,7 +41,7 @@ const themes = [
 
 type ThemeId = (typeof themes)[number]["id"];
 
-const themeStorageKey = "servercrafter.theme";
+const themeStorageKey = "scerite.theme";
 
 function readSavedTheme(): ThemeId {
   try {
@@ -928,9 +928,9 @@ function App() {
 
         return (
           <aside className="sidebar server-page-sidebar" aria-label={`${selectedProfile.name} navigation`}>
-            <Link className="brand" to="/" aria-label="Back to ServerCrafter servers" onClick={closeForm}>
+            <Link className="brand" to="/" aria-label="Back to scerite servers" onClick={closeForm}>
               <span className="brand-mark" aria-hidden="true">S</span>
-              <span>ServerCrafter</span>
+              <span>scerite</span>
             </Link>
             <div className="server-page-context">
               <button className="back-link" onClick={() => { closeForm(); navigate("/"); }}>
@@ -983,9 +983,9 @@ function App() {
         );
       })() : (
         <aside className="sidebar" aria-label="Main navigation">
-          <Link className="brand" to="/" aria-label="ServerCrafter home">
+          <Link className="brand" to="/" aria-label="scerite home">
             <span className="brand-mark" aria-hidden="true">S</span>
-            <span>ServerCrafter</span>
+            <span>scerite</span>
           </Link>
           <nav className="primary-nav">
             <Link className="nav-link nav-link-active" to="/" aria-current="page">
@@ -1163,7 +1163,7 @@ function App() {
               const remoteStateLabel = remoteState === "unreachable"
                 ? "SSH status unavailable"
                 : remoteState === "unmanaged"
-                  ? "Java process detected outside ServerCrafter"
+                  ? "Java process detected outside scerite"
                 : remoteStatus && !remoteStatus.tmuxAvailable
                   ? "SSH reachable · tmux required"
                   : remoteState ? `SSH reachable · ${remoteState}` : "SSH reachable";

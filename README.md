@@ -1,6 +1,6 @@
-# ServerCrafter
+# Scerite
 
-ServerCrafter is a cross-platform desktop app for managing local and remote Minecraft servers. The desktop app is built with Tauri 2, React, TypeScript, and Rust.
+Scerite is a cross-platform desktop app for managing local and remote Minecraft servers. The desktop app is built with Tauri 2, React, TypeScript, and Rust.
 
 ## Architecture
 
@@ -27,7 +27,7 @@ Remote process control requires `tmux` on the server and a trusted host key in `
 
 ## License
 
-ServerCrafter is licensed under the [MIT License](LICENSE).
+Scerite is licensed under the [MIT License](LICENSE).
 
 Copyright (c) 2026 Khayal Alizada
 

@@ -21,7 +21,7 @@ use uuid::Uuid;
 
 use crate::server_profiles::{ServerProfileStore, ServerTarget};
 
-const MANAGER_ARGUMENT: &str = "--servercrafter-session-manager";
+const MANAGER_ARGUMENT: &str = "--scerite-session-manager";
 const TOKEN_FILE: &str = "session-manager.token";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -86,7 +86,7 @@ impl LocalSessionManager {
 
     fn start_helper(&self) -> Result<(), String> {
         let executable = std::env::current_exe()
-            .map_err(|error| format!("Could not locate ServerCrafter: {error}"))?;
+            .map_err(|error| format!("Could not locate scerite: {error}"))?;
         let mut command = Command::new(executable);
         command
             .arg(MANAGER_ARGUMENT)
@@ -652,7 +652,7 @@ fn socket_name(
     token: &str,
 ) -> Result<interprocess::local_socket::Name<'static>, String> {
     if GenericNamespaced::is_supported() {
-        format!("servercrafter-{token}")
+        format!("scerite-{token}")
             .to_ns_name::<GenericNamespaced>()
             .map_err(|error| format!("Could not create the local session address: {error}"))
     } else {

@@ -58,5 +58,5 @@ pub fn run() {
             remote_ssh::write_remote_server_file,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running servercrafter");
+        .expect("error while running scerite");
 }

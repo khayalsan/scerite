@@ -11,7 +11,7 @@ touches:
 ---
 
 ## Decided
-- The ServerCrafter SSH implementation now uses russh with the ring backend, replacing ssh2/libssh2 and its Windows OpenSSL build path. This supersedes the earlier finding that the previous backend lacked the needed modern Windows SSH algorithms.
+- The scerite SSH implementation now uses russh with the ring backend, replacing ssh2/libssh2 and its Windows OpenSSL build path. This supersedes the earlier finding that the previous backend lacked the needed modern Windows SSH algorithms.
 - Keep the older security and lifecycle constraints: verify host keys against known_hosts, reject untrusted host certificates, avoid legacy algorithm fallbacks, and use tmux for persistent Minecraft processes.
 
 ## Tried and ruled out
