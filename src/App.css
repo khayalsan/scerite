@@ -922,6 +922,14 @@
 .install-version-trigger { width: 100%; }
 .install-success { color: var(--success, #74c69d) !important; }
 
+.server-detail-shell .server-tab-panel[aria-label="Server mods"]:not([hidden]),
+.server-detail-shell .server-tab-panel[aria-label="Server plugins"]:not([hidden]) {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
 .packages-panel { display: grid; gap: 18px; margin: 0 0 16px 53px; padding: 18px; border: 1px solid var(--app-line); border-radius: 9px; background: var(--app-ground); }
 .packages-header h2 { margin: 0 0 4px; font-size: 17px; }
 .packages-header p, .packages-catalog > p, .packages-installed-heading p, .packages-version p { margin: 0; color: var(--app-muted); font-size: 12px; line-height: 1.5; }
