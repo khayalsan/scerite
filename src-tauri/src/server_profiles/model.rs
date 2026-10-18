@@ -9,6 +9,8 @@ pub struct ServerProfile {
     pub target: ServerTarget,
     #[serde(default)]
     pub installed_software: Option<String>,
+    #[serde(default)]
+    pub installed_version: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

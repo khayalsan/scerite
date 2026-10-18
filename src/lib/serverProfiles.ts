@@ -21,6 +21,7 @@ export interface ServerProfile {
   name: string;
   target: ServerTarget;
   installedSoftware?: string | null;
+  installedVersion?: string | null;
 }
 
 export const serverProfiles = {

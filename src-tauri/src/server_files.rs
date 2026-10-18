@@ -1,5 +1,6 @@
 use std::{
     fs,
+    io::Read,
     path::{Component, Path, PathBuf},
 };
 
@@ -12,6 +13,21 @@ use crate::server_sessions::{LocalServerState, LocalSessionManager};
 
 const MAX_FILE_BYTES: u64 = 1024 * 1024;
 const MAX_DIRECTORY_ENTRIES: usize = 1000;
+
+#[tauri::command]
+pub fn read_local_server_log_start(
+    profile_id: Uuid,
+    profiles: State<'_, ServerProfileStore>,
+) -> Result<String, String> {
+    let root = local_server_root(profile_id, &profiles)?;
+    let path = resolve_existing(&root, "logs/latest.log")?;
+    let file = fs::File::open(path).map_err(|error| format!("Could not open the server log: {error}"))?;
+    let mut bytes = Vec::new();
+    file.take(256 * 1024)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("Could not read the server log: {error}"))?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -18,11 +18,14 @@ const loaders: Record<PackageKind, { id: string; label: string }[]> = {
 
 function errorText(error: unknown) { return error instanceof Error ? error.message : String(error); }
 
-export function PackagesPanel({ profileId, remote, canInstall, kind, software }: { profileId: string; remote: boolean; canInstall: boolean; kind: PackageKind; software?: string | null }) {
+export function PackagesPanel({ profileId, remote, canInstall, kind, software, installedVersion }: { profileId: string; remote: boolean; canInstall: boolean; kind: PackageKind; software?: string | null; installedVersion?: string | null }) {
   const fixedLoader = packageLoader(kind, software);
   const availableLoaders = fixedLoader ? loaders[kind].filter((item) => item.id === fixedLoader) : loaders[kind];
   const [loader, setLoader] = useState(fixedLoader ?? loaders[kind][0].id);
-  const [gameVersion, setGameVersion] = useState("");
+  const [gameVersion, setGameVersion] = useState(installedVersion ?? "");
+  const [versionLoading, setVersionLoading] = useState(!installedVersion);
+  const [versionError, setVersionError] = useState<string | null>(null);
+  const [versionRetry, setVersionRetry] = useState(0);
   const [query, setQuery] = useState("");
   const [projects, setProjects] = useState<Project[]>([]);
   const [hasSearched, setHasSearched] = useState(false);
@@ -62,8 +65,28 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software }:
     return () => { active = false; };
   }, [profileId, remote, folder]);
 
-  function changeCompatibility(nextVersion: string, nextLoader: string) {
-    setGameVersion(nextVersion);
+  useEffect(() => {
+    if (installedVersion) {
+      setGameVersion(installedVersion);
+      setVersionLoading(false);
+      setVersionError(null);
+      return;
+    }
+    let active = true;
+    setVersionLoading(true);
+    setVersionError(null);
+    void invoke<string>(remote ? "read_remote_server_log_start" : "read_local_server_log_start", { profileId }).then((log) => {
+      if (!active) return;
+      const version = log.match(/(?:Starting minecraft server version|Loading Minecraft)\s+([0-9][a-zA-Z0-9._-]*)/i)?.[1];
+      setGameVersion(version ?? "");
+      if (!version) setVersionError("Minecraft version was not found in the server log. Start the server once, then retry.");
+    }).catch((cause) => {
+      if (active) { setGameVersion(""); setVersionError(`Could not detect the Minecraft version from logs/latest.log: ${errorText(cause)}`); }
+    }).finally(() => { if (active) setVersionLoading(false); });
+    return () => { active = false; };
+  }, [profileId, remote, installedVersion, versionRetry]);
+
+  function changeCompatibility(nextLoader: string) {
     setLoader(nextLoader);
     setProjects([]);
     setHasSearched(false);
@@ -75,6 +98,7 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software }:
 
   async function search(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!gameVersion) return;
     setSearching(true);
     setError(null);
     setMessage(null);
@@ -84,7 +108,7 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software }:
     setHasSearched(false);
     versionRequest.current += 1;
     try {
-      setProjects(await invoke<Project[]>("search_modrinth", { query, kind, gameVersion: gameVersion.trim(), loader }));
+      setProjects(await invoke<Project[]>("search_modrinth", { query, kind, gameVersion, loader }));
       setHasSearched(true);
     } catch (cause) { setError(errorText(cause)); }
     finally { setSearching(false); }
@@ -98,7 +122,7 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software }:
     setLoadingVersions(true);
     setError(null);
     try {
-      const found = await invoke<Version[]>("list_modrinth_versions", { projectId: project.id, kind, gameVersion: gameVersion.trim(), loader });
+      const found = await invoke<Version[]>("list_modrinth_versions", { projectId: project.id, kind, gameVersion, loader });
       if (request === versionRequest.current) {
         setVersions(found);
         setSelectedVersionId(found[0]?.id ?? "");
@@ -113,7 +137,7 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software }:
     setError(null);
     setMessage(null);
     try {
-      const result = await invoke<string>("install_modrinth_version", { profileId, kind, gameVersion: gameVersion.trim(), loader, projectId: selectedProject.id, versionId: selectedVersionId });
+      const result = await invoke<string>("install_modrinth_version", { profileId, kind, gameVersion, loader, projectId: selectedProject.id, versionId: selectedVersionId });
       setMessage(result);
       await refreshInstalled();
     } catch (cause) { setError(errorText(cause)); }
@@ -129,24 +153,24 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software }:
     <div className="packages-layout">
       <div className="packages-catalog">
         <h3>Find {kind === "mod" ? "a mod" : "a plugin"}</h3>
-        <p>Set the Minecraft version and loader this server uses. Results are filtered to server compatible releases.</p>
+        <p>Results are filtered for this server’s Minecraft version and loader.</p>
         <form className="packages-search-form" onSubmit={(event) => void search(event)}>
-          <label htmlFor="package-game-version">Minecraft version</label>
-          <input id="package-game-version" value={gameVersion} onChange={(event) => changeCompatibility(event.target.value, loader)} placeholder="e.g. 1.21.11" required disabled={busy} />
+          <div className="packages-fixed-loader"><span>Minecraft version</span><strong>{versionLoading ? "Detecting…" : gameVersion || "Unknown"}</strong></div>
+          {versionError && <p className="files-error" role="alert">{versionError} <button type="button" className="button button-quiet" onClick={() => setVersionRetry((value) => value + 1)}>Retry</button></p>}
           {fixedLoader ? <div className="packages-fixed-loader"><span>Server loader</span><strong>{availableLoaders[0]?.label ?? fixedLoader}</strong></div> : <>
             <label htmlFor="package-loader">Server loader</label>
-            <Select value={loader} onValueChange={(value) => changeCompatibility(gameVersion, value ?? availableLoaders[0].id)} disabled={busy}>
+            <Select value={loader} onValueChange={(value) => changeCompatibility(value ?? availableLoaders[0].id)} disabled={busy}>
               <SelectTrigger id="package-loader"><SelectValue>{(value) => loaders[kind].find((item) => item.id === value)?.label ?? "Choose loader"}</SelectValue></SelectTrigger>
               <SelectContent>{availableLoaders.map((item) => <SelectItem key={item.id} value={item.id}>{item.label}</SelectItem>)}</SelectContent>
             </Select>
           </>}
           <label htmlFor="package-query">Search Modrinth</label>
-          <div className="packages-query"><input id="package-query" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={kind === "mod" ? "Search mods" : "Search plugins"} minLength={2} maxLength={100} required disabled={busy} /><button className="button button-primary" type="submit" disabled={searching || busy}><Search size={15} aria-hidden="true" /> {searching ? "Searching…" : "Search"}</button></div>
+          <div className="packages-query"><input id="package-query" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={kind === "mod" ? "Search mods" : "Search plugins"} minLength={2} maxLength={100} required disabled={busy} /><button className="button button-primary" type="submit" disabled={searching || busy || !gameVersion}><Search size={15} aria-hidden="true" /> {searching ? "Searching…" : "Search"}</button></div>
         </form>
         {error && <p className="files-error" role="alert">{error}</p>}
         {message && <p className="install-success" role="status">{message}</p>}
         {projects.length > 0 && <div className="packages-results" aria-label="Search results">{projects.map((project) => <button key={project.id} type="button" className={`packages-result${selectedProject?.id === project.id ? " packages-result-selected" : ""}`} onClick={() => void chooseProject(project)} disabled={busy}><strong>{project.title}</strong><span>{project.description}</span><small>by {project.author}</small></button>)}</div>}
-        {hasSearched && projects.length === 0 && <p className="state-message">No matching {kind === "mod" ? "mods" : "plugins"} found. Try another search or version.</p>}
+        {hasSearched && projects.length === 0 && <p className="state-message">No matching {kind === "mod" ? "mods" : "plugins"} found for this server. Try another search.</p>}
         {selectedProject && <div className="packages-version">
           <h3>{selectedProject.title}</h3>
           {loadingVersions ? <p role="status">Loading compatible releases…</p> : versions.length === 0 ? <p>No compatible releases were found.</p> : <>

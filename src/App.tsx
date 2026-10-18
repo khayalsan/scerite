@@ -1407,10 +1407,10 @@ function App() {
                           {activeServerTab === "worlds" && <WorldsPanel key={profile.id} profileId={profile.id} remote={!isLocal} />}
                         </section>
                         {packageSupport?.mods && <section className="server-tab-panel" hidden={activeServerTab !== "mods"} aria-label="Server mods">
-                          {activeServerTab === "mods" && <PackagesPanel key={`${profile.id}-mods`} kind="mod" software={profile.installedSoftware} profileId={profile.id} remote={!isLocal} canInstall={isLocal ? state === "stopped" : remoteState === "stopped"} />}
+                          {activeServerTab === "mods" && <PackagesPanel key={`${profile.id}-mods`} kind="mod" software={profile.installedSoftware} installedVersion={profile.installedVersion} profileId={profile.id} remote={!isLocal} canInstall={isLocal ? state === "stopped" : remoteState === "stopped"} />}
                         </section>}
                         {packageSupport?.plugins && <section className="server-tab-panel" hidden={activeServerTab !== "plugins"} aria-label="Server plugins">
-                          {activeServerTab === "plugins" && <PackagesPanel key={`${profile.id}-plugins`} kind="plugin" software={profile.installedSoftware} profileId={profile.id} remote={!isLocal} canInstall={isLocal ? state === "stopped" : remoteState === "stopped"} />}
+                          {activeServerTab === "plugins" && <PackagesPanel key={`${profile.id}-plugins`} kind="plugin" software={profile.installedSoftware} installedVersion={profile.installedVersion} profileId={profile.id} remote={!isLocal} canInstall={isLocal ? state === "stopped" : remoteState === "stopped"} />}
                         </section>}
                         <section className="server-tab-panel server-properties-tab" hidden={activeServerTab !== "properties"} aria-label="Server properties">
                           {propertiesProfileId === profile.id && (

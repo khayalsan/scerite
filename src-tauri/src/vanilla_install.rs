@@ -661,7 +661,7 @@ pub async fn install_vanilla_version(
         }
     }
     progress(&app, profile_id, "complete", download.size, download.size);
-    profiles.set_installed_software(profile_id, "vanilla")?;
+    profiles.set_installed_software(profile_id, "vanilla", &version_id)?;
     let launch_message = match update_java_launch(&profile, &java, &profiles, "server.jar") {
         Ok(true) => "The server profile now uses its managed Java runtime.".to_owned(),
         Ok(false) => "The custom launch command now receives the managed Java runtime.".to_owned(),

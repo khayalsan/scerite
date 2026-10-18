@@ -120,6 +120,11 @@ pub async fn search_modrinth(
         .ok_or("Modrinth returned an invalid search response.")?;
     Ok(hits
         .iter()
+        .filter(|hit| {
+            hit["project_type"].as_str() == Some(kind.as_str())
+                && hit["categories"].as_array().is_some_and(|items| items.iter().any(|item| item.as_str() == Some(loader.as_str())))
+                && hit["versions"].as_array().is_some_and(|items| items.iter().any(|item| item.as_str() == Some(game_version.as_str())))
+        })
         .filter_map(|hit| {
             Some(CatalogProject {
                 id: hit["project_id"].as_str()?.to_owned(),
@@ -357,6 +362,9 @@ pub async fn install_modrinth_version(
         .find(|profile| profile.id == profile_id)
         .ok_or("Server profile was not found.")?;
     profile.target.validate()?;
+    if profile.installed_version.as_deref().is_some_and(|version| version != game_version) {
+        return Err("This package release does not match the server's installed Minecraft version.".into());
+    }
     if let Some(software) = profile.installed_software.as_deref() {
         let supported_loader = if let Some(variant) = software.strip_prefix("arclight-") {
             if kind == "plugin" { Some("bukkit") } else { Some(variant) }

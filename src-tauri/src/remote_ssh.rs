@@ -544,6 +544,35 @@ pub async fn read_remote_server_file(
 }
 
 #[tauri::command]
+pub async fn read_remote_server_log_start(
+    profile_id: Uuid,
+    profiles: State<'_, ServerProfileStore>,
+    remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<String, String> {
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    run_remote(
+        profile,
+        environment,
+        Arc::clone(remote_sessions.inner()),
+        move |session, profile| {
+            let sftp = session.sftp().map_err(|error| format!("Could not open SFTP: {error}"))?;
+            let root = remote_root_with_sftp(&sftp, configured_remote_root(profile)?)?;
+            let requested = resolve_remote_relative(&root, "logs/latest.log", false)?;
+            reject_remote_symlink_path(&sftp, &root, &requested)?;
+            let canonical = canonical_inside(&sftp, &root, &requested)?;
+            let metadata = sftp.lstat(Path::new(&canonical))
+                .map_err(|error| format!("Could not inspect the server log: {error}"))?;
+            if metadata.file_type() != FileType::File {
+                return Err("The server log is not a regular file.".into());
+            }
+            let bytes = sftp.read_prefix(Path::new(&canonical), 256 * 1024)
+                .map_err(|error| format!("Could not read the server log: {error}"))?;
+            Ok(String::from_utf8_lossy(&bytes).into_owned())
+        },
+    ).await
+}
+
+#[tauri::command]
 pub async fn write_remote_server_file(
     profile_id: Uuid,
     relative_path: String,
@@ -1154,13 +1183,16 @@ impl RemoteSftp {
         })
     }
     fn read_file(&self, path: &Path) -> Result<Vec<u8>, String> {
+        self.read_prefix(path, MAX_FILE_BYTES as usize + 1)
+    }
+    fn read_prefix(&self, path: &Path, limit: usize) -> Result<Vec<u8>, String> {
         let path = path.to_string_lossy().to_string();
         self.runtime.block_on(async {
             let mut file = self.inner.open(path).await.map_err(|e| e.to_string())?;
             let mut bytes = Vec::new();
             let mut buffer = [0_u8; 8192];
-            while bytes.len() <= MAX_FILE_BYTES as usize {
-                let remaining = (MAX_FILE_BYTES as usize + 1 - bytes.len()).min(buffer.len());
+            while bytes.len() < limit {
+                let remaining = (limit - bytes.len()).min(buffer.len());
                 let count = file
                     .read(&mut buffer[..remaining])
                     .await

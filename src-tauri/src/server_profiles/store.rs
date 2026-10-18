@@ -257,6 +257,7 @@ impl ServerProfileStore {
             name: name.trim().to_owned(),
             target,
             installed_software: None,
+            installed_version: None,
         };
         let mut data = current.clone();
         data.profiles.push(profile.clone());
@@ -298,7 +299,10 @@ impl ServerProfileStore {
             (ServerTarget::Remote { environment_id: old_environment, directory: old, .. }, ServerTarget::Remote { environment_id: new_environment, directory: new, .. }) => old_environment == new_environment && old == new,
             _ => false,
         };
-        if !same_directory { profile.installed_software = None; }
+        if !same_directory {
+            profile.installed_software = None;
+            profile.installed_version = None;
+        }
         profile.target = target;
         let updated = profile.clone();
         self.save(&data)?;
@@ -306,12 +310,13 @@ impl ServerProfileStore {
         Ok(updated)
     }
 
-    pub fn set_installed_software(&self, id: Uuid, software: &str) -> Result<(), String> {
+    pub fn set_installed_software(&self, id: Uuid, software: &str, version: &str) -> Result<(), String> {
         let mut current = self.lock()?;
         let mut data = current.clone();
         let profile = data.profiles.iter_mut().find(|profile| profile.id == id)
             .ok_or("Server profile was not found.")?;
         profile.installed_software = Some(software.to_owned());
+        profile.installed_version = Some(version.to_owned());
         self.save(&data)?;
         *current = data;
         Ok(())
@@ -450,6 +455,7 @@ fn migrate_legacy_profiles(profiles: Vec<LegacyServerProfile>) -> ProfileData {
             name: legacy.name,
             target,
             installed_software: None,
+            installed_version: None,
         });
     }
     data
