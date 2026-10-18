@@ -5,6 +5,7 @@ mod server_files;
 mod server_profiles;
 mod server_sessions;
 mod vanilla_install;
+mod software_install;
 
 use server_profiles::{ServerProfileStore, commands};
 use server_sessions::{LocalSessionManager, commands as session_commands};
@@ -35,6 +36,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             vanilla_install::list_vanilla_versions,
             vanilla_install::install_vanilla_version,
+            software_install::install_server_software,
             vanilla_install::use_managed_java,
             commands::get_local_install_root,
             commands::get_auto_accept_eula,
