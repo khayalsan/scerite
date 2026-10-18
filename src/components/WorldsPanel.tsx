@@ -19,7 +19,7 @@ function worldName(properties: string) {
 
 export function WorldsPanel({ profileId, remote }: WorldsPanelProps) {
   const [worlds, setWorlds] = useState<ServerFileEntry[]>([]);
-  const [activeWorldName, setActiveWorldName] = useState("world");
+  const [activeWorldName, setActiveWorldName] = useState("");
   const [selectedWorld, setSelectedWorld] = useState<string | null>(null);
   const [directory, setDirectory] = useState<string | null>(null);
   const [entries, setEntries] = useState<ServerFileEntry[]>([]);
@@ -36,26 +36,15 @@ export function WorldsPanel({ profileId, remote }: WorldsPanelProps) {
     let active = true;
     setIsLoading(true);
     setError(null);
+    setWorlds([]);
+    setActiveWorldName("");
     void (async () => {
-      const root = await serverFiles.list(remote, profileId, "");
-      const properties = await serverFiles.read(remote, profileId, "server.properties").catch(() => "");
-      const candidates = root.filter((entry) => entry.directory);
-      const activeName = worldName(properties);
-      const found: ServerFileEntry[] = [];
-      let activeWorldError: string | null = null;
-      for (const candidate of candidates) {
-        if (!active) return;
-        try {
-          const files = await serverFiles.list(remote, profileId, candidate.path);
-          if (files.some((file) => file.name === "level.dat" && !file.directory)) found.push(candidate);
-        } catch (reason) {
-          if (candidate.name === activeName) activeWorldError = `Could not inspect the active world folder: ${errorText(reason)}`;
-        }
-      }
+      const found = await serverFiles.worlds(remote, profileId);
       if (!active) return;
-      setActiveWorldName(activeName);
       setWorlds(found);
-      setError(activeWorldError);
+      setIsLoading(false);
+      const properties = await serverFiles.read(remote, profileId, "server.properties").catch(() => "");
+      if (active) setActiveWorldName(worldName(properties));
     })().catch((reason: unknown) => { if (active) setError(errorText(reason)); })
       .finally(() => { if (active) setIsLoading(false); });
     return () => { active = false; };

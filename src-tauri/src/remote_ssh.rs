@@ -447,6 +447,62 @@ pub async fn list_remote_server_files(
 }
 
 #[tauri::command]
+pub async fn list_remote_worlds(
+    profile_id: Uuid,
+    profiles: State<'_, ServerProfileStore>,
+    remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<Vec<RemoteServerFileEntry>, String> {
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    run_remote(
+        profile,
+        environment,
+        Arc::clone(remote_sessions.inner()),
+        move |session, profile| {
+            let sftp = session
+                .sftp()
+                .map_err(|error| format!("Could not open SFTP: {error}"))?;
+            let root = remote_root_with_sftp(&sftp, configured_remote_root(profile)?)?;
+            let entries = sftp
+                .read_dir(Path::new(&root))
+                .map_err(|error| format!("Could not list remote worlds: {error}"))?;
+            if entries.len() > MAX_DIRECTORY_ENTRIES {
+                return Err(format!(
+                    "The server folder has more than {MAX_DIRECTORY_ENTRIES} entries."
+                ));
+            }
+            let mut worlds = Vec::new();
+            for (name, attributes) in entries {
+                if attributes.file_type() != FileType::Dir
+                    || name.is_empty()
+                    || name == "."
+                    || name == ".."
+                    || name.contains('/')
+                    || name.chars().any(char::is_control)
+                {
+                    continue;
+                }
+                let level_path = format!("{root}/{name}/level.dat");
+                if !sftp
+                    .lstat(Path::new(&level_path))
+                    .is_ok_and(|metadata| metadata.file_type() == FileType::File)
+                {
+                    continue;
+                }
+                worlds.push(RemoteServerFileEntry {
+                    path: name.clone(),
+                    name,
+                    directory: true,
+                    size: 0,
+                });
+            }
+            worlds.sort_by_key(|world| world.name.to_lowercase());
+            Ok(worlds)
+        },
+    )
+    .await
+}
+
+#[tauri::command]
 pub async fn read_remote_server_file(
     profile_id: Uuid,
     relative_path: String,

@@ -54,6 +54,7 @@ pub fn run() {
             session_commands::local_server_console,
             session_commands::send_local_console_input,
             server_files::list_local_server_files,
+            server_files::list_local_worlds,
             server_files::read_local_server_file,
             server_files::write_local_server_file,
             remote_ssh::test_remote_connection,
@@ -64,6 +65,7 @@ pub fn run() {
             remote_ssh::remote_server_console,
             remote_ssh::send_remote_console_input,
             remote_ssh::list_remote_server_files,
+            remote_ssh::list_remote_worlds,
             remote_ssh::read_remote_server_file,
             remote_ssh::write_remote_server_file,
         ])
