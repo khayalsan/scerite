@@ -1342,6 +1342,52 @@ pub(crate) async fn install_remote_loader(
     }).await
 }
 
+pub(crate) async fn install_remote_package(
+    profile: ServerProfile,
+    environment: ServerEnvironment,
+    sessions: Arc<RemoteSessionManager>,
+    folder: String,
+    filename: String,
+    source: PathBuf,
+    sha1: String,
+) -> Result<(), String> {
+    run_remote(profile, environment, sessions, move |session, profile| {
+        match remote_is_running(session, profile)? {
+            Some(true) => return Err("Stop the server before installing packages.".into()),
+            Some(false) => {}
+            None => return Err("tmux is required to confirm the remote server is stopped.".into()),
+        }
+        let sftp = session.sftp()?;
+        let root = remote_root_with_sftp(&sftp, configured_remote_root(profile)?)?;
+        if remote_directory_has_java_process(session, &root)? {
+            return Err("A Java process is using the server folder. Stop it before installing packages.".into());
+        }
+        let directory = format!("{root}/{folder}");
+        let created = execute(session, &format!("mkdir -p -- {}", shell_quote(&directory)))?;
+        if created.exit_code != 0 { return Err(remote_command_error("Could not create package folder", created)); }
+        reject_remote_symlink_path(&sftp, &root, &directory)?;
+        if remote_root_with_sftp(&sftp, &directory)? != directory {
+            return Err("The package folder resolves outside the server folder.".into());
+        }
+        let destination = format!("{directory}/{filename}");
+        if sftp.lstat(Path::new(&destination)).is_ok() { return Err(format!("{filename} already exists. Existing packages are never replaced.")); }
+        let temporary = format!("{directory}/.servercrafter-{}.tmp", Uuid::new_v4());
+        let result = (|| {
+            sftp.upload_file_exclusive(Path::new(&temporary), &source)
+                .map_err(|error| format!("Could not upload package: {error}"))?;
+            let hash = execute(session, &format!("sha1sum -- {}", shell_quote(&temporary)))?;
+            if hash.exit_code != 0 || !String::from_utf8_lossy(&hash.stdout).starts_with(&sha1) {
+                return Err("The uploaded package failed its checksum check.".into());
+            }
+            let linked = execute(session, &format!("ln -- {} {}", shell_quote(&temporary), shell_quote(&destination)))?;
+            if linked.exit_code != 0 { return Err(remote_command_error("Could not install package", linked)); }
+            Ok(())
+        })();
+        let _ = sftp.unlink(Path::new(&temporary));
+        result
+    }).await
+}
+
 pub(crate) async fn remote_java_arch(
     profile: ServerProfile,
     environment: ServerEnvironment,

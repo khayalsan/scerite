@@ -21,11 +21,15 @@ Remote process control requires `tmux` on the server and a trusted host key in `
 
 ## Server software installation
 
-Set one Minecraft root for this computer, or a root for each remote environment. Each selected server folder must be directly inside that root's `servers/` folder. From the server's **Install** tab, choose a Minecraft release or snapshot and server software: Vanilla, Paper, Purpur, Fabric, Quilt, Forge, NeoForge, or an available Arclight Forge/NeoForge/Fabric variant. Availability depends on what each project publishes for the selected Minecraft version. Spigot and mod/plugin package downloads are planned for later.
+Set one Minecraft root for this computer, or a root for each remote environment. Each selected server folder must be directly inside that root's `servers/` folder. From the server's **Install** tab, choose a Minecraft release or snapshot and server software: Vanilla, Paper, Purpur, Fabric, Quilt, Forge, NeoForge, or an available Arclight Forge/NeoForge/Fabric variant. Availability depends on what each project publishes for the selected Minecraft version. Spigot installation is planned for later.
 
 Vanilla jars are verified against Mojang's SHA-1 checksum and cached at `cache/minecraft/<version>/server.jar`. Other direct jars are cached by software, Minecraft version, and build, then copied into the server folder without replacing an existing jar. Forge, NeoForge, and Quilt use their upstream installers and require an empty server folder. A failed installer may leave partial files there; inspect or remove them before retrying. Remote installation uses SFTP and standard Linux commands without a custom agent. The server must be stopped for any installation.
 
 The installer reads the required Java major version from Mojang's release metadata and installs a matching Eclipse Temurin JDK under `runtimes/java/<major>/<platform>/<build>/`. JDK archives are SHA-256 verified, used temporarily during local or remote installation, then removed. The next Java installation or selection removes the old `cache/java/` folder for that local root or remote environment. Standard Java launch profiles are updated for the installed software. Custom launch executables are preserved and may need manual editing. Remote Java installation requires Linux `sha256sum`, `tar`, `mv`, and `rm`.
+
+## Mods and plugins
+
+The **Mods & plugins** tab lists JAR files in the selected server's `mods/` or `plugins/` folder. Enter the server's Minecraft version and loader, then search Modrinth for compatible server packages. Select a published release to download and install its primary JAR. Downloads are checked against Modrinth's SHA-512 checksum and never replace an existing file. The server must be stopped. Required dependencies are shown but are not installed automatically; install them separately before starting the server. The tab supports local and remote Linux servers.
 
 ## Development
 
