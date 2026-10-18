@@ -19,7 +19,7 @@ The app can create, edit, list, and remove server profiles. Local servers can be
 
 Remote process control requires `tmux` on the server and a trusted host key in `known_hosts`. Remote file operations stay inside the configured server folder, skip symbolic links, limit text files to 1 MB, and require the managed server to be stopped before writing.
 
-When adding a remote server, Scerite creates or reuses `<environment root>/servers/<server-name>` with a kebab-case folder name. An existing custom server folder can still be selected instead. Renaming the saved server does not rename its folder.
+When adding a remote server, Scerite creates the configured Minecraft root if needed, then creates or reuses `<environment root>/servers/<server-name>` with a kebab-case folder name. An existing custom server folder can still be selected instead. Renaming the saved server does not rename its folder.
 
 ## Server software installation
 

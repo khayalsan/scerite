@@ -681,7 +681,12 @@ pub async fn prepare_remote_server_directory(
             runtime: Arc::clone(&sessions.runtime),
         };
         let sftp = connection.sftp()?;
-        let root = remote_root_with_sftp(&sftp, &environment.root_directory)?;
+        let created = execute(&connection, &format!("mkdir -p -- {}", shell_quote(&environment.root_directory)))?;
+        if created.exit_code != 0 {
+            return Err(remote_command_error("Could not create the configured Minecraft root", created));
+        }
+        let root = remote_root_with_sftp(&sftp, &environment.root_directory)
+            .map_err(|error| format!("Could not verify the configured Minecraft root: {error}"))?;
         let mut parent = root;
         for part in ["servers", slug.as_str()] {
             let path = format!("{parent}/{part}");
@@ -696,7 +701,8 @@ pub async fn prepare_remote_server_directory(
                     return Err(remote_command_error("Could not create the remote server folder", created));
                 }
             }
-            let canonical = remote_root_with_sftp(&sftp, &path)?;
+            let canonical = remote_root_with_sftp(&sftp, &path)
+                .map_err(|error| format!("Could not verify the managed server folder {path}: {error}"))?;
             if Path::new(&canonical).parent() != Some(Path::new(&parent)) {
                 return Err("The managed server folder resolves outside the configured Minecraft root.".into());
             }
