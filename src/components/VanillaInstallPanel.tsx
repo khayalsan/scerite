@@ -46,7 +46,13 @@ export function VanillaInstallPanel({ profileId, remote, rootConfigured, canInst
   }
 
   const phase = progress?.phase === "downloading" && progress.total
-    ? `Downloading ${Math.round(progress.downloaded / progress.total * 100)}%`
+    ? `Downloading Minecraft ${Math.round(progress.downloaded / progress.total * 100)}%`
+    : progress?.phase === "downloading_java" && progress.total
+      ? `Downloading Java ${Math.round(progress.downloaded / progress.total * 100)}%`
+    : progress?.phase === "uploading_java" ? "Uploading Java to the remote environment…"
+    : progress?.phase === "installing_java" ? "Extracting Java…"
+    : progress?.phase === "java_cached" ? "Using installed Java…"
+    : progress?.phase === "checking_java" ? "Finding a compatible Java version…"
     : progress?.phase === "uploading" ? "Uploading to remote cache…"
     : progress?.phase === "installing" ? "Copying into server folder…"
     : progress?.phase === "cached" ? "Using cached jar…"
@@ -56,7 +62,7 @@ export function VanillaInstallPanel({ profileId, remote, rootConfigured, canInst
   return <div className="install-panel">
     <div>
       <h2>Install vanilla Minecraft</h2>
-      <p>Download an official release into cache/minecraft, then install it as server.jar in this server’s folder. Existing files are preserved.</p>
+      <p>Install the Java version required by this release, then download the official server jar. Java is stored in runtimes/java and downloads are kept in cache. Existing server files are preserved.</p>
     </div>
     <div className="install-form">
       <label htmlFor="vanilla-version">Minecraft version</label>
@@ -71,6 +77,6 @@ export function VanillaInstallPanel({ profileId, remote, rootConfigured, canInst
     {rootConfigured && !canInstall && <p className="form-error">Stop the server and confirm its status before installing.</p>}
     {busy && <p role="status">{phase}</p>}
     {error && <p className="form-error" role="alert">{error}</p>}
-    {result && <p className="install-success" role="status">{result} Check the profile’s launch arguments before starting.</p>}
+    {result && <p className="install-success" role="status">{result}</p>}
   </div>;
 }

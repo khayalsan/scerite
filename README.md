@@ -23,6 +23,8 @@ Remote process control requires `tmux` on the server and a trusted host key in `
 
 Set one Minecraft root for this computer, or a root for each remote environment. Each selected server folder must be directly inside that root's `servers/` folder. The installer creates `servers/` and the selected server folder when needed. From the server's **Install** tab, choose an official vanilla release. The jar is verified against Mojang's SHA-1 checksum, saved under `cache/minecraft/<version>/server.jar`, then copied into the selected folder as `server.jar`. The installer refuses to replace an existing `server.jar` and requires the server to be stopped. Remote installation uploads through SFTP and uses standard Linux `sha1sum`, `cp`, and `ln` commands; no remote agent is required. Loader and mod installation are not included yet.
 
+The installer reads the required Java major version from Mojang's release metadata and installs a matching Eclipse Temurin JDK under `runtimes/java/<major>/<platform>/<build>/`. JDK archives are SHA-256 verified and kept in `cache/java/` for local installations; remote archives are uploaded through SFTP, verified again on the host, and kept in that environment's cache. Java launch profiles are pointed at the managed runtime and use `server.jar`; custom launch executables are preserved. Remote Java installation requires Linux `sha256sum`, `tar`, `mv`, and `rm`.
+
 ## Development
 
 - `npm run tauri dev` starts the desktop app.
