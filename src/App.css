@@ -192,12 +192,32 @@
   margin: -10px 0 34px;
 }
 
-.local-root-section {
+.local-root-section,
+.app-settings-section {
   margin: -10px 0 34px;
   padding: 14px;
   border: 1px solid var(--app-line);
   border-radius: 10px;
   background: var(--app-paper);
+}
+
+.app-setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  max-width: 760px;
+  cursor: pointer;
+}
+
+.app-setting-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.app-setting-copy small {
+  color: var(--muted-foreground);
+  line-height: 1.4;
 }
 
 .local-root-form {

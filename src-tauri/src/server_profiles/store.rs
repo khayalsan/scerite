@@ -11,15 +11,32 @@ use super::model::{
     LocalLaunchConfig, ServerEnvironment, ServerProfile, ServerTarget, validate_name,
 };
 
-#[derive(Default, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ProfileData {
+    #[serde(default = "default_auto_accept_eula")]
+    auto_accept_eula: bool,
     #[serde(default)]
     local_root: Option<String>,
     #[serde(default)]
     environments: Vec<ServerEnvironment>,
     #[serde(default)]
     profiles: Vec<ServerProfile>,
+}
+
+fn default_auto_accept_eula() -> bool {
+    true
+}
+
+impl Default for ProfileData {
+    fn default() -> Self {
+        Self {
+            auto_accept_eula: true,
+            local_root: None,
+            environments: Vec::new(),
+            profiles: Vec::new(),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -92,6 +109,19 @@ impl ServerProfileStore {
 
     pub fn local_root(&self) -> Result<Option<String>, String> {
         Ok(self.lock()?.local_root.clone())
+    }
+
+    pub fn auto_accept_eula(&self) -> Result<bool, String> {
+        Ok(self.lock()?.auto_accept_eula)
+    }
+
+    pub fn set_auto_accept_eula(&self, enabled: bool) -> Result<bool, String> {
+        let mut current = self.lock()?;
+        let mut data = current.clone();
+        data.auto_accept_eula = enabled;
+        self.save(&data)?;
+        *current = data;
+        Ok(enabled)
     }
 
     pub fn set_local_root(&self, root_directory: String) -> Result<String, String> {

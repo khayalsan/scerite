@@ -1,4 +1,5 @@
 mod remote_ssh;
+mod eula;
 mod java_runtime;
 mod server_files;
 mod server_profiles;
@@ -36,6 +37,8 @@ pub fn run() {
             vanilla_install::install_vanilla_version,
             vanilla_install::use_managed_java,
             commands::get_local_install_root,
+            commands::get_auto_accept_eula,
+            commands::set_auto_accept_eula,
             commands::set_local_install_root,
             commands::list_server_environments,
             commands::create_server_environment,
