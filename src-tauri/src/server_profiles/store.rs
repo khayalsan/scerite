@@ -258,6 +258,7 @@ impl ServerProfileStore {
             target,
             installed_software: None,
             installed_version: None,
+            installed_packages: Vec::new(),
         };
         let mut data = current.clone();
         data.profiles.push(profile.clone());
@@ -302,6 +303,7 @@ impl ServerProfileStore {
         if !same_directory {
             profile.installed_software = None;
             profile.installed_version = None;
+            profile.installed_packages.clear();
         }
         profile.target = target;
         let updated = profile.clone();
@@ -315,8 +317,32 @@ impl ServerProfileStore {
         let mut data = current.clone();
         let profile = data.profiles.iter_mut().find(|profile| profile.id == id)
             .ok_or("Server profile was not found.")?;
+        if profile.installed_software.as_deref() != Some(software) || profile.installed_version.as_deref() != Some(version) {
+            profile.installed_packages.clear();
+        }
         profile.installed_software = Some(software.to_owned());
         profile.installed_version = Some(version.to_owned());
+        self.save(&data)?;
+        *current = data;
+        Ok(())
+    }
+
+    pub fn record_installed_package(&self, id: Uuid, package: super::model::InstalledPackage) -> Result<(), String> {
+        let mut current = self.lock()?;
+        let mut data = current.clone();
+        let profile = data.profiles.iter_mut().find(|profile| profile.id == id)
+            .ok_or("Server profile was not found.")?;
+        if let Some(existing) = profile.installed_packages.iter_mut().find(|existing| existing.kind == package.kind && existing.project_id == package.project_id) {
+            existing.required_by.extend(package.required_by);
+            existing.required_by.sort();
+            existing.required_by.dedup();
+            existing.direct |= package.direct;
+            existing.filename = package.filename;
+            existing.version_id = package.version_id;
+            existing.title = package.title;
+        } else {
+            profile.installed_packages.push(package);
+        }
         self.save(&data)?;
         *current = data;
         Ok(())
@@ -456,6 +482,7 @@ fn migrate_legacy_profiles(profiles: Vec<LegacyServerProfile>) -> ProfileData {
             target,
             installed_software: None,
             installed_version: None,
+            installed_packages: Vec::new(),
         });
     }
     data

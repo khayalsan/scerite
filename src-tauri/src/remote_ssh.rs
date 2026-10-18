@@ -572,6 +572,60 @@ pub async fn read_remote_server_log_start(
     ).await
 }
 
+pub(crate) async fn remote_package_names(
+    profile: ServerProfile,
+    environment: ServerEnvironment,
+    sessions: Arc<RemoteSessionManager>,
+    folder: &str,
+) -> Result<Vec<String>, String> {
+    let folder = folder.to_owned();
+    run_remote(profile, environment, sessions, move |session, profile| {
+        let sftp = session.sftp()?;
+        let root = remote_root_with_sftp(&sftp, configured_remote_root(profile)?)?;
+        let path = resolve_remote_relative(&root, &folder, false)?;
+        let metadata = match sftp.lstat(Path::new(&path)) {
+            Ok(metadata) => metadata,
+            Err(_) => return Ok(Vec::new()),
+        };
+        if metadata.file_type() != FileType::Dir {
+            return Err("The package path is not a folder.".into());
+        }
+        Ok(sftp.read_dir(Path::new(&path))?.into_iter()
+            .filter(|(_, metadata)| metadata.file_type() == FileType::File)
+            .map(|(name, _)| name)
+            .collect())
+    }).await
+}
+
+pub(crate) async fn remote_package_sha512(
+    profile: ServerProfile,
+    environment: ServerEnvironment,
+    sessions: Arc<RemoteSessionManager>,
+    folder: &str,
+    filename: &str,
+) -> Result<String, String> {
+    let folder = folder.to_owned();
+    let filename = filename.to_owned();
+    run_remote(profile, environment, sessions, move |session, profile| {
+        let sftp = session.sftp()?;
+        let root = remote_root_with_sftp(&sftp, configured_remote_root(profile)?)?;
+        let path = resolve_remote_relative(&root, &format!("{folder}/{filename}"), false)?;
+        reject_remote_symlink_path(&sftp, &root, &path)?;
+        let canonical = canonical_inside(&sftp, &root, &path)?;
+        if sftp.lstat(Path::new(&canonical))?.file_type() != FileType::File {
+            return Err("The existing package is not a regular file.".into());
+        }
+        let result = execute(session, &format!("sha512sum -- {}", shell_quote(&canonical)))?;
+        if result.exit_code != 0 { return Err(remote_command_error("Could not hash the existing package", result)); }
+        let output = String::from_utf8_lossy(&result.stdout);
+        let hash = output.split_whitespace().next().unwrap_or_default();
+        if hash.len() != 128 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err("The remote package hash is invalid.".into());
+        }
+        Ok(hash.to_ascii_lowercase())
+    }).await
+}
+
 #[tauri::command]
 pub async fn detect_remote_fabric_version(
     profile_id: Uuid,

@@ -22,6 +22,17 @@ export interface ServerProfile {
   target: ServerTarget;
   installedSoftware?: string | null;
   installedVersion?: string | null;
+  installedPackages?: InstalledPackage[];
+}
+
+export interface InstalledPackage {
+  kind: string;
+  projectId: string;
+  versionId: string;
+  title: string;
+  filename: string;
+  requiredBy: string[];
+  direct: boolean;
 }
 
 export const serverProfiles = {

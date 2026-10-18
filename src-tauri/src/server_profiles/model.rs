@@ -11,6 +11,22 @@ pub struct ServerProfile {
     pub installed_software: Option<String>,
     #[serde(default)]
     pub installed_version: Option<String>,
+    #[serde(default)]
+    pub installed_packages: Vec<InstalledPackage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstalledPackage {
+    pub kind: String,
+    pub project_id: String,
+    pub version_id: String,
+    pub title: String,
+    pub filename: String,
+    #[serde(default)]
+    pub required_by: Vec<String>,
+    #[serde(default)]
+    pub direct: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
