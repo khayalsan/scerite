@@ -250,25 +250,22 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software, i
 
   return <section className="packages-panel" aria-label={kind === "mod" ? "Mods" : "Plugins"}>
     <header className="packages-header">
-      <div><h2>{kind === "mod" ? "Mods" : "Plugins"}</h2><p>Browse compatible Modrinth releases and install them into this server.</p></div>
+      <h2>{kind === "mod" ? "Mods" : "Plugins"}</h2>
     </header>
     <div className="packages-layout">
       <div className="packages-catalog">
-        <h3>Find {kind === "mod" ? "a mod" : "a plugin"}</h3>
-        <p>Results are filtered for this server’s Minecraft version and loader.</p>
         <form className="packages-search-form" onSubmit={(event) => void search(event)}>
-          <div className="packages-fixed-loader"><span>Minecraft version</span><strong>{versionLoading ? "Detecting…" : gameVersion || "Unknown"}</strong></div>
-          {versionError && <p className="files-error" role="alert">{versionError} <button type="button" className="button button-quiet" onClick={() => setVersionRetry((value) => value + 1)}>Retry</button></p>}
-          {fixedLoader ? <div className="packages-fixed-loader"><span>Server loader</span><strong>{availableLoaders[0]?.label ?? fixedLoader}</strong></div> : <>
-            <label htmlFor="package-loader">Server loader</label>
-            <Select value={loader} onValueChange={(value) => changeCompatibility(value ?? availableLoaders[0].id)} disabled={busy}>
-              <SelectTrigger id="package-loader"><SelectValue>{(value) => loaders[kind].find((item) => item.id === value)?.label ?? "Choose loader"}</SelectValue></SelectTrigger>
-              <SelectContent>{availableLoaders.map((item) => <SelectItem key={item.id} value={item.id}>{item.label}</SelectItem>)}</SelectContent>
-            </Select>
-          </>}
           <label htmlFor="package-query">Search Modrinth</label>
           <div className="packages-query"><input id="package-query" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={kind === "mod" ? "Search mods or browse popular" : "Search plugins or browse popular"} maxLength={100} disabled={busy} /><button className="button button-primary" type="submit" disabled={searching || busy || !gameVersion}><Search size={15} aria-hidden="true" /> {searching ? "Searching…" : query ? "Search" : "Browse"}</button></div>
-          <div className="packages-sort"><label htmlFor="package-sort">Sort results</label><Select value={sort} onValueChange={(value) => setSort(value ?? "relevance")} disabled={busy}><SelectTrigger id="package-sort"><SelectValue>{(value) => ({ relevance: "Relevance", downloads: "Most downloaded", updated: "Recently updated" })[value as "relevance" | "downloads" | "updated"] ?? "Relevance"}</SelectValue></SelectTrigger><SelectContent><SelectItem value="relevance">Relevance</SelectItem><SelectItem value="downloads">Most downloaded</SelectItem><SelectItem value="updated">Recently updated</SelectItem></SelectContent></Select></div>
+          <div className="packages-search-options">
+            <div className="packages-sort"><label htmlFor="package-sort">Sort results</label><Select value={sort} onValueChange={(value) => setSort(value ?? "relevance")} disabled={busy}><SelectTrigger id="package-sort"><SelectValue>{(value) => ({ relevance: "Relevance", downloads: "Most downloaded", updated: "Recently updated" })[value as "relevance" | "downloads" | "updated"] ?? "Relevance"}</SelectValue></SelectTrigger><SelectContent><SelectItem value="relevance">Relevance</SelectItem><SelectItem value="downloads">Most downloaded</SelectItem><SelectItem value="updated">Recently updated</SelectItem></SelectContent></Select></div>
+            <dl className="packages-compatibility">
+              <div><dt>Minecraft version</dt><dd>{versionLoading ? "Detecting…" : gameVersion || "Unknown"}</dd></div>
+              {fixedLoader && <div><dt>Server loader</dt><dd>{availableLoaders[0]?.label ?? fixedLoader}</dd></div>}
+            </dl>
+            {!fixedLoader && <div className="packages-loader-select"><label htmlFor="package-loader">Server loader</label><Select value={loader} onValueChange={(value) => changeCompatibility(value ?? availableLoaders[0].id)} disabled={busy}><SelectTrigger id="package-loader"><SelectValue>{(value) => loaders[kind].find((item) => item.id === value)?.label ?? "Choose loader"}</SelectValue></SelectTrigger><SelectContent>{availableLoaders.map((item) => <SelectItem key={item.id} value={item.id}>{item.label}</SelectItem>)}</SelectContent></Select></div>}
+          </div>
+          {versionError && <p className="files-error" role="alert">{versionError} <button type="button" className="button button-quiet" onClick={() => setVersionRetry((value) => value + 1)}>Retry</button></p>}
         </form>
         {error && <p className="files-error" role="alert">{error}</p>}
         {message && <p className="install-success" role="status">{message}</p>}
