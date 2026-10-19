@@ -1637,6 +1637,39 @@ pub(crate) async fn install_remote_package(
     }).await
 }
 
+pub(crate) async fn remove_remote_plugin(
+    profile: ServerProfile,
+    environment: ServerEnvironment,
+    sessions: Arc<RemoteSessionManager>,
+    filename: String,
+) -> Result<(), String> {
+    run_remote(profile, environment, sessions, move |session, profile| {
+        match remote_is_running(session, profile)? {
+            Some(false) => {}
+            Some(true) => return Err("Stop the server before removing plugins.".into()),
+            None => return Err("tmux is required to confirm the remote server is stopped.".into()),
+        }
+        let sftp = session.sftp()?;
+        let root = remote_root_with_sftp(&sftp, configured_remote_root(profile)?)?;
+        if remote_directory_has_java_process(session, &root)? {
+            return Err("A Java process is using the server folder. Stop it before removing plugins.".into());
+        }
+        let directory = format!("{root}/plugins");
+        reject_remote_symlink_path(&sftp, &root, &directory)?;
+        if remote_root_with_sftp(&sftp, &directory)? != directory {
+            return Err("The plugin folder resolves outside the server folder.".into());
+        }
+        let path = format!("{directory}/{filename}");
+        let stat = sftp.lstat(Path::new(&path))
+            .map_err(|error| format!("Could not inspect installed plugin: {error}"))?;
+        if stat.file_type() != FileType::File {
+            return Err("The installed plugin is not a regular file.".into());
+        }
+        sftp.unlink(Path::new(&path))
+            .map_err(|error| format!("Could not remove installed plugin: {error}"))
+    }).await
+}
+
 pub(crate) async fn remote_java_arch(
     profile: ServerProfile,
     environment: ServerEnvironment,

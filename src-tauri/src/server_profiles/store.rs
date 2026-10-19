@@ -348,6 +348,45 @@ impl ServerProfileStore {
         Ok(())
     }
 
+    pub fn remove_installed_package(&self, id: Uuid, project_id: &str, clear_dependencies: bool) -> Result<(), String> {
+        let mut current = self.lock()?;
+        let mut data = current.clone();
+        let profile = data.profiles.iter_mut().find(|profile| profile.id == id)
+            .ok_or("Server profile was not found.")?;
+        let package = profile.installed_packages.iter().find(|package| package.kind == "plugin" && package.project_id == project_id)
+            .ok_or("The installed plugin record was not found.")?.clone();
+        profile.installed_packages.retain(|item| !(item.kind == "plugin" && item.project_id == project_id));
+        if clear_dependencies {
+            for item in &mut profile.installed_packages {
+                item.required_by.retain(|title| title != &package.title);
+            }
+        }
+        self.save(&data)?;
+        *current = data;
+        Ok(())
+    }
+
+    pub fn reconcile_plugin_dependencies(&self, id: Uuid, previous_title: &str, current_title: &str, required_ids: &[String]) -> Result<(), String> {
+        let mut current = self.lock()?;
+        let mut data = current.clone();
+        let profile = data.profiles.iter_mut().find(|profile| profile.id == id)
+            .ok_or("Server profile was not found.")?;
+        for package in profile.installed_packages.iter_mut().filter(|item| item.kind == "plugin") {
+            if !required_ids.contains(&package.project_id) {
+                package.required_by.retain(|title| title != previous_title);
+            } else if previous_title != current_title {
+                for title in &mut package.required_by {
+                    if title == previous_title { *title = current_title.to_owned(); }
+                }
+                package.required_by.sort();
+                package.required_by.dedup();
+            }
+        }
+        self.save(&data)?;
+        *current = data;
+        Ok(())
+    }
+
     pub fn delete(&self, id: Uuid) -> Result<(), String> {
         let mut current = self.lock()?;
         let mut data = current.clone();

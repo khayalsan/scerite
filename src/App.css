@@ -979,6 +979,8 @@
 .packages-installed-copy { display: grid; flex: 1; min-width: 0; gap: 3px; overflow-wrap: anywhere; }
 .packages-installed-copy strong { font-weight: 600; }
 .packages-installed-copy small { color: var(--app-muted); }
+.packages-installed-actions { display: flex; flex: none; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
+.packages-installed-actions .button { padding-inline: 6px; }
 .packages-installed-list li small { flex: none; color: var(--app-muted); }
 .packages-installed-dependencies { margin-top: 18px; padding-top: 13px; border-top: 1px solid var(--app-line); }
 .packages-installed-dependencies h4 { margin: 0 0 7px; font-size: 12px; }
