@@ -4,6 +4,8 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-10-19
+
 ### Added
 
 - The new Server tab shows the server's status, address and port, software and version, player count, and server-process CPU and RAM use.
