@@ -1,35 +1,35 @@
 # Changelog
 
-Add release notes under **Unreleased** before merging a pull request into `main`. The release workflow moves these notes into the new version and uses them for the GitHub release.
+Add release notes under **Unreleased** before merging a pull request into `main`. The release workflow moves them into the new version and publishes them with the GitHub release.
 
 ## [Unreleased]
 
 ### Added
 
-- A Server tab shows connection details, player count, and CPU and RAM use.
-- GitHub releases now show these notes automatically.
+- The new Server tab shows the server's status, address and port, software and version, player count, and server-process CPU and RAM use.
+- GitHub releases now include these changelog notes.
 
 ### Changed
 
-- Renaming a server also renames its folder, whether it is on this computer or reached through SSH.
+- Renaming a server also renames its folder, both locally and over SSH.
 
 ### Fixed
 
-- Show installed mods and plugins in KB when they are smaller than 1 MB.
-- Allow one-character searches for mods and plugins.
-- Keep the remote console visible when a server exits during startup, so its error can be read.
-- Ignore a missing tmux pane while a remote server starts or stops instead of reporting an SSH failure.
+- Installed mods and plugins smaller than 1 MB now show their size in KB.
+- Mod and plugin searches now accept a single character.
+- If a remote server exits during startup, its final console output stays visible so the error can be read.
+- A disappearing remote console during startup or shutdown no longer appears as an SSH connection failure.
 
 ## [0.3.1] - 2026-10-19
 
 ### Added
 
-- Update and remove Modrinth-managed plugins from the app.
-- Keep SSH connections alive during remote software installation.
+- Update or remove Modrinth-managed plugins from the app.
 
 ### Fixed
 
-- Show compatible plugins even when Modrinth does not specify their server environment.
+- Find compatible plugins even when Modrinth does not specify their server environment.
+- Keep SSH connections active during remote software installation.
 
 ### Changed
 
@@ -37,4 +37,4 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 ## [0.3.0] - 2026-10-19
 
-- Baseline release before the plugin management changes.
+- Initial desktop release.
