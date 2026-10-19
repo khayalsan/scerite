@@ -556,8 +556,6 @@ function App() {
         } catch (error) {
           if (active) {
             setSessionError(errorText(error));
-            setRemoteStatuses((current) => ({ ...current, [consoleProfileId]: { state: "unreachable" } }));
-            setConnectedRemotes((current) => ({ ...current, [consoleProfileId]: false }));
           }
         } finally {
           if (active && consoleRemoteState !== "stopped") timer = window.setTimeout(() => void refresh(), 2000);

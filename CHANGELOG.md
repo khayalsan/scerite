@@ -18,6 +18,7 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 - Show installed mods and plugins in KB when they are smaller than 1 MB.
 - Allow one-character searches for mods and plugins.
 - Keep the remote console visible when a server exits during startup, so its error can be read.
+- Ignore a missing tmux pane while a remote server starts or stops instead of reporting an SSH failure.
 
 ## [0.3.1] - 2026-10-19
 

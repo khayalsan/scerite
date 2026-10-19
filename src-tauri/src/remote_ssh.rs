@@ -391,7 +391,12 @@ pub async fn remote_server_console(
         );
         let result = execute(session, &command)?;
         if result.exit_code != 0 {
-            if running != Some(true) {
+            let details = String::from_utf8_lossy(&result.stderr);
+            if running != Some(true)
+                || details.contains("can't find pane")
+                || details.contains("can't find window")
+                || details.contains("can't find session")
+            {
                 return Ok(RemoteConsoleSnapshot { lines: Vec::new() });
             }
             return Err(remote_command_error("Could not read the remote console", result));
