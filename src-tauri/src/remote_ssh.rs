@@ -365,6 +365,14 @@ pub async fn stop_remote_server(
         );
         let result = execute(session, &command)?;
         if result.exit_code != 0 {
+            if remote_is_running(session, profile)? == Some(false) {
+                if let Some(root) = optional_remote_root(session, profile)? {
+                    if remote_directory_has_java_process(session, &root)? {
+                        return Err("The server is running outside scerite's tmux session. Stop it using its current manager first.".into());
+                    }
+                }
+                return Ok(RemoteServerStatus { state: "stopped".into(), tmux_available: true });
+            }
             return Err(remote_command_error("Could not send the stop command", result));
         }
         Ok(RemoteServerStatus { state: "stopping".into(), tmux_available: true })
