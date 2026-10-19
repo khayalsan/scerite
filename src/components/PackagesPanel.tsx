@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { ask } from "@tauri-apps/plugin-dialog";
 import { Download, Package, RefreshCw, Search } from "lucide-react";
 import { serverFiles } from "../lib/serverFiles";
 import type { ServerFileEntry } from "../lib/serverFiles";
@@ -93,6 +94,7 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software, i
   const versionRequest = useRef(0);
   const searchRequest = useRef(0);
   const planRequest = useRef(0);
+  const confirmingRemoval = useRef(false);
   const folder = kind === "mod" ? "mods" : "plugins";
 
   async function refreshInstalled(active = true) {
@@ -206,7 +208,8 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software, i
   }
 
   async function removePackage(record: InstalledPackage) {
-    setBusy(true);
+    if (confirmingRemoval.current) return;
+    confirmingRemoval.current = true;
     setError(null);
     setMessage(null);
     try {
@@ -216,19 +219,36 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software, i
           window.alert(`${record.title} is required by these mods:\n${preview.dependents.map((item) => `• ${item.title}`).join("\n")}\n\nRemove those mods first.`);
           return;
         }
-        if (!window.confirm(`Remove ${record.title} (${record.filename}) from this server?`)) return;
-        const cleanupProjectIds = preview.cleanup.length > 0 && window.confirm(`Also remove dependencies downloaded for this mod that no other installed mod uses?\n${preview.cleanup.map((item) => `• ${item.title}`).join("\n")}\n\nCancel keeps these dependencies installed.`)
-          ? preview.cleanup.map((item) => item.projectId) : [];
+        if (!await ask(`Remove ${record.title} (${record.filename}) from this server?`, {
+          title: "Remove mod",
+          kind: "warning",
+          okLabel: "Remove mod",
+          cancelLabel: "Cancel",
+        })) return;
+        const removeUnusedDependencies = preview.cleanup.length > 0 && await ask(`These dependencies were downloaded for ${record.title} and are not used by other installed mods:\n${preview.cleanup.map((item) => `• ${item.title}`).join("\n")}\n\nRemove them too?`, {
+          title: "Unused dependencies",
+          kind: "warning",
+          okLabel: "Remove dependencies",
+          cancelLabel: "Keep dependencies",
+        });
+        const cleanupProjectIds = removeUnusedDependencies ? preview.cleanup.map((item) => item.projectId) : [];
+        setBusy(true);
         setMessage(await invoke<string>("remove_modrinth_mod", { profileId, projectId: record.projectId, versionId: record.versionId, cleanupProjectIds }));
       } else {
-        if (!window.confirm(`Remove ${record.title} (${record.filename}) from this server?`)) return;
+        if (!await ask(`Remove ${record.title} (${record.filename}) from this server?`, {
+          title: "Remove plugin",
+          kind: "warning",
+          okLabel: "Remove plugin",
+          cancelLabel: "Cancel",
+        })) return;
+        setBusy(true);
         await invoke("remove_modrinth_plugin", { profileId, projectId: record.projectId, versionId: record.versionId });
         setMessage(`Removed ${record.title}.`);
       }
       await refreshInstalled();
       setPlan([]);
     } catch (cause) { setError(errorText(cause)); await refreshInstalled(); }
-    finally { setBusy(false); }
+    finally { confirmingRemoval.current = false; setBusy(false); }
   }
 
   const selectedVersion = versions.find((version) => version.id === selectedVersionId);

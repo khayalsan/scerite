@@ -19,6 +19,7 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 ### Fixed
 
+- Canceling a mod or plugin removal now leaves it installed.
 - The Minecraft version menu now has a solid background, so install controls do not show through it.
 - Remote servers that have stopped no longer stay marked Running or show a stop error when their console session disappears.
 
