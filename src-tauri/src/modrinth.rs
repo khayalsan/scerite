@@ -123,8 +123,8 @@ pub async fn search_modrinth(
         return Err("Choose a valid Minecraft version and loader.".into());
     }
     let query = query.trim();
-    if (!query.is_empty() && query.len() < 2) || query.len() > 100 {
-        return Err("Enter at least 2 characters, or leave search empty to browse.".into());
+    if query.len() > 100 {
+        return Err("Search terms must be at most 100 characters long.".into());
     }
     if !matches!(index.as_str(), "relevance" | "downloads" | "updated") {
         return Err("Choose a valid search order.".into());
