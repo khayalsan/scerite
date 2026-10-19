@@ -18,7 +18,7 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 ### Fixed
 
 - The Minecraft version menu now has a solid background, so install controls do not show through it.
-- Stopping a remote server now updates its status if its tmux pane disappears before the stop command is sent.
+- Remote server status no longer shows Running when tmux returns no pane state, and Stop updates the status when its pane has disappeared.
 
 ## [0.3.2] - 2026-10-19
 

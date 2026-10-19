@@ -365,7 +365,11 @@ pub async fn stop_remote_server(
         );
         let result = execute(session, &command)?;
         if result.exit_code != 0 {
-            if remote_is_running(session, profile)? == Some(false) {
+            let details = String::from_utf8_lossy(&result.stderr);
+            let pane_missing = details.contains("can't find pane")
+                || details.contains("can't find window")
+                || details.contains("can't find session");
+            if pane_missing || remote_is_running(session, profile)? == Some(false) {
                 if let Some(root) = optional_remote_root(session, profile)? {
                     if remote_directory_has_java_process(session, &root)? {
                         return Err("The server is running outside scerite's tmux session. Stop it using its current manager first.".into());
@@ -1401,7 +1405,7 @@ fn remote_is_running(
     );
     let result = execute(session, &command)?;
     if result.exit_code == 0 {
-        return Ok(Some(String::from_utf8_lossy(&result.stdout).trim() != "1"));
+        return Ok(Some(String::from_utf8_lossy(&result.stdout).trim() == "0"));
     }
     let details = String::from_utf8_lossy(&result.stderr);
     if details.contains("command not found") || result.exit_code == 127 {
