@@ -3,7 +3,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type { FormEvent } from "react";
-import { ArrowLeft, Download, FileKey, FolderOpen, Globe2, HardDrive, Network, Package, Palette, Plus, Puzzle, ScrollText, Server, Settings, SlidersHorizontal, Terminal, X } from "lucide-react";
+import { ArrowLeft, Download, FileKey, FolderOpen, Globe2, HardDrive, Network, Package, Palette, Plus, Puzzle, ScrollText, Server, Settings, SlidersHorizontal, Terminal, Users, X } from "lucide-react";
 import { appSettings, localInstallRoot, serverEnvironments, serverProfiles } from "./lib/serverProfiles";
 import type { ServerEnvironment, ServerProfile, ServerTarget } from "./lib/serverProfiles";
 import { serverSessions } from "./lib/serverSessions";
@@ -15,6 +15,7 @@ import { ServerInstallPanel } from "./components/ServerInstallPanel";
 import { PackagesPanel } from "./components/PackagesPanel";
 import { ServerOverviewPanel } from "./components/ServerOverviewPanel";
 import { LogsPanel } from "./components/LogsPanel";
+import { PlayersPanel } from "./components/PlayersPanel";
 import { serverFiles } from "./lib/serverFiles";
 import { packageSupportForSoftware, packageSupportFromFiles } from "./lib/serverSoftware";
 import type { PackageSupport } from "./lib/serverSoftware";
@@ -63,7 +64,7 @@ function readSavedTheme(): ThemeId {
   }
 }
 
-type ServerTab = "server" | "console" | "logs" | "files" | "worlds" | "properties" | "mods" | "plugins" | "install" | "settings";
+type ServerTab = "server" | "console" | "players" | "logs" | "files" | "worlds" | "properties" | "mods" | "plugins" | "install" | "settings";
 
 const emptyDraft: ProfileDraft = {
   name: "",
@@ -1088,6 +1089,9 @@ function App() {
               <button className={`server-tab${activeServerTab === "console" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "console" ? "page" : undefined} onClick={() => { setActiveServerTab("console"); if (consoleProfileId !== selectedProfile.id) toggleConsole(selectedProfile); }}>
                 <Terminal size={16} aria-hidden="true" /> Console
               </button>
+              <button className={`server-tab${activeServerTab === "players" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "players" ? "page" : undefined} onClick={() => setActiveServerTab("players")}>
+                <Users size={16} aria-hidden="true" /> Players
+              </button>
               <button className={`server-tab${activeServerTab === "logs" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "logs" ? "page" : undefined} onClick={() => setActiveServerTab("logs")}>
                 <ScrollText size={16} aria-hidden="true" /> Logs
               </button>
@@ -1416,6 +1420,9 @@ function App() {
                               <button className="button button-primary" onClick={() => toggleConsole(profile)}>Connect console</button>
                             </div>
                           )}
+                        </section>
+                        <section className="server-tab-panel" hidden={activeServerTab !== "players"} aria-label="Server players">
+                          {activeServerTab === "players" && <PlayersPanel key={profile.id} profileId={profile.id} remote={!isLocal} running={serverRunning} />}
                         </section>
                         <section className="server-tab-panel" hidden={activeServerTab !== "logs"} aria-label="Server logs">
                           {activeServerTab === "logs" && <LogsPanel key={profile.id} profileId={profile.id} remote={!isLocal} running={serverRunning} />}
