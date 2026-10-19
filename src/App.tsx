@@ -18,6 +18,7 @@ import { serverFiles } from "./lib/serverFiles";
 import { packageSupportForSoftware, packageSupportFromFiles } from "./lib/serverSoftware";
 import type { PackageSupport } from "./lib/serverSoftware";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select";
+import sceriteLogo from "../src-tauri/icons/logo.png";
 import "./App.css";
 
 type ProfileDraft = {
@@ -1049,7 +1050,7 @@ function App() {
         return (
           <aside className="sidebar server-page-sidebar" aria-label={`${selectedProfile.name} navigation`}>
             <Link className="brand" to="/" aria-label="Back to scerite servers" onClick={closeForm}>
-              <span className="brand-mark" aria-hidden="true">S</span>
+              <img className="brand-logo" src={sceriteLogo} alt="" />
               <span>scerite</span>
             </Link>
             <div className="server-page-context">
@@ -1119,7 +1120,7 @@ function App() {
       })() : (
         <aside className="sidebar" aria-label="Main navigation">
           <Link className="brand" to="/" aria-label="scerite home">
-            <span className="brand-mark" aria-hidden="true">S</span>
+            <img className="brand-logo" src={sceriteLogo} alt="" />
             <span>scerite</span>
           </Link>
           <nav className="primary-nav">

@@ -96,16 +96,11 @@
   text-decoration: none;
 }
 
-.brand-mark {
-  display: grid;
+.brand-logo {
   width: 30px;
   height: 30px;
-  place-items: center;
-  border-radius: 9px;
-  color: var(--primary-foreground);
-  background: var(--app-accent);
-  font-size: 15px;
-  font-weight: 700;
+  object-fit: contain;
+  flex: none;
 }
 
 .primary-nav {

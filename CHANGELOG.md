@@ -4,6 +4,10 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 ## [Unreleased]
 
+### Changed
+
+- The sidebar now shows the scerite logo instead of an initial.
+
 ## [0.3.2] - 2026-10-19
 
 ### Added
