@@ -129,23 +129,25 @@ pub async fn search_modrinth(
     if !matches!(index.as_str(), "relevance" | "downloads" | "updated") {
         return Err("Choose a valid search order.".into());
     }
-    let facets = serde_json::json!([
-        [format!("all_project_types:{kind}")],
-        [format!("categories:{loader}")],
-        [format!("versions:{game_version}")],
-        [
+    let mut facets = vec![
+        vec![format!("all_project_types:{kind}")],
+        vec![format!("categories:{loader}")],
+        vec![format!("versions:{game_version}")],
+    ];
+    if kind == "mod" {
+        facets.push([
             "environment:server_only",
             "environment:server_only_client_optional",
             "environment:client_and_server",
             "environment:client_or_server",
             "environment:client_or_server_prefers_both",
-            "environment:dedicated_server_only"
-        ]
-    ]);
+            "environment:dedicated_server_only",
+        ].map(str::to_owned).to_vec());
+    }
     let mut url = api_url("search")?;
     url.query_pairs_mut()
         .append_pair("query", query)
-        .append_pair("facets", &facets.to_string())
+        .append_pair("facets", &serde_json::json!(facets).to_string())
         .append_pair("index", &index)
         .append_pair("limit", "40");
     let data = get_json(&client()?, url).await?;
