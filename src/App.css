@@ -1030,11 +1030,11 @@
 .app-combobox-trigger { display: grid; width: 34px; align-self: stretch; place-items: center; border: 0; color: var(--app-muted); background: transparent; cursor: pointer; }
 .app-combobox-trigger:disabled { cursor: not-allowed; }
 .app-combobox-positioner { z-index: 1000; }
-.app-combobox-popup { width: var(--anchor-width); max-height: min(300px, var(--available-height, 300px)); overflow-y: auto; padding: 4px; border: 1px solid var(--app-line); border-radius: 8px; color: var(--app-ink); background: var(--app-paper); box-shadow: 0 12px 32px rgb(0 0 0 / 28%); }
+.app-combobox-popup { width: var(--anchor-width); max-height: min(300px, var(--available-height, 300px)); overflow-y: auto; padding: 4px; border: 1px solid var(--border); border-radius: 8px; color: var(--popover-foreground); background: var(--popover); box-shadow: 0 12px 32px rgb(0 0 0 / 28%); }
 .app-combobox-item { display: flex; min-height: 32px; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 5px; font-size: 13px; cursor: pointer; }
-.app-combobox-item[data-highlighted], .app-combobox-item:hover { color: var(--app-accent); background: var(--app-accent-soft); }
-.app-combobox-item-indicator { display: inline-flex; width: 15px; color: var(--app-accent); }
-.app-combobox-empty { padding: 10px; color: var(--app-muted); font-size: 13px; }
+.app-combobox-item[data-highlighted], .app-combobox-item:hover { color: var(--primary); background: var(--secondary); }
+.app-combobox-item-indicator { display: inline-flex; width: 15px; color: var(--primary); }
+.app-combobox-empty { padding: 10px; color: var(--muted-foreground); font-size: 13px; }
 .install-success { color: var(--success, #74c69d) !important; }
 
 .server-detail-shell .server-tab-panel[aria-label="Server mods"]:not([hidden]),
