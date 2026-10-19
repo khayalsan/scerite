@@ -951,14 +951,16 @@ async fn connect_remote_async(
             error: Arc::clone(&key_error),
         };
         let config = Arc::new(client::Config {
-            inactivity_timeout: Some(CONNECTION_IDLE_TIMEOUT),
+            // Quiet installs and long-running commands can exceed the cache's idle lifetime.
+            // Keep the transport alive until the operation finishes instead of closing it mid-command.
+            inactivity_timeout: None,
+            keepalive_interval: Some(Duration::from_secs(15)),
             ..Default::default()
         });
         match tokio::time::timeout(CONNECT_TIMEOUT, client::connect(config, address, handler)).await
         {
             Ok(Ok(mut handle)) => {
                 if authenticate(&mut handle, username, identity_file).await? {
-                    let _ = handle.send_keepalive(false).await;
                     return Ok(Arc::new(handle));
                 }
                 return Err("SSH authentication failed. Check the selected key or load the key into your SSH agent; encrypted private keys must be unlocked by the agent.".into());
