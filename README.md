@@ -3,6 +3,7 @@ Manage local and remote Minecraft servers from one desktop application. Install 
 
 Scerite is a cross-platform desktop app for managing local and remote Minecraft servers. The desktop app is built with Tauri 2, React, TypeScript, and Rust.
 
+
 ## Architecture
 
 - `src/` contains the React interface. `src/lib/serverProfiles.ts` is the frontend API boundary for server profile commands.
@@ -24,6 +25,15 @@ When adding a remote server, Scerite creates the configured Minecraft root if ne
 
 The first tab on a server page shows its status, player count, address, software, version, and server-process CPU and RAM use. Player counts come from the Minecraft status response, so they may be unavailable when the server is starting or cannot be reached.
 
+## Performance
+
+| Metric | Measurement |
+|---|---|
+| Executable size | ~10 MB |
+| Startup time | ~200 ms |
+| Memory usage | ~90 MB |
+
+Measured on Windows 11. Memory usage represents the combined private working set of Scerite and its WebView2 subprocesses while idle. Results may vary by system and workload.
 ## Server software installation
 
 Set one Minecraft root for this computer, or a root for each remote environment. Each selected server folder must be directly inside that root's `servers/` folder. From the server's **Install** tab, choose a Minecraft release or snapshot and server software: Vanilla, Paper, Purpur, Fabric, Quilt, Forge, NeoForge, or an available Arclight Forge/NeoForge/Fabric variant. Availability depends on what each project publishes for the selected Minecraft version. Spigot installation is planned for later.
