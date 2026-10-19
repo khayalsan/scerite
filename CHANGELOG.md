@@ -13,6 +13,7 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 - The sidebar now shows the scerite logo instead of an initial.
 - Search fields now filter files, properties, console and log lines, installed mods and plugins, players, and player access lists.
+- The Install tab shows selectable software cards with Mod and Plugin badges and a searchable Minecraft version combobox.
 
 ## [0.3.2] - 2026-10-19
 
