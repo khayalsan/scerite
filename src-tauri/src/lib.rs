@@ -7,6 +7,7 @@ mod server_sessions;
 mod vanilla_install;
 mod software_install;
 mod modrinth;
+mod server_overview;
 
 use server_profiles::{ServerProfileStore, commands};
 use server_sessions::{LocalSessionManager, commands as session_commands};
@@ -57,6 +58,7 @@ pub fn run() {
             commands::list_server_profiles,
             commands::create_server_profile,
             commands::update_server_profile,
+            server_overview::server_usage,
             commands::delete_server_profile,
             session_commands::local_server_status,
             session_commands::start_local_server,

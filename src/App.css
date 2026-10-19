@@ -909,6 +909,25 @@
   display: none;
 }
 
+.server-overview {
+  display: grid;
+  gap: 22px;
+  max-width: 780px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.server-overview header h2 { margin: 0 0 4px; font-size: 20px; }
+.server-overview header p { margin: 0; color: var(--app-muted); font-size: 13px; }
+.server-overview-details { margin: 0; border: 1px solid var(--app-line); border-radius: 10px; background: var(--app-ground); }
+.server-overview-details > div { display: grid; grid-template-columns: minmax(110px, 170px) minmax(0, 1fr); align-items: baseline; gap: 16px; padding: 15px 18px; border-bottom: 1px solid var(--app-line); }
+.server-overview-details > div:last-child { border-bottom: 0; }
+.server-overview-details dt { color: var(--app-muted); font-size: 12px; }
+.server-overview-details dd { margin: 0; overflow-wrap: anywhere; font-size: 15px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.server-overview-status-online { color: var(--success, #74c69d); }
+.server-overview-status-offline { color: var(--app-muted); }
+@media (max-width: 640px) { .server-overview { padding: 16px; } .server-overview-details > div { grid-template-columns: 95px minmax(0, 1fr); } }
+
 .install-panel {
   display: grid;
   gap: 1.5rem;

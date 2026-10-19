@@ -36,6 +36,18 @@ if (!tagOnHead && latest && compareVersions(current, latest) <= 0) {
   version = `${latest[0]}.${latest[1]}.${latest[2] + 1}`;
 }
 
+const changelog = readFileSync("CHANGELOG.md", "utf8");
+const unreleased = /^## \[Unreleased\]\r?\n/m.exec(changelog);
+if (!unreleased) throw new Error("CHANGELOG.md needs an Unreleased section.");
+const notesStart = unreleased.index + unreleased[0].length;
+const following = changelog.slice(notesStart);
+const nextSection = /^## \[/m.exec(following);
+const notes = following.slice(0, nextSection?.index ?? following.length).trim();
+if (!/^[-*] /m.test(notes)) throw new Error("Add release notes under Unreleased in CHANGELOG.md before merging.");
+if (new RegExp(`^## \\[${version.replaceAll(".", "\\.")}\\]`, "m").test(changelog)) {
+  throw new Error(`CHANGELOG.md already has notes for ${version}.`);
+}
+
 if (version !== packageJson.version) {
   packageJson.version = version;
   writeFileSync("package.json", `${JSON.stringify(packageJson, null, 2)}\n`);
@@ -52,6 +64,10 @@ if (version !== packageJson.version) {
   tauriConfig.version = version;
   writeFileSync("src-tauri/tauri.conf.json", `${JSON.stringify(tauriConfig, null, 2)}\n`);
 }
+
+const history = nextSection ? following.slice(nextSection.index) : "";
+const date = new Date().toISOString().slice(0, 10);
+writeFileSync("CHANGELOG.md", `${changelog.slice(0, unreleased.index)}## [Unreleased]\n\n## [${version}] - ${date}\n\n${notes}\n\n${history}`);
 
 console.log(`version=${version}`);
 console.log(`tag=v${version}`);

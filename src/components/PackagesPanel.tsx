@@ -21,6 +21,12 @@ const loaders: Record<PackageKind, { id: string; label: string }[]> = {
 
 function errorText(error: unknown) { return error instanceof Error ? error.message : String(error); }
 
+function formatSize(size: number) {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function minecraftVersion(text: string) {
   return text.match(/(?:Starting minecraft server version|Loading Minecraft)\s+([0-9][a-zA-Z0-9._-]*)/i)?.[1] ?? null;
 }
@@ -218,7 +224,7 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software, i
 
   function installedRow(entry: ServerFileEntry) {
     const record = installedPackages.find((item) => item.kind === kind && item.filename === entry.name);
-    return <li key={entry.path}><Package size={16} aria-hidden="true" /><span className="packages-installed-copy" title={entry.name}><strong>{record?.title ?? entry.name}</strong>{record && <small>{entry.name}</small>}{record?.requiredBy.length ? <em className="packages-tag packages-tag-dependency">Dependency for {record.requiredBy.join(", ")}</em> : null}</span><small>{(entry.size / 1024 / 1024).toFixed(1)} MB</small>{kind === "plugin" && record && <span className="packages-installed-actions"><button type="button" className="button button-quiet" disabled={busy || !gameVersion || record.requiredBy.length > 0} onClick={() => void chooseProject({ id: record.projectId, title: record.title, description: "", author: "", iconUrl: null, downloads: 0 })}>Update</button><button type="button" className="button button-quiet" disabled={busy || !canInstall || record.requiredBy.length > 0} onClick={() => void removePlugin(record)}>Remove</button></span>}</li>;
+    return <li key={entry.path}><Package size={16} aria-hidden="true" /><span className="packages-installed-copy" title={entry.name}><strong>{record?.title ?? entry.name}</strong>{record && <small>{entry.name}</small>}{record?.requiredBy.length ? <em className="packages-tag packages-tag-dependency">Dependency for {record.requiredBy.join(", ")}</em> : null}</span><small>{formatSize(entry.size)}</small>{kind === "plugin" && record && <span className="packages-installed-actions"><button type="button" className="button button-quiet" disabled={busy || !gameVersion || record.requiredBy.length > 0} onClick={() => void chooseProject({ id: record.projectId, title: record.title, description: "", author: "", iconUrl: null, downloads: 0 })}>Update</button><button type="button" className="button button-quiet" disabled={busy || !canInstall || record.requiredBy.length > 0} onClick={() => void removePlugin(record)}>Remove</button></span>}</li>;
   }
 
   useEffect(() => {
@@ -253,7 +259,7 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software, i
             </Select>
           </>}
           <label htmlFor="package-query">Search Modrinth</label>
-          <div className="packages-query"><input id="package-query" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={kind === "mod" ? "Search mods or browse popular" : "Search plugins or browse popular"} minLength={2} maxLength={100} disabled={busy} /><button className="button button-primary" type="submit" disabled={searching || busy || !gameVersion}><Search size={15} aria-hidden="true" /> {searching ? "Searching…" : query ? "Search" : "Browse"}</button></div>
+          <div className="packages-query"><input id="package-query" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={kind === "mod" ? "Search mods or browse popular" : "Search plugins or browse popular"} maxLength={100} disabled={busy} /><button className="button button-primary" type="submit" disabled={searching || busy || !gameVersion}><Search size={15} aria-hidden="true" /> {searching ? "Searching…" : query ? "Search" : "Browse"}</button></div>
           <div className="packages-sort"><label htmlFor="package-sort">Sort results</label><Select value={sort} onValueChange={(value) => setSort(value ?? "relevance")} disabled={busy}><SelectTrigger id="package-sort"><SelectValue>{(value) => ({ relevance: "Relevance", downloads: "Most downloaded", updated: "Recently updated" })[value as "relevance" | "downloads" | "updated"] ?? "Relevance"}</SelectValue></SelectTrigger><SelectContent><SelectItem value="relevance">Relevance</SelectItem><SelectItem value="downloads">Most downloaded</SelectItem><SelectItem value="updated">Recently updated</SelectItem></SelectContent></Select></div>
         </form>
         {error && <p className="files-error" role="alert">{error}</p>}

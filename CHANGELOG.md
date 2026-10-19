@@ -1,0 +1,40 @@
+# Changelog
+
+Add release notes under **Unreleased** before merging a pull request into `main`. The release workflow moves them into the new version and publishes them with the GitHub release.
+
+## [Unreleased]
+
+### Added
+
+- The new Server tab shows the server's status, address and port, software and version, player count, and server-process CPU and RAM use.
+- GitHub releases now include these changelog notes.
+
+### Changed
+
+- Renaming a server also renames its folder, both locally and over SSH.
+
+### Fixed
+
+- Installed mods and plugins smaller than 1 MB now show their size in KB.
+- Mod and plugin searches now accept a single character.
+- If a remote server exits during startup, its final console output stays visible so the error can be read.
+- A disappearing remote console during startup or shutdown no longer appears as an SSH connection failure.
+
+## [0.3.1] - 2026-10-19
+
+### Added
+
+- Update or remove Modrinth-managed plugins from the app.
+
+### Fixed
+
+- Find compatible plugins even when Modrinth does not specify their server environment.
+- Keep SSH connections active during remote software installation.
+
+### Changed
+
+- Build desktop releases when a pull request is merged into `main`.
+
+## [0.3.0] - 2026-10-19
+
+- Initial desktop release.

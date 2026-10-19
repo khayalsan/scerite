@@ -273,6 +273,25 @@ impl ServerProfileStore {
         name: String,
         target: ServerTarget,
     ) -> Result<ServerProfile, String> {
+        self.update_internal(id, name, target, false)
+    }
+
+    pub fn update_after_directory_move(
+        &self,
+        id: Uuid,
+        name: String,
+        target: ServerTarget,
+    ) -> Result<ServerProfile, String> {
+        self.update_internal(id, name, target, true)
+    }
+
+    fn update_internal(
+        &self,
+        id: Uuid,
+        name: String,
+        target: ServerTarget,
+        preserve_installation: bool,
+    ) -> Result<ServerProfile, String> {
         validate_name(&name)?;
         target.validate()?;
 
@@ -300,7 +319,7 @@ impl ServerProfileStore {
             (ServerTarget::Remote { environment_id: old_environment, directory: old, .. }, ServerTarget::Remote { environment_id: new_environment, directory: new, .. }) => old_environment == new_environment && old == new,
             _ => false,
         };
-        if !same_directory {
+        if !same_directory && !preserve_installation {
             profile.installed_software = None;
             profile.installed_version = None;
             profile.installed_packages.clear();
