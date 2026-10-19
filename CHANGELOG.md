@@ -8,6 +8,7 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 - A Logs tab shows the latest server output and any older log files, including compressed archives.
 - A Players tab lists known players, shows saved player details and statistics, and opens separate Whitelist, Operators, Banned names, and Banned IPs lists for adding or removing entries.
+- Installed Modrinth mods can be updated or removed. Removal shows which mods depend on a selected mod and offers to remove dependencies no longer used by another mod.
 
 ### Changed
 

@@ -26,6 +26,8 @@ pub struct InstalledPackage {
     #[serde(default)]
     pub required_by: Vec<String>,
     #[serde(default)]
+    pub requires: Option<Vec<String>>,
+    #[serde(default)]
     pub direct: bool,
 }
 

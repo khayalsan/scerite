@@ -530,11 +530,11 @@ async fn resolve_install_plan(
         let suggested_filename = safe_filename(file["filename"].as_str().unwrap_or_default(), id, selected_id);
         let installed = profile.installed_packages.iter().find(|item| item.kind == kind && item.project_id == id && existing_names.contains(&item.filename));
         let updating = installed.filter(|item| item.version_id != selected_id);
-        if updating.is_some() && (kind != "plugin" || request.parent_id.is_some()) {
+        if updating.is_some() && request.parent_id.is_some() {
             return Err(format!("{title} is already installed at another version. Remove its JAR before installing this release."));
         }
         if updating.is_some_and(|item| !item.required_by.is_empty()) {
-            return Err("A plugin required by another package cannot be updated here.".into());
+            return Err("A package required by another installed package cannot be updated here.".into());
         }
         let filename = if let Some(item) = updating {
             if suggested_filename == item.filename { format!("{id}-{selected_id}.jar") } else { suggested_filename }
@@ -710,12 +710,11 @@ pub async fn install_modrinth_plan(
     if actual_versions != expected_versions {
         return Err("The required package list changed. Review the install plan again before confirming.".into());
     }
-    let previous_plugin = if kind == "plugin" {
-        profile.installed_packages.iter().find(|item| item.kind == "plugin" && item.project_id == project_id && item.version_id != version_id && names.contains(&item.filename)).cloned()
-    } else { None };
+    let previous_package = profile.installed_packages.iter().find(|item| item.kind == kind && item.project_id == project_id && item.version_id != version_id && names.contains(&item.filename)).cloned();
     let current_title = plan.iter().find(|item| item.entry.project_id == project_id)
         .map(|item| item.entry.title.clone()).unwrap_or_default();
-    let required_ids: Vec<_> = plan.iter().filter(|item| !item.entry.direct).map(|item| item.entry.project_id.clone()).collect();
+    let required_ids = plan.iter().find(|item| item.entry.project_id == project_id)
+        .map(|item| item.requires.clone()).unwrap_or_default();
     let mut installed = 0;
     for package in plan {
         if !package.entry.already_installed {
@@ -724,10 +723,10 @@ pub async fn install_modrinth_plan(
                 .map_err(|error| format!("Could not finish installing packages after {installed} JAR(s): {error}. Refresh the installed list before retrying."))?;
             installed += 1;
         }
-        if kind == "plugin" && package.entry.project_id == project_id {
-            if let Some(previous) = profile.installed_packages.iter().find(|item| item.kind == "plugin" && item.project_id == project_id && item.version_id != package.entry.version_id) {
-                remove_tracked_plugin(profile_id, &project_id, &previous.version_id, false, &profiles, &local_sessions, &remote_sessions)
-                    .await.map_err(|error| format!("The new plugin JAR was installed, but the previous version remains: {error}"))?;
+        if package.entry.project_id == project_id {
+            if let Some(previous) = &previous_package {
+                remove_tracked_package(profile_id, &kind, &project_id, &previous.version_id, false, &profiles, &local_sessions, &remote_sessions)
+                    .await.map_err(|error| format!("The new {kind} JAR was installed, but the previous version remains: {error}"))?;
             }
         }
         profiles.record_installed_package(profile_id, InstalledPackage {
@@ -737,18 +736,96 @@ pub async fn install_modrinth_plan(
             title: package.entry.title,
             filename: package.entry.filename,
             required_by: package.entry.required_by,
+            requires: Some(package.requires),
             direct: package.entry.direct,
         })?;
     }
-    if let Some(previous) = previous_plugin {
-        profiles.reconcile_plugin_dependencies(profile_id, &previous.title, &current_title, &required_ids)?;
+    if let Some(previous) = previous_package {
+        profiles.reconcile_package_dependencies(profile_id, &kind, &previous.title, &current_title, &required_ids)?;
     }
     if installed == 0 { Ok("All selected packages are already installed. Dependency labels are up to date.".into()) }
     else { Ok(format!("Installed {installed} JAR(s), including required dependencies.")) }
 }
 
-async fn remove_tracked_plugin(
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemovalCandidate {
+    project_id: String,
+    title: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemovalPreview {
+    dependents: Vec<RemovalCandidate>,
+    cleanup: Vec<RemovalCandidate>,
+}
+
+fn package_requires(parent: &InstalledPackage, dependency: &InstalledPackage) -> bool {
+    if parent.kind != dependency.kind || parent.project_id == dependency.project_id { return false; }
+    match &parent.requires {
+        Some(ids) => ids.contains(&dependency.project_id),
+        None => dependency.required_by.contains(&parent.title),
+    }
+}
+
+fn removal_preview(profile: &ServerProfile, kind: &str, project_id: &str) -> Result<RemovalPreview, String> {
+    let packages: Vec<_> = profile.installed_packages.iter().filter(|item| item.kind == kind).collect();
+    let target = packages.iter().find(|item| item.project_id == project_id)
+        .ok_or("The installed package changed. Refresh the list before removing it.")?;
+    let mut pending = VecDeque::from([target.project_id.clone()]);
+    let mut dependent_ids = HashSet::new();
+    while let Some(id) = pending.pop_front() {
+        let dependency = packages.iter().find(|item| item.project_id == id)
+            .ok_or("An installed dependency record is missing.")?;
+        for parent in &packages {
+            if package_requires(parent, dependency) && dependent_ids.insert(parent.project_id.clone()) {
+                pending.push_back(parent.project_id.clone());
+            }
+        }
+    }
+    let mut dependents: Vec<_> = packages.iter().filter(|item| dependent_ids.contains(&item.project_id))
+        .map(|item| RemovalCandidate { project_id: item.project_id.clone(), title: item.title.clone() }).collect();
+    for title in &target.required_by {
+        if !dependents.iter().any(|item| item.title == *title) {
+            dependents.push(RemovalCandidate { project_id: String::new(), title: title.clone() });
+        }
+    }
+    dependents.sort_by(|left, right| left.title.cmp(&right.title).then(left.project_id.cmp(&right.project_id)));
+    if !dependents.is_empty() { return Ok(RemovalPreview { dependents, cleanup: Vec::new() }); }
+
+    let mut removing = HashSet::from([project_id.to_owned()]);
+    let mut cleanup = Vec::new();
+    loop {
+        let mut changed = false;
+        for dependency in &packages {
+            if dependency.direct || removing.contains(&dependency.project_id) { continue; }
+            let parents: Vec<_> = packages.iter().filter(|parent| package_requires(parent, dependency)).collect();
+            if parents.is_empty() || !parents.iter().all(|parent| removing.contains(&parent.project_id)) { continue; }
+            if dependency.required_by.iter().any(|title| !parents.iter().any(|parent| parent.title == *title)) { continue; }
+            removing.insert(dependency.project_id.clone());
+            cleanup.push(RemovalCandidate { project_id: dependency.project_id.clone(), title: dependency.title.clone() });
+            changed = true;
+        }
+        if !changed { break; }
+    }
+    Ok(RemovalPreview { dependents, cleanup })
+}
+
+#[tauri::command]
+pub fn preview_modrinth_mod_removal(
     profile_id: Uuid,
+    project_id: String,
+    profiles: State<'_, ServerProfileStore>,
+) -> Result<RemovalPreview, String> {
+    let profile = profiles.list()?.into_iter().find(|item| item.id == profile_id)
+        .ok_or("Server profile was not found.")?;
+    removal_preview(&profile, "mod", &project_id)
+}
+
+async fn remove_tracked_package(
+    profile_id: Uuid,
+    kind: &str,
     project_id: &str,
     version_id: &str,
     clear_dependencies: bool,
@@ -759,54 +836,56 @@ async fn remove_tracked_plugin(
     let profile = profiles.list()?.into_iter().find(|item| item.id == profile_id)
         .ok_or("Server profile was not found.")?;
     profile.target.validate()?;
-    let package = profile.installed_packages.iter().find(|item| item.kind == "plugin" && item.project_id == project_id && item.version_id == version_id)
-        .ok_or("The installed plugin changed. Refresh the list before removing it.")?;
-    if !package.required_by.is_empty() {
-        return Err("This plugin is required by another installed plugin. Remove that plugin first.".into());
+    let package = profile.installed_packages.iter().find(|item| item.kind == kind && item.project_id == project_id && item.version_id == version_id)
+        .ok_or("The installed package changed. Refresh the list before removing it.")?;
+    let preview = removal_preview(&profile, kind, project_id)?;
+    if !preview.dependents.is_empty() {
+        let titles = preview.dependents.iter().map(|item| item.title.as_str()).collect::<Vec<_>>().join(", ");
+        return Err(format!("This {kind} is required by: {titles}. Remove those packages first."));
     }
-    if profile.installed_packages.iter().any(|item| item.kind == "plugin" && item.project_id != project_id && item.filename == package.filename) {
+    if profile.installed_packages.iter().any(|item| item.kind == kind && item.project_id != project_id && item.filename == package.filename) {
         return Err("Another package record uses this JAR. It was not removed.".into());
     }
     if !catalog_id(project_id) || !catalog_id(version_id)
         || safe_filename(&package.filename, project_id, version_id) != package.filename {
-        return Err("The saved plugin record has an invalid file name or catalog ID.".into());
+        return Err("The saved package record has an invalid file name or catalog ID.".into());
     }
     if matches!(profile.target, ServerTarget::Local { .. })
         && !matches!(local_sessions.status(profile_id)?.state, LocalServerState::Stopped) {
-        return Err("Stop the server before removing plugins.".into());
+        return Err("Stop the server before removing packages.".into());
     }
     let version = get_json(&client()?, api_url(&format!("version/{version_id}"))?).await?;
     if version["project_id"].as_str() != Some(project_id) {
-        return Err("The saved plugin does not match its Modrinth project.".into());
+        return Err("The saved package does not match its Modrinth project.".into());
     }
     let expected = installable_file(&version)?["hashes"]["sha512"].as_str()
-        .ok_or("Modrinth did not provide the installed plugin checksum.")?;
-    if !existing_package_matches(&profile, "plugins", &package.filename, expected, &profiles, &remote_sessions).await? {
+        .ok_or("Modrinth did not provide the installed package checksum.")?;
+    if !existing_package_matches(&profile, package_folder(kind)?, &package.filename, expected, &profiles, &remote_sessions).await? {
         return Err("The installed JAR differs from its published version. It was not removed.".into());
     }
     match &profile.target {
         ServerTarget::Local { directory, .. } => {
             if !matches!(local_sessions.status(profile_id)?.state, LocalServerState::Stopped) {
-                return Err("Stop the server before removing plugins.".into());
+                return Err("Stop the server before removing packages.".into());
             }
             let root = fs::canonicalize(directory).map_err(|_| "The server folder could not be opened.")?;
-            let folder = root.join("plugins");
-            if fs::canonicalize(&folder).map_err(|error| format!("Could not inspect plugins folder: {error}"))? != folder {
-                return Err("The plugins folder is a symbolic link or leaves the server folder.".into());
+            let folder = root.join(package_folder(kind)?);
+            if fs::canonicalize(&folder).map_err(|error| format!("Could not inspect package folder: {error}"))? != folder {
+                return Err("The package folder is a symbolic link or leaves the server folder.".into());
             }
             let path = folder.join(&package.filename);
-            if fs::symlink_metadata(&path).map_err(|error| format!("Could not inspect plugin: {error}"))?.file_type().is_symlink() {
-                return Err("The installed plugin is a symbolic link.".into());
+            if fs::symlink_metadata(&path).map_err(|error| format!("Could not inspect package: {error}"))?.file_type().is_symlink() {
+                return Err("The installed package is a symbolic link.".into());
             }
-            fs::remove_file(path).map_err(|error| format!("Could not remove plugin: {error}"))?;
+            fs::remove_file(path).map_err(|error| format!("Could not remove package: {error}"))?;
         }
         ServerTarget::Remote { environment_id, .. } => {
             let environment = profiles.environment(*environment_id)?;
-            remote_ssh::remove_remote_plugin(profile.clone(), environment, Arc::clone(remote_sessions), package.filename.clone()).await?;
+            remote_ssh::remove_remote_package(profile.clone(), environment, Arc::clone(remote_sessions), kind.to_owned(), package.filename.clone()).await?;
         }
     }
-    profiles.remove_installed_package(profile_id, project_id, clear_dependencies)
-        .map_err(|error| format!("The plugin JAR was removed, but its saved record could not be updated: {error}"))
+    profiles.remove_installed_package(profile_id, kind, project_id, version_id, &package.filename, clear_dependencies)
+        .map_err(|error| format!("The package JAR was removed, but its saved record could not be updated: {error}"))
 }
 
 #[tauri::command]
@@ -818,5 +897,35 @@ pub async fn remove_modrinth_plugin(
     local_sessions: State<'_, LocalSessionManager>,
     remote_sessions: State<'_, Arc<RemoteSessionManager>>,
 ) -> Result<(), String> {
-    remove_tracked_plugin(profile_id, &project_id, &version_id, true, &profiles, &local_sessions, &remote_sessions).await
+    remove_tracked_package(profile_id, "plugin", &project_id, &version_id, true, &profiles, &local_sessions, &remote_sessions).await
+}
+
+#[tauri::command]
+pub async fn remove_modrinth_mod(
+    profile_id: Uuid,
+    project_id: String,
+    version_id: String,
+    cleanup_project_ids: Vec<String>,
+    profiles: State<'_, ServerProfileStore>,
+    local_sessions: State<'_, LocalSessionManager>,
+    remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<String, String> {
+    let profile = profiles.list()?.into_iter().find(|item| item.id == profile_id)
+        .ok_or("Server profile was not found.")?;
+    let preview = removal_preview(&profile, "mod", &project_id)?;
+    if !preview.dependents.is_empty() {
+        return Err(format!("Other mods still depend on this mod: {}.", preview.dependents.iter().map(|item| item.title.as_str()).collect::<Vec<_>>().join(", ")));
+    }
+    if !cleanup_project_ids.is_empty() && cleanup_project_ids != preview.cleanup.iter().map(|item| item.project_id.clone()).collect::<Vec<_>>() {
+        return Err("The unused dependency list changed. Review removal again before confirming.".into());
+    }
+    remove_tracked_package(profile_id, "mod", &project_id, &version_id, true, &profiles, &local_sessions, &remote_sessions).await?;
+    for candidate in preview.cleanup.iter().filter(|item| cleanup_project_ids.contains(&item.project_id)) {
+        let version = profile.installed_packages.iter().find(|item| item.kind == "mod" && item.project_id == candidate.project_id)
+            .ok_or("An unused dependency record changed.")?;
+        remove_tracked_package(profile_id, "mod", &candidate.project_id, &version.version_id, true, &profiles, &local_sessions, &remote_sessions)
+            .await.map_err(|error| format!("Removed the mod, but could not remove unused dependency {}: {error}. Refresh the installed list.", candidate.title))?;
+    }
+    Ok(if cleanup_project_ids.is_empty() { "Removed the mod. Its dependencies were kept.".into() }
+        else { format!("Removed the mod and {} unused dependencies.", cleanup_project_ids.len()) })
 }

@@ -32,6 +32,7 @@ export interface InstalledPackage {
   title: string;
   filename: string;
   requiredBy: string[];
+  requires?: string[] | null;
   direct: boolean;
 }
 

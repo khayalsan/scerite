@@ -48,6 +48,8 @@ pub fn run() {
             modrinth::preview_modrinth_install,
             modrinth::install_modrinth_plan,
             modrinth::remove_modrinth_plugin,
+            modrinth::preview_modrinth_mod_removal,
+            modrinth::remove_modrinth_mod,
             vanilla_install::use_managed_java,
             commands::get_local_install_root,
             commands::get_auto_accept_eula,
