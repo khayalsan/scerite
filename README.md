@@ -1,4 +1,5 @@
 # Scerite <sub><img src="src-tauri/icons/logo.png" width="30" /></sub>
+Manage local and remote Minecraft servers from one desktop application. Install Minecraft versions, loaders, mods and plugins, configure servers, and access their consoles without requiring a separate management panel on your remote machine.
 
 Scerite is a cross-platform desktop app for managing local and remote Minecraft servers. The desktop app is built with Tauri 2, React, TypeScript, and Rust.
 
