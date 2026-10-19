@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { RotateCcw, Save } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { serverFiles } from "../lib/serverFiles";
+import { SearchField } from "./SearchField";
 
 type PropertyEntry = {
   key: string;
@@ -137,6 +138,7 @@ type ServerPropertiesPanelProps = {
 
 export function ServerPropertiesPanel({ profileId, remote, canEdit }: ServerPropertiesPanelProps) {
   const [document, setDocument] = useState<PropertyDocument | null>(null);
+  const [search, setSearch] = useState("");
   const [values, setValues] = useState<Record<string, string>>({});
   const [originalValues, setOriginalValues] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
@@ -205,7 +207,12 @@ export function ServerPropertiesPanel({ profileId, remote, canEdit }: ServerProp
     }
   }
 
-  const groups = document?.entries.reduce<Record<string, PropertyEntry[]>>((result, entry) => {
+  const normalizedSearch = search.trim().toLowerCase();
+  const groups = document?.entries.filter((entry) => {
+    const info = propertyInfo[entry.key];
+    return !normalizedSearch || [entry.key, info?.label ?? displayName(entry.key), info?.description ?? "", info?.group ?? "Other settings"]
+      .some((text) => text.toLowerCase().includes(normalizedSearch));
+  }).reduce<Record<string, PropertyEntry[]>>((result, entry) => {
     const group = propertyInfo[entry.key]?.group ?? "Other settings";
     (result[group] ??= []).push(entry);
     return result;
@@ -241,6 +248,7 @@ export function ServerPropertiesPanel({ profileId, remote, canEdit }: ServerProp
           <button className="button button-quiet" type="button" onClick={retryError} disabled={isLoading || isSaving}>{errorAction === "save" ? "Retry save" : "Retry"}</button>
         </div>
       )}
+      <SearchField id="properties-search" label="Search properties" placeholder="Property name or description" value={search} onChange={setSearch} />
       {isLoading ? (
         <p className="properties-state" role="status">Loading server properties…</p>
       ) : groups && Object.keys(groups).length > 0 ? (
@@ -312,8 +320,8 @@ export function ServerPropertiesPanel({ profileId, remote, canEdit }: ServerProp
         </div>
       ) : !error ? (
         <div className="properties-state">
-          <strong>No properties found</strong>
-          <span>Start the server once to generate its <code>server.properties</code> file.</span>
+          <strong>{document?.entries.length && normalizedSearch ? "No matching properties" : "No properties found"}</strong>
+          <span>{document?.entries.length && normalizedSearch ? "Try another search term." : <>Start the server once to generate its <code>server.properties</code> file.</>}</span>
         </div>
       ) : null}
     </div>

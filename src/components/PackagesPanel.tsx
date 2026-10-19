@@ -9,6 +9,7 @@ import type { PackageKind } from "../lib/serverSoftware";
 import { serverProfiles } from "../lib/serverProfiles";
 import type { InstalledPackage } from "../lib/serverProfiles";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
+import { SearchField } from "./SearchField";
 
 type Project = { id: string; title: string; description: string; author: string; iconUrl: string | null; downloads: number };
 type Version = { id: string; name: string; versionNumber: string; requiredDependencies: number };
@@ -77,6 +78,7 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software, i
   const [versions, setVersions] = useState<Version[]>([]);
   const [selectedVersionId, setSelectedVersionId] = useState("");
   const [installed, setInstalled] = useState<ServerFileEntry[]>([]);
+  const [installedSearch, setInstalledSearch] = useState("");
   const [installedPackages, setInstalledPackages] = useState<InstalledPackage[]>([]);
   const [plan, setPlan] = useState<PlanEntry[]>([]);
   const [loadingPlan, setLoadingPlan] = useState(false);
@@ -219,8 +221,14 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software, i
   const selectedVersion = versions.find((version) => version.id === selectedVersionId);
   const selectedInstalled = installedPackages.find((item) => item.kind === kind && item.projectId === selectedProject?.id && installed.some((file) => file.name === item.filename));
   const updating = kind === "plugin" && selectedInstalled && selectedInstalled.versionId !== selectedVersionId;
-  const dependencyFiles = installed.filter((entry) => installedPackages.some((item) => item.kind === kind && item.filename === entry.name && !item.direct && item.requiredBy.length > 0));
-  const primaryFiles = installed.filter((entry) => !dependencyFiles.includes(entry));
+  const normalizedInstalledSearch = installedSearch.trim().toLowerCase();
+  const visibleInstalled = installed.filter((entry) => {
+    const record = installedPackages.find((item) => item.kind === kind && item.filename === entry.name);
+    return !normalizedInstalledSearch || [entry.name, record?.title ?? "", ...(record?.requiredBy ?? [])]
+      .some((value) => value.toLowerCase().includes(normalizedInstalledSearch));
+  });
+  const dependencyFiles = visibleInstalled.filter((entry) => installedPackages.some((item) => item.kind === kind && item.filename === entry.name && !item.direct && item.requiredBy.length > 0));
+  const primaryFiles = visibleInstalled.filter((entry) => !dependencyFiles.includes(entry));
 
   function installedRow(entry: ServerFileEntry) {
     const record = installedPackages.find((item) => item.kind === kind && item.filename === entry.name);
@@ -298,8 +306,10 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software, i
       </div>
       <aside className="packages-installed" aria-label={`Installed ${folder}`}>
         <div className="packages-installed-heading"><div><h3>Installed {folder}</h3><p>JAR files in this server’s {folder}/ folder</p></div><button type="button" className="button button-quiet" onClick={() => void refreshInstalled()} disabled={loadingInstalled}><RefreshCw size={14} aria-hidden="true" /> Refresh</button></div>
+        <SearchField id={`installed-${folder}-search`} label={`Search installed ${folder}`} placeholder="Name or JAR file" value={installedSearch} onChange={setInstalledSearch} />
         {installedError && <p className="files-error" role="alert">{installedError}</p>}
         {loadingInstalled ? <p className="state-message">Loading {folder}…</p> : installed.length === 0 ? <p className="state-message">No {folder} installed yet.</p> : <>
+          {visibleInstalled.length === 0 && <p className="state-message">No matching installed {folder}.</p>}
           {primaryFiles.length > 0 && <ul className="packages-installed-list">{primaryFiles.map(installedRow)}</ul>}
           {dependencyFiles.length > 0 && <section className="packages-installed-dependencies" aria-label={`Installed ${kind} dependencies`}><h4>Dependencies</h4><ul className="packages-installed-list">{dependencyFiles.map(installedRow)}</ul></section>}
         </>}

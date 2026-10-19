@@ -387,6 +387,13 @@
   opacity: 0.58;
 }
 
+.section-search { display: grid; gap: 5px; min-width: 0; }
+.section-search label { color: var(--app-muted); font-size: 12px; font-weight: 600; }
+.section-search > div { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 10px; border: 1px solid var(--app-line); border-radius: 8px; color: var(--app-muted); background: var(--app-ground); }
+.section-search > div:focus-within { border-color: var(--app-accent); outline: 3px solid color-mix(in srgb, var(--app-accent) 25%, transparent); }
+.section-search input { flex: 1; min-width: 0; border: 0; outline: 0; color: var(--app-ink); background: transparent; font: inherit; font-size: 13px; }
+.section-search input::placeholder { color: var(--app-muted); }
+
 .button-primary {
   color: var(--primary-foreground);
   background: var(--app-accent);
@@ -921,6 +928,7 @@
 .player-access-list span { display: grid; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
 .player-access-list small { color: var(--app-muted); font-size: 12px; }
 .player-roster { min-height: 0; }
+.player-roster .section-search { margin-bottom: 10px; }
 .player-roster-heading { align-items: center; margin-bottom: 8px; }
 .player-roster-heading h3, .player-detail h4 { margin: 0; font-size: 15px; }
 .player-list { display: grid; gap: 6px; }
@@ -1056,6 +1064,7 @@
 .packages-tag-installed { color: var(--app-ink); }
 .packages-installed { padding-top: 16px; border-top: 1px solid var(--app-line); }
 .packages-installed-heading { display: flex; align-items: start; justify-content: space-between; gap: 8px; }
+.packages-installed .section-search { margin: 12px 0; }
 .packages-installed-list { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
 .packages-installed-list li { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 9px 0; border-bottom: 1px solid var(--app-line); font-size: 12px; }
 .packages-installed-copy { display: grid; flex: 1; min-width: 0; gap: 3px; overflow-wrap: anywhere; }
@@ -1576,6 +1585,13 @@
   padding: 0 8px;
 }
 
+.console-search { display: flex; align-items: end; gap: 12px; padding: 9px 11px; border-bottom: 1px solid var(--terminal-border); }
+.console-search .section-search { flex: 1; }
+.console-search .section-search label, .console-search small { color: var(--terminal-foreground); }
+.console-search .section-search > div { border-color: var(--terminal-border); color: var(--terminal-foreground); background: var(--terminal-background); }
+.console-search .section-search input { color: var(--terminal-foreground); }
+.console-search small { padding-bottom: 9px; white-space: nowrap; font-size: 12px; }
+
 .console-output {
   height: 220px;
   overflow: auto;
@@ -1699,6 +1715,8 @@
   padding: 0 8px;
   font-size: 11px;
 }
+
+.files-list .section-search { margin: 9px 0; }
 
 .file-entry {
   display: flex;

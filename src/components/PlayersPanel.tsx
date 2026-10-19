@@ -3,6 +3,7 @@ import { ArrowLeft, RefreshCw, UserRound } from "lucide-react";
 import { serverSessions } from "../lib/serverSessions";
 import { loadPlayers, playerData, validIpAddress, validPlayerName } from "../lib/serverPlayers";
 import type { AccessLists, PlayerData, PlayerRecord, PlayerStatistic } from "../lib/serverPlayers";
+import { SearchField } from "./SearchField";
 
 interface PlayersPanelProps { profileId: string; remote: boolean; running: boolean }
 type ManagementView = keyof AccessLists;
@@ -35,6 +36,7 @@ export function PlayersPanel({ profileId, remote, running }: PlayersPanelProps) 
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [detail, setDetail] = useState<PlayerData | null>(null);
   const [entryInput, setEntryInput] = useState("");
+  const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -85,6 +87,7 @@ export function PlayersPanel({ profileId, remote, running }: PlayersPanelProps) 
     setView(next);
     setSelectedKey(null);
     setEntryInput("");
+    setSearch("");
     setMessage(null);
   }
 
@@ -103,6 +106,9 @@ export function PlayersPanel({ profileId, remote, running }: PlayersPanelProps) 
   const summary = detail?.statistics ?? [];
   const management = view === "players" ? null : listSettings[view];
   const entries = view === "players" ? [] : lists[view];
+  const normalizedSearch = search.trim().toLowerCase();
+  const visiblePlayers = players.filter((player) => !normalizedSearch || [player.name ?? "", player.uuid ?? ""].some((value) => value.toLowerCase().includes(normalizedSearch)));
+  const visibleEntries = entries.filter((entry) => !normalizedSearch || [entry.value, entry.reason ?? ""].some((value) => value.toLowerCase().includes(normalizedSearch)));
 
   return <div className="players-panel">
     <header className="players-header">
@@ -112,7 +118,7 @@ export function PlayersPanel({ profileId, remote, running }: PlayersPanelProps) 
     {warning && <p className="notice notice-error" role="status">{warning}</p>}
     {message && <p className="notice" role="status">{message}</p>}
     {management ? <>
-      <button className="button button-quiet players-back" type="button" onClick={() => { setView("players"); setMessage(null); }}><ArrowLeft size={16} /> All players</button>
+      <button className="button button-quiet players-back" type="button" onClick={() => { setView("players"); setSearch(""); setMessage(null); }}><ArrowLeft size={16} /> All players</button>
       <section className="player-management" aria-label={management.title}>
         <div className="player-roster-heading"><h3>{management.title}</h3><span>{entries.length} entries</span></div>
         <form className="player-management-add" onSubmit={(event) => { event.preventDefault(); changeEntry("add", entryInput); }}>
@@ -121,11 +127,12 @@ export function PlayersPanel({ profileId, remote, running }: PlayersPanelProps) 
             <button className="button button-primary" type="submit" disabled={actionDisabled || !entryInput.trim()}>Add</button></div>
         </form>
         {!running && <p className="players-caption">Start the server to add or remove entries.</p>}
-        {loading ? <p className="state-message">Loading {management.title.toLowerCase()}…</p> : entries.length ?
-          <div className="player-access-list">{entries.map((entry, index) => <div key={`${entry.value}-${index}`}>
+        <SearchField id={`players-${view}-search`} label={`Search ${management.title.toLowerCase()}`} placeholder={management.byIp ? "IP address or reason" : "Player name or reason"} value={search} onChange={setSearch} />
+        {loading ? <p className="state-message">Loading {management.title.toLowerCase()}…</p> : visibleEntries.length ?
+          <div className="player-access-list">{visibleEntries.map((entry, index) => <div key={`${entry.value}-${index}`}>
             <span><strong>{entry.value}</strong>{entry.reason && <small>{entry.reason}</small>}</span>
             <button className="button button-quiet" type="button" disabled={actionDisabled || !(management.byIp ? validIpAddress(entry.value) : validPlayerName(entry.value))} onClick={() => changeEntry("remove", entry.value)}>Remove</button>
-          </div>)}</div> : <p className="state-message">No entries in {management.title.toLowerCase()}.</p>}
+          </div>)}</div> : <p className="state-message">{entries.length ? "No matching entries." : `No entries in ${management.title.toLowerCase()}.`}</p>}
       </section>
     </> : selected ? <>
       <button className="button button-quiet players-back" type="button" onClick={() => { setSelectedKey(null); setDetail(null); }}><ArrowLeft size={16} /> All players</button>
@@ -166,11 +173,12 @@ export function PlayersPanel({ profileId, remote, running }: PlayersPanelProps) 
       </section>
       <section className="player-roster" aria-label="Player list">
         <div className="player-roster-heading"><h3>Known players</h3><span>{players.filter((player) => player.online).length} online estimated · {players.length} total</span></div>
-        {loading ? <p className="state-message">Loading players…</p> : players.length ? <div className="player-list">{players.map((player) => <button type="button" key={player.key} onClick={() => { setSelectedKey(player.key); setMessage(null); }}>
+        <SearchField id="players-roster-search" label="Search players" placeholder="Name or UUID" value={search} onChange={setSearch} />
+        {loading ? <p className="state-message">Loading players…</p> : visiblePlayers.length ? <div className="player-list">{visiblePlayers.map((player) => <button type="button" key={player.key} onClick={() => { setSelectedKey(player.key); setMessage(null); }}>
           <span className={`player-presence${player.online ? " player-presence-online" : ""}`} aria-hidden="true" />
           <span><strong>{player.name ?? "Unknown player"}</strong><small>{player.uuid ?? "Name from server log"}</small></span>
           <em>{player.online ? "Online" : "Offline"}</em>
-        </button>)}</div> : <p className="state-message">No known players yet. Players appear after joining or being added to a server list.</p>}
+        </button>)}</div> : <p className="state-message">{players.length ? "No matching players." : "No known players yet. Players appear after joining or being added to a server list."}</p>}
       </section>
     </>}
   </div>;

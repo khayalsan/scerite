@@ -15,6 +15,7 @@ import { ServerInstallPanel } from "./components/ServerInstallPanel";
 import { PackagesPanel } from "./components/PackagesPanel";
 import { ServerOverviewPanel } from "./components/ServerOverviewPanel";
 import { LogsPanel } from "./components/LogsPanel";
+import { SearchField } from "./components/SearchField";
 import { PlayersPanel } from "./components/PlayersPanel";
 import { serverFiles } from "./lib/serverFiles";
 import { packageSupportForSoftware, packageSupportFromFiles } from "./lib/serverSoftware";
@@ -208,6 +209,7 @@ function App() {
   const [propertiesProfileId, setPropertiesProfileId] = useState<string | null>(null);
   const [installProfileId, setInstallProfileId] = useState<string | null>(null);
   const [consoleOutput, setConsoleOutput] = useState("");
+  const [consoleSearch, setConsoleSearch] = useState("");
   const [consoleInput, setConsoleInput] = useState("");
   const consoleCursor = useRef(0);
   const consoleOutputRef = useRef<HTMLDivElement>(null);
@@ -596,8 +598,14 @@ function App() {
   }, [consoleProfileId, profiles, consoleRemoteState]);
 
   useEffect(() => {
-    if (consoleOutputRef.current) consoleOutputRef.current.scrollTop = consoleOutputRef.current.scrollHeight;
-  }, [consoleOutput]);
+    if (consoleOutputRef.current && !consoleSearch.trim()) consoleOutputRef.current.scrollTop = consoleOutputRef.current.scrollHeight;
+  }, [consoleOutput, consoleSearch]);
+
+  useEffect(() => {
+    if (consoleOutputRef.current && consoleSearch.trim()) consoleOutputRef.current.scrollTop = 0;
+  }, [consoleSearch]);
+
+  useEffect(() => { setConsoleSearch(""); }, [consoleProfileId]);
 
   async function sendConsoleInput(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1022,6 +1030,9 @@ function App() {
     );
   }
 
+  const normalizedConsoleSearch = consoleSearch.trim().toLowerCase();
+  const matchingConsoleLines = normalizedConsoleSearch ? consoleOutput.split(/\r?\n/).filter((line) => line.toLowerCase().includes(normalizedConsoleSearch)) : [];
+
   return (
     <main className={`app-shell${selectedProfile ? " server-detail-shell" : ""}`}>
       {selectedProfile ? (() => {
@@ -1404,8 +1415,9 @@ function App() {
                                 <strong>Live console</strong>
                                 <button className="button button-quiet" type="button" onClick={() => toggleConsole(profile)}>Disconnect</button>
                               </div>
+                              <div className="console-search"><SearchField id="console-search" label="Search console output" placeholder="Find matching lines" value={consoleSearch} onChange={setConsoleSearch} />{normalizedConsoleSearch && <small>{matchingConsoleLines.length} matching lines</small>}</div>
                               <div className="console-output" ref={consoleOutputRef} role="log" aria-live="polite">
-                                <pre>{consoleOutput || "Console output will appear here."}</pre>
+                                <pre>{normalizedConsoleSearch ? matchingConsoleLines.join("\n") || "No matching console lines." : consoleOutput || "Console output will appear here."}</pre>
                               </div>
                               <form className="console-input-row" onSubmit={(event) => void sendConsoleInput(event)}>
                                 <span aria-hidden="true">&gt;</span>
