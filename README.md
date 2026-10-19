@@ -46,7 +46,7 @@ Plugins installed through Modrinth can be updated to another compatible release 
 ## Desktop updates
 
 Installed desktop builds check the latest published GitHub release on startup. When a newer version is available, Scerite asks before downloading and installing it. Development builds do not check for updates.
-Merging a pull request into `main` runs the release workflow. Add clear, user-facing notes under **Unreleased** in [CHANGELOG.md](CHANGELOG.md) before merging. The workflow moves those notes into the new version, bumps the patch version in the app manifests, builds signed updater artifacts for Windows, Linux, and macOS, and publishes the release with those notes and `latest.json`.
+Merging a pull request into `main` runs the release workflow. The workflow moves **Unreleased** in [CHANGELOG.md](CHANGELOG.md) into the new version, builds signed updater artifacts for Windows, Linux, and macOS, and publishes the release with `latest.json`.
 
 ## License
 
@@ -56,4 +56,4 @@ Copyright (c) 2026 Khayal Alizada
 
 ## Disclaimer
 
-NOT AN OFFICIAL MINECRAFT PRODUCT. NOT APPROVED BY OR ASSOCIATED WITH MOJANG OR MICROSOFT.
+NOT AN OFFICIAL MINECRAFT PRODUCT. NOT APPROVED BY OR ASSOCIATED WITH MOJANG STUDIOS OR MICROSOFT.
