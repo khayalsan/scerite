@@ -2,9 +2,20 @@ import { useEffect, useState } from "react";
 import { ArrowLeft, RefreshCw, UserRound } from "lucide-react";
 import { serverSessions } from "../lib/serverSessions";
 import { loadPlayers, playerData, validIpAddress, validPlayerName } from "../lib/serverPlayers";
-import type { PlayerData, PlayerRecord, PlayerStatistic } from "../lib/serverPlayers";
+import type { AccessLists, PlayerData, PlayerRecord, PlayerStatistic } from "../lib/serverPlayers";
 
 interface PlayersPanelProps { profileId: string; remote: boolean; running: boolean }
+type ManagementView = keyof AccessLists;
+type View = "players" | ManagementView;
+
+const listSettings: Record<ManagementView, { title: string; add: string; remove: string; byIp: boolean }> = {
+  whitelist: { title: "Whitelist", add: "whitelist add", remove: "whitelist remove", byIp: false },
+  operators: { title: "Operators", add: "op", remove: "deop", byIp: false },
+  bannedNames: { title: "Banned names", add: "ban", remove: "pardon", byIp: false },
+  bannedIps: { title: "Banned IPs", add: "ban-ip", remove: "pardon-ip", byIp: true },
+};
+
+const emptyLists: AccessLists = { whitelist: [], operators: [], bannedNames: [], bannedIps: [] };
 
 function errorText(error: unknown) { return error instanceof Error ? error.message : String(error); }
 function label(value: string) { return value.replace(/^minecraft:/, "").replace(/_/g, " "); }
@@ -19,10 +30,11 @@ function formatPlaytime(ticks: number | undefined) {
 
 export function PlayersPanel({ profileId, remote, running }: PlayersPanelProps) {
   const [players, setPlayers] = useState<PlayerRecord[]>([]);
+  const [lists, setLists] = useState<AccessLists>(emptyLists);
+  const [view, setView] = useState<View>("players");
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [detail, setDetail] = useState<PlayerData | null>(null);
-  const [nameInput, setNameInput] = useState("");
-  const [ipInput, setIpInput] = useState("");
+  const [entryInput, setEntryInput] = useState("");
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -34,7 +46,7 @@ export function PlayersPanel({ profileId, remote, running }: PlayersPanelProps) 
     let active = true;
     setLoading(true);
     void loadPlayers(remote, profileId, running).then((result) => {
-      if (active) { setPlayers(result.players); setWarning(result.warning); }
+      if (active) { setPlayers(result.players); setLists(result.lists); setWarning(result.warning); }
     }).catch((reason: unknown) => {
       if (active) setWarning(`Could not read the player list: ${errorText(reason)}`);
     }).finally(() => { if (active) setLoading(false); });
@@ -69,20 +81,28 @@ export function PlayersPanel({ profileId, remote, running }: PlayersPanelProps) 
     finally { setBusy(false); }
   }
 
-  function nameAction(action: "whitelist add" | "whitelist remove" | "op" | "deop" | "ban" | "pardon") {
-    const name = nameInput.trim();
-    if (!validPlayerName(name)) { setMessage("Enter a Minecraft player name (3–16 letters, numbers or underscores)."); return; }
-    void send(`${action} ${name}`, action === "ban");
+  function openList(next: ManagementView) {
+    setView(next);
+    setSelectedKey(null);
+    setEntryInput("");
+    setMessage(null);
   }
 
-  function ipAction(action: "ban-ip" | "pardon-ip") {
-    const ip = ipInput.trim();
-    if (!validIpAddress(ip)) { setMessage("Enter a valid IPv4 or IPv6 address."); return; }
-    void send(`${action} ${ip}`, action === "ban-ip");
+  function changeEntry(action: "add" | "remove", value: string) {
+    if (view === "players") return;
+    const setting = listSettings[view];
+    const entry = value.trim();
+    if (!(setting.byIp ? validIpAddress(entry) : validPlayerName(entry))) {
+      setMessage(setting.byIp ? "Enter a valid IPv4 or IPv6 address." : "Enter a Minecraft player name (3–16 letters, numbers or underscores).");
+      return;
+    }
+    void send(`${setting[action]} ${entry}`, action === "add" && (view === "bannedNames" || view === "bannedIps"));
   }
 
   const actionDisabled = !running || busy;
   const summary = detail?.statistics ?? [];
+  const management = view === "players" ? null : listSettings[view];
+  const entries = view === "players" ? [] : lists[view];
 
   return <div className="players-panel">
     <header className="players-header">
@@ -91,7 +111,23 @@ export function PlayersPanel({ profileId, remote, running }: PlayersPanelProps) 
     </header>
     {warning && <p className="notice notice-error" role="status">{warning}</p>}
     {message && <p className="notice" role="status">{message}</p>}
-    {selected ? <>
+    {management ? <>
+      <button className="button button-quiet players-back" type="button" onClick={() => { setView("players"); setMessage(null); }}><ArrowLeft size={16} /> All players</button>
+      <section className="player-management" aria-label={management.title}>
+        <div className="player-roster-heading"><h3>{management.title}</h3><span>{entries.length} entries</span></div>
+        <form className="player-management-add" onSubmit={(event) => { event.preventDefault(); changeEntry("add", entryInput); }}>
+          <label htmlFor="player-management-entry">{management.byIp ? "IP address" : "Player name"}</label>
+          <div><input id="player-management-entry" value={entryInput} onChange={(event) => setEntryInput(event.currentTarget.value)} placeholder={management.byIp ? "IP address" : "Player name"} maxLength={management.byIp ? 39 : 16} />
+            <button className="button button-primary" type="submit" disabled={actionDisabled || !entryInput.trim()}>Add</button></div>
+        </form>
+        {!running && <p className="players-caption">Start the server to add or remove entries.</p>}
+        {loading ? <p className="state-message">Loading {management.title.toLowerCase()}…</p> : entries.length ?
+          <div className="player-access-list">{entries.map((entry, index) => <div key={`${entry.value}-${index}`}>
+            <span><strong>{entry.value}</strong>{entry.reason && <small>{entry.reason}</small>}</span>
+            <button className="button button-quiet" type="button" disabled={actionDisabled || !(management.byIp ? validIpAddress(entry.value) : validPlayerName(entry.value))} onClick={() => changeEntry("remove", entry.value)}>Remove</button>
+          </div>)}</div> : <p className="state-message">No entries in {management.title.toLowerCase()}.</p>}
+      </section>
+    </> : selected ? <>
       <button className="button button-quiet players-back" type="button" onClick={() => { setSelectedKey(null); setDetail(null); }}><ArrowLeft size={16} /> All players</button>
       <section className="player-detail" aria-label={`${selected.name ?? selected.uuid} details`}>
         <div className="player-identity">
@@ -120,25 +156,17 @@ export function PlayersPanel({ profileId, remote, running }: PlayersPanelProps) 
       </section>
     </> : <>
       <section className="player-actions" aria-label="Player management">
-        <div><label htmlFor="player-action-name">Player name</label><input id="player-action-name" value={nameInput} onChange={(event) => setNameInput(event.currentTarget.value)} placeholder="Player name" maxLength={16} /></div>
-        <div className="player-action-buttons">
-          <button className="button button-secondary" type="button" disabled={actionDisabled} onClick={() => nameAction("whitelist add")}>Whitelist</button>
-          <button className="button button-quiet" type="button" disabled={actionDisabled} onClick={() => nameAction("whitelist remove")}>Remove whitelist</button>
-          <button className="button button-secondary" type="button" disabled={actionDisabled} onClick={() => nameAction("op")}>OP</button>
-          <button className="button button-quiet" type="button" disabled={actionDisabled} onClick={() => nameAction("deop")}>Deop</button>
-          <button className="button button-secondary" type="button" disabled={actionDisabled} onClick={() => nameAction("ban")}>Ban name</button>
-          <button className="button button-quiet" type="button" disabled={actionDisabled} onClick={() => nameAction("pardon")}>Pardon name</button>
+        <h3>Manage access</h3>
+        <div className="player-management-links">
+          <button className="button button-secondary" type="button" onClick={() => openList("whitelist")}>Whitelist <span>{lists.whitelist.length}</span></button>
+          <button className="button button-secondary" type="button" onClick={() => openList("operators")}>OPs <span>{lists.operators.length}</span></button>
+          <button className="button button-secondary" type="button" onClick={() => openList("bannedNames")}>Ban by name <span>{lists.bannedNames.length}</span></button>
+          <button className="button button-secondary" type="button" onClick={() => openList("bannedIps")}>Ban by IP <span>{lists.bannedIps.length}</span></button>
         </div>
-        <div><label htmlFor="player-action-ip">IP address</label><input id="player-action-ip" value={ipInput} onChange={(event) => setIpInput(event.currentTarget.value)} placeholder="IP address" maxLength={39} /></div>
-        <div className="player-action-buttons">
-          <button className="button button-secondary" type="button" disabled={actionDisabled} onClick={() => ipAction("ban-ip")}>Ban IP</button>
-          <button className="button button-quiet" type="button" disabled={actionDisabled} onClick={() => ipAction("pardon-ip")}>Pardon IP</button>
-        </div>
-        {!running && <p className="players-caption">Start the server to use player actions.</p>}
       </section>
       <section className="player-roster" aria-label="Player list">
         <div className="player-roster-heading"><h3>Known players</h3><span>{players.filter((player) => player.online).length} online estimated · {players.length} total</span></div>
-        {loading ? <p className="state-message">Loading players…</p> : players.length ? <div className="player-list">{players.map((player) => <button type="button" key={player.key} onClick={() => { setSelectedKey(player.key); setNameInput(player.name ?? ""); setMessage(null); }}>
+        {loading ? <p className="state-message">Loading players…</p> : players.length ? <div className="player-list">{players.map((player) => <button type="button" key={player.key} onClick={() => { setSelectedKey(player.key); setMessage(null); }}>
           <span className={`player-presence${player.online ? " player-presence-online" : ""}`} aria-hidden="true" />
           <span><strong>{player.name ?? "Unknown player"}</strong><small>{player.uuid ?? "Name from server log"}</small></span>
           <em>{player.online ? "Online" : "Offline"}</em>

@@ -732,7 +732,8 @@ pub async fn read_remote_player_roster(
         uuids.dedup();
         Ok(PlayerRosterFiles {
             cache: read_text("usercache.json")?, whitelist: read_text("whitelist.json")?,
-            ops: read_text("ops.json")?, bans: read_text("banned-players.json")?, uuids,
+            ops: read_text("ops.json")?, bans: read_text("banned-players.json")?,
+            banned_ips: read_text("banned-ips.json")?, uuids,
         })
     }).await
 }

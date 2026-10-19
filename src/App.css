@@ -906,10 +906,20 @@
 .players-header, .player-roster-heading { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
 .players-header h2 { margin: 0 0 4px; font-size: 20px; }
 .players-header p, .players-caption, .player-roster-heading span { margin: 0; color: var(--app-muted); font-size: 13px; }
-.player-actions { display: grid; gap: 10px; padding: 16px; border: 1px solid var(--app-line); border-radius: 9px; background: var(--app-ground); }
-.player-actions label { display: block; margin-bottom: 6px; font-size: 13px; font-weight: 600; }
-.player-actions input { width: min(100%, 400px); min-height: 38px; padding: 8px 10px; color: inherit; background: var(--app-surface); border: 1px solid var(--app-line); border-radius: 8px; font: inherit; }
-.player-action-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+.player-actions { display: grid; gap: 12px; padding: 16px; border: 1px solid var(--app-line); border-radius: 9px; background: var(--app-ground); }
+.player-actions h3 { margin: 0; font-size: 15px; }
+.player-management-links { display: grid; grid-template-columns: repeat(auto-fit, minmax(155px, 1fr)); gap: 8px; }
+.player-management-links button { justify-content: space-between; }
+.player-management-links span { color: var(--app-muted); font-size: 12px; }
+.player-management { display: grid; align-content: start; gap: 14px; }
+.player-management-add { display: grid; gap: 7px; padding: 16px; border: 1px solid var(--app-line); border-radius: 9px; background: var(--app-ground); }
+.player-management-add label { font-size: 13px; font-weight: 600; }
+.player-management-add div { display: flex; flex-wrap: wrap; gap: 8px; }
+.player-management-add input { width: min(100%, 400px); min-height: 38px; padding: 8px 10px; color: inherit; background: var(--app-surface); border: 1px solid var(--app-line); border-radius: 8px; font: inherit; }
+.player-access-list { display: grid; gap: 6px; }
+.player-access-list > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--app-line); border-radius: 8px; background: var(--app-ground); }
+.player-access-list span { display: grid; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.player-access-list small { color: var(--app-muted); font-size: 12px; }
 .player-roster { min-height: 0; }
 .player-roster-heading { align-items: center; margin-bottom: 8px; }
 .player-roster-heading h3, .player-detail h4 { margin: 0; font-size: 15px; }

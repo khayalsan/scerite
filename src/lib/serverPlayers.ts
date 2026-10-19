@@ -23,11 +23,19 @@ export interface PlayerRecord {
   banned: boolean;
 }
 
+export interface AccessEntry { value: string; reason: string | null }
+export interface AccessLists {
+  whitelist: AccessEntry[];
+  operators: AccessEntry[];
+  bannedNames: AccessEntry[];
+  bannedIps: AccessEntry[];
+}
+
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const playerNamePattern = /^[A-Za-z0-9_]{3,16}$/;
 
-type NamedEntry = { uuid?: unknown; name?: unknown };
-type PlayerRosterFiles = { cache: string; whitelist: string; ops: string; bans: string; uuids: string[] };
+type NamedEntry = { uuid?: unknown; name?: unknown; ip?: unknown; reason?: unknown };
+type PlayerRosterFiles = { cache: string; whitelist: string; ops: string; bans: string; bannedIps: string; uuids: string[] };
 
 function namedEntries(value: string): NamedEntry[] {
   try {
@@ -47,10 +55,21 @@ function onlineNames(log: string): Set<string> {
   return names;
 }
 
-export async function loadPlayers(remote: boolean, profileId: string, running: boolean): Promise<{ players: PlayerRecord[]; warning: string | null }> {
-  const { cache, whitelist, ops, bans, uuids } = await invoke<PlayerRosterFiles>(
+export async function loadPlayers(remote: boolean, profileId: string, running: boolean): Promise<{ players: PlayerRecord[]; lists: AccessLists; warning: string | null }> {
+  const { cache, whitelist, ops, bans, bannedIps, uuids } = await invoke<PlayerRosterFiles>(
     remote ? "read_remote_player_roster" : "read_local_player_roster", { profileId },
   );
+  const listNames = (value: string): AccessEntry[] => namedEntries(value).map((entry) => ({
+    value: typeof entry.name === "string" && entry.name ? entry.name : typeof entry.uuid === "string" ? entry.uuid : "",
+    reason: typeof entry.reason === "string" ? entry.reason : null,
+  })).filter((entry) => entry.value !== "");
+  const lists: AccessLists = {
+    whitelist: listNames(whitelist), operators: listNames(ops), bannedNames: listNames(bans),
+    bannedIps: namedEntries(bannedIps).map((entry) => ({
+      value: typeof entry.ip === "string" ? entry.ip : "",
+      reason: typeof entry.reason === "string" ? entry.reason : null,
+    })).filter((entry) => entry.value !== ""),
+  };
   const byKey = new Map<string, PlayerRecord>();
   const ensure = (uuidValue: unknown, nameValue: unknown): PlayerRecord | null => {
     const uuid = typeof uuidValue === "string" && uuidPattern.test(uuidValue) ? uuidValue.toLowerCase() : null;
@@ -83,7 +102,7 @@ export async function loadPlayers(remote: boolean, profileId: string, running: b
       if (log.truncated) warning = "Only the recent part of latest.log was read. Earlier joins may be missed.";
     } catch { warning = "The latest log could not be read, so online status is unavailable."; }
   }
-  return { players: [...byKey.values()].sort((a, b) => Number(b.online) - Number(a.online) || (a.name ?? a.uuid ?? "").localeCompare(b.name ?? b.uuid ?? "")), warning };
+  return { players: [...byKey.values()].sort((a, b) => Number(b.online) - Number(a.online) || (a.name ?? a.uuid ?? "").localeCompare(b.name ?? b.uuid ?? "")), lists, warning };
 }
 
 export const playerData = (remote: boolean, profileId: string, uuid: string) =>

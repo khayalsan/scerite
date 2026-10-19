@@ -39,6 +39,7 @@ pub struct PlayerRosterFiles {
     pub whitelist: String,
     pub ops: String,
     pub bans: String,
+    pub banned_ips: String,
     pub uuids: Vec<String>,
 }
 
@@ -258,6 +259,7 @@ pub fn read_local_player_roster(
         whitelist: read_text("whitelist.json")?,
         ops: read_text("ops.json")?,
         bans: read_text("banned-players.json")?,
+        banned_ips: read_text("banned-ips.json")?,
         uuids,
     })
 }
