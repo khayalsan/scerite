@@ -18,7 +18,7 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 ### Fixed
 
 - The Minecraft version menu now has a solid background, so install controls do not show through it.
-- Remote server status no longer shows Running when tmux returns no pane state, and Stop updates the status when its pane has disappeared.
+- Remote servers that have stopped no longer stay marked Running or show a stop error when their console session disappears.
 
 ## [0.3.2] - 2026-10-19
 
