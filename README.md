@@ -1,4 +1,4 @@
-# Scerite
+# Scerite <sub><img src="src-tauri/icons/logo.png" width="30" /></sub>
 
 Scerite is a cross-platform desktop app for managing local and remote Minecraft servers. The desktop app is built with Tauri 2, React, TypeScript, and Rust.
 
