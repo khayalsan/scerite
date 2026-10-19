@@ -130,7 +130,7 @@ pub async fn search_modrinth(
         return Err("Choose a valid search order.".into());
     }
     let facets = serde_json::json!([
-        [format!("project_type:{kind}")],
+        [format!("all_project_types:{kind}")],
         [format!("categories:{loader}")],
         [format!("versions:{game_version}")],
         [
@@ -155,7 +155,7 @@ pub async fn search_modrinth(
     Ok(hits
         .iter()
         .filter(|hit| {
-            hit["project_type"].as_str() == Some(kind.as_str())
+            hit["all_project_types"].as_array().is_some_and(|items| items.iter().any(|item| item.as_str() == Some(kind.as_str())))
                 && hit["categories"].as_array().is_some_and(|items| items.iter().any(|item| item.as_str() == Some(loader.as_str())))
                 && hit["versions"].as_array().is_some_and(|items| items.iter().any(|item| item.as_str() == Some(game_version.as_str())))
         })
@@ -516,7 +516,11 @@ async fn resolve_install_plan(
         }
         if packages.len() >= 32 { return Err("This install requires more than 32 packages. Install it manually.".into()); }
         let project = get_json(client, api_url(&format!("project/{id}"))?).await?;
-        if project["id"].as_str() != Some(id) || project["project_type"].as_str() != Some(kind) {
+        // Modrinth's project detail reports plugins as the legacy "mod" type;
+        // the selected release's loader and server compatibility distinguish them.
+        let project_type = project["project_type"].as_str();
+        if project["id"].as_str() != Some(id)
+            || (project_type != Some("mod") && !(kind == "plugin" && project_type == Some("plugin"))) {
             return Err("A required dependency has the wrong Modrinth project type.".into());
         }
         let title = project["title"].as_str().unwrap_or(id).to_owned();
