@@ -19,7 +19,7 @@ The app can create, edit, list, and remove server profiles. Local servers can be
 
 Remote process control requires `tmux` on the server and a trusted host key in `known_hosts`. Remote file operations stay inside the configured server folder, skip symbolic links, limit text files to 1 MB, and require the managed server to be stopped before writing.
 
-When adding a remote server, Scerite creates the configured Minecraft root if needed, then creates or reuses `<environment root>/servers/<server-name>` with a kebab-case folder name. An existing custom server folder can still be selected instead. Renaming the saved server does not rename its folder.
+When adding a remote server, Scerite creates the configured Minecraft root if needed, then creates or reuses `<environment root>/servers/<server-name>`. An existing custom server folder can still be selected instead. Renaming the saved server does not rename its folder.
 
 ## Server software installation
 
@@ -41,11 +41,8 @@ The **Mods & plugins** tab lists JAR files in the selected server's `mods/` or `
 
 ## Desktop updates
 
-Installed desktop builds check the latest published GitHub release on startup. When a newer version is available, Scerite asks before downloading and installing it. Development builds do not check for updates. The repository must be public for installed apps to fetch the release without a GitHub credential.
-
-Every push to `main` runs the release workflow. It uses the version in `package.json` when it has not been released yet; otherwise it bumps the patch version in the app manifests and commits that bump to `main`. It tags the resulting commit, builds signed updater artifacts for Windows, Linux, and macOS, and publishes a GitHub release with `latest.json`. Repository rules must allow GitHub Actions to push the version commit and tag.
-
-Set the repository Actions secret `TAURI_SIGNING_PRIVATE_KEY` to the contents of the private updater key before merging the workflow. Keep that key backed up outside the repository; later releases must use the same key. The matching public key is committed in `src-tauri/tauri.conf.json`. Local release builds require `TAURI_SIGNING_PRIVATE_KEY` in the environment too.
+Installed desktop builds check the latest published GitHub release on startup. When a newer version is available, Scerite asks before downloading and installing it. Development builds do not check for updates.
+Every push to `main` runs the release workflow. It uses the version in `package.json` when it has not been released yet; otherwise it bumps the patch version in the app manifests and commits that bump to `main`. It tags the resulting commit, builds signed updater artifacts for Windows, Linux, and macOS, and publishes a GitHub release with `latest.json`.
 
 ## License
 
