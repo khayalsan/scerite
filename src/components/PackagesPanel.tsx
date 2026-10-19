@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { ask } from "@tauri-apps/plugin-dialog";
 import { Download, Package, RefreshCw, Search } from "lucide-react";
 import { serverFiles } from "../lib/serverFiles";
 import type { ServerFileEntry } from "../lib/serverFiles";
@@ -9,10 +10,12 @@ import type { PackageKind } from "../lib/serverSoftware";
 import { serverProfiles } from "../lib/serverProfiles";
 import type { InstalledPackage } from "../lib/serverProfiles";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
+import { SearchField } from "./SearchField";
 
 type Project = { id: string; title: string; description: string; author: string; iconUrl: string | null; downloads: number };
 type Version = { id: string; name: string; versionNumber: string; requiredDependencies: number };
 type PlanEntry = { projectId: string; versionId: string; title: string; versionNumber: string; filename: string; requiredBy: string[]; alreadyInstalled: boolean; direct: boolean };
+type RemovalPreview = { dependents: { projectId: string; title: string }[]; cleanup: { projectId: string; title: string }[] };
 
 const loaders: Record<PackageKind, { id: string; label: string }[]> = {
   mod: [{ id: "fabric", label: "Fabric" }, { id: "quilt", label: "Quilt" }, { id: "forge", label: "Forge" }, { id: "neoforge", label: "NeoForge" }],
@@ -77,6 +80,7 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software, i
   const [versions, setVersions] = useState<Version[]>([]);
   const [selectedVersionId, setSelectedVersionId] = useState("");
   const [installed, setInstalled] = useState<ServerFileEntry[]>([]);
+  const [installedSearch, setInstalledSearch] = useState("");
   const [installedPackages, setInstalledPackages] = useState<InstalledPackage[]>([]);
   const [plan, setPlan] = useState<PlanEntry[]>([]);
   const [loadingPlan, setLoadingPlan] = useState(false);
@@ -90,6 +94,7 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software, i
   const versionRequest = useRef(0);
   const searchRequest = useRef(0);
   const planRequest = useRef(0);
+  const confirmingRemoval = useRef(false);
   const folder = kind === "mod" ? "mods" : "plugins";
 
   async function refreshInstalled(active = true) {
@@ -202,29 +207,65 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software, i
     finally { setBusy(false); }
   }
 
-  async function removePlugin(record: InstalledPackage) {
-    if (!window.confirm(`Remove ${record.title} (${record.filename}) from this server?`)) return;
-    setBusy(true);
+  async function removePackage(record: InstalledPackage) {
+    if (confirmingRemoval.current) return;
+    confirmingRemoval.current = true;
     setError(null);
     setMessage(null);
     try {
-      await invoke("remove_modrinth_plugin", { profileId, projectId: record.projectId, versionId: record.versionId });
-      setMessage(`Removed ${record.title}.`);
+      if (kind === "mod") {
+        const preview = await invoke<RemovalPreview>("preview_modrinth_mod_removal", { profileId, projectId: record.projectId });
+        if (preview.dependents.length > 0) {
+          window.alert(`${record.title} is required by these mods:\n${preview.dependents.map((item) => `• ${item.title}`).join("\n")}\n\nRemove those mods first.`);
+          return;
+        }
+        if (!await ask(`Remove ${record.title} (${record.filename}) from this server?`, {
+          title: "Remove mod",
+          kind: "warning",
+          okLabel: "Remove mod",
+          cancelLabel: "Cancel",
+        })) return;
+        const removeUnusedDependencies = preview.cleanup.length > 0 && await ask(`These dependencies were downloaded for ${record.title} and are not used by other installed mods:\n${preview.cleanup.map((item) => `• ${item.title}`).join("\n")}\n\nRemove them too?`, {
+          title: "Unused dependencies",
+          kind: "warning",
+          okLabel: "Remove dependencies",
+          cancelLabel: "Keep dependencies",
+        });
+        const cleanupProjectIds = removeUnusedDependencies ? preview.cleanup.map((item) => item.projectId) : [];
+        setBusy(true);
+        setMessage(await invoke<string>("remove_modrinth_mod", { profileId, projectId: record.projectId, versionId: record.versionId, cleanupProjectIds }));
+      } else {
+        if (!await ask(`Remove ${record.title} (${record.filename}) from this server?`, {
+          title: "Remove plugin",
+          kind: "warning",
+          okLabel: "Remove plugin",
+          cancelLabel: "Cancel",
+        })) return;
+        setBusy(true);
+        await invoke("remove_modrinth_plugin", { profileId, projectId: record.projectId, versionId: record.versionId });
+        setMessage(`Removed ${record.title}.`);
+      }
       await refreshInstalled();
       setPlan([]);
     } catch (cause) { setError(errorText(cause)); await refreshInstalled(); }
-    finally { setBusy(false); }
+    finally { confirmingRemoval.current = false; setBusy(false); }
   }
 
   const selectedVersion = versions.find((version) => version.id === selectedVersionId);
   const selectedInstalled = installedPackages.find((item) => item.kind === kind && item.projectId === selectedProject?.id && installed.some((file) => file.name === item.filename));
-  const updating = kind === "plugin" && selectedInstalled && selectedInstalled.versionId !== selectedVersionId;
-  const dependencyFiles = installed.filter((entry) => installedPackages.some((item) => item.kind === kind && item.filename === entry.name && !item.direct && item.requiredBy.length > 0));
-  const primaryFiles = installed.filter((entry) => !dependencyFiles.includes(entry));
+  const updating = selectedInstalled && selectedInstalled.versionId !== selectedVersionId;
+  const normalizedInstalledSearch = installedSearch.trim().toLowerCase();
+  const visibleInstalled = installed.filter((entry) => {
+    const record = installedPackages.find((item) => item.kind === kind && item.filename === entry.name);
+    return !normalizedInstalledSearch || [entry.name, record?.title ?? "", ...(record?.requiredBy ?? [])]
+      .some((value) => value.toLowerCase().includes(normalizedInstalledSearch));
+  });
+  const dependencyFiles = visibleInstalled.filter((entry) => installedPackages.some((item) => item.kind === kind && item.filename === entry.name && !item.direct && item.requiredBy.length > 0));
+  const primaryFiles = visibleInstalled.filter((entry) => !dependencyFiles.includes(entry));
 
   function installedRow(entry: ServerFileEntry) {
     const record = installedPackages.find((item) => item.kind === kind && item.filename === entry.name);
-    return <li key={entry.path}><Package size={16} aria-hidden="true" /><span className="packages-installed-copy" title={entry.name}><strong>{record?.title ?? entry.name}</strong>{record && <small>{entry.name}</small>}{record?.requiredBy.length ? <em className="packages-tag packages-tag-dependency">Dependency for {record.requiredBy.join(", ")}</em> : null}</span><small>{formatSize(entry.size)}</small>{kind === "plugin" && record && <span className="packages-installed-actions"><button type="button" className="button button-quiet" disabled={busy || !gameVersion || record.requiredBy.length > 0} onClick={() => void chooseProject({ id: record.projectId, title: record.title, description: "", author: "", iconUrl: null, downloads: 0 })}>Update</button><button type="button" className="button button-quiet" disabled={busy || !canInstall || record.requiredBy.length > 0} onClick={() => void removePlugin(record)}>Remove</button></span>}</li>;
+    return <li key={entry.path}><Package size={16} aria-hidden="true" /><span className="packages-installed-copy" title={entry.name}><strong>{record?.title ?? entry.name}</strong>{record && <small>{entry.name}</small>}{record?.requiredBy.length ? <em className="packages-tag packages-tag-dependency">Dependency for {record.requiredBy.join(", ")}</em> : null}</span><small>{formatSize(entry.size)}</small>{record && <span className="packages-installed-actions"><button type="button" className="button button-quiet" aria-label={`Update ${record.title}`} disabled={busy || !gameVersion || record.requiredBy.length > 0} onClick={() => void chooseProject({ id: record.projectId, title: record.title, description: "", author: "", iconUrl: null, downloads: 0 })}>Update</button><button type="button" className="button button-quiet" aria-label={`Remove ${record.title}`} disabled={busy || !canInstall || (kind === "plugin" && record.requiredBy.length > 0)} onClick={() => void removePackage(record)}>Remove</button></span>}</li>;
   }
 
   useEffect(() => {
@@ -242,25 +283,22 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software, i
 
   return <section className="packages-panel" aria-label={kind === "mod" ? "Mods" : "Plugins"}>
     <header className="packages-header">
-      <div><h2>{kind === "mod" ? "Mods" : "Plugins"}</h2><p>Browse compatible Modrinth releases and install them into this server.</p></div>
+      <h2>{kind === "mod" ? "Mods" : "Plugins"}</h2>
     </header>
     <div className="packages-layout">
       <div className="packages-catalog">
-        <h3>Find {kind === "mod" ? "a mod" : "a plugin"}</h3>
-        <p>Results are filtered for this server’s Minecraft version and loader.</p>
         <form className="packages-search-form" onSubmit={(event) => void search(event)}>
-          <div className="packages-fixed-loader"><span>Minecraft version</span><strong>{versionLoading ? "Detecting…" : gameVersion || "Unknown"}</strong></div>
-          {versionError && <p className="files-error" role="alert">{versionError} <button type="button" className="button button-quiet" onClick={() => setVersionRetry((value) => value + 1)}>Retry</button></p>}
-          {fixedLoader ? <div className="packages-fixed-loader"><span>Server loader</span><strong>{availableLoaders[0]?.label ?? fixedLoader}</strong></div> : <>
-            <label htmlFor="package-loader">Server loader</label>
-            <Select value={loader} onValueChange={(value) => changeCompatibility(value ?? availableLoaders[0].id)} disabled={busy}>
-              <SelectTrigger id="package-loader"><SelectValue>{(value) => loaders[kind].find((item) => item.id === value)?.label ?? "Choose loader"}</SelectValue></SelectTrigger>
-              <SelectContent>{availableLoaders.map((item) => <SelectItem key={item.id} value={item.id}>{item.label}</SelectItem>)}</SelectContent>
-            </Select>
-          </>}
           <label htmlFor="package-query">Search Modrinth</label>
           <div className="packages-query"><input id="package-query" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={kind === "mod" ? "Search mods or browse popular" : "Search plugins or browse popular"} maxLength={100} disabled={busy} /><button className="button button-primary" type="submit" disabled={searching || busy || !gameVersion}><Search size={15} aria-hidden="true" /> {searching ? "Searching…" : query ? "Search" : "Browse"}</button></div>
-          <div className="packages-sort"><label htmlFor="package-sort">Sort results</label><Select value={sort} onValueChange={(value) => setSort(value ?? "relevance")} disabled={busy}><SelectTrigger id="package-sort"><SelectValue>{(value) => ({ relevance: "Relevance", downloads: "Most downloaded", updated: "Recently updated" })[value as "relevance" | "downloads" | "updated"] ?? "Relevance"}</SelectValue></SelectTrigger><SelectContent><SelectItem value="relevance">Relevance</SelectItem><SelectItem value="downloads">Most downloaded</SelectItem><SelectItem value="updated">Recently updated</SelectItem></SelectContent></Select></div>
+          <div className="packages-search-options">
+            <div className="packages-sort"><label htmlFor="package-sort">Sort results</label><Select value={sort} onValueChange={(value) => setSort(value ?? "relevance")} disabled={busy}><SelectTrigger id="package-sort"><SelectValue>{(value) => ({ relevance: "Relevance", downloads: "Most downloaded", updated: "Recently updated" })[value as "relevance" | "downloads" | "updated"] ?? "Relevance"}</SelectValue></SelectTrigger><SelectContent><SelectItem value="relevance">Relevance</SelectItem><SelectItem value="downloads">Most downloaded</SelectItem><SelectItem value="updated">Recently updated</SelectItem></SelectContent></Select></div>
+            <dl className="packages-compatibility">
+              <div><dt>Minecraft version</dt><dd>{versionLoading ? "Detecting…" : gameVersion || "Unknown"}</dd></div>
+              {fixedLoader && <div><dt>Server loader</dt><dd>{availableLoaders[0]?.label ?? fixedLoader}</dd></div>}
+            </dl>
+            {!fixedLoader && <div className="packages-loader-select"><label htmlFor="package-loader">Server loader</label><Select value={loader} onValueChange={(value) => changeCompatibility(value ?? availableLoaders[0].id)} disabled={busy}><SelectTrigger id="package-loader"><SelectValue>{(value) => loaders[kind].find((item) => item.id === value)?.label ?? "Choose loader"}</SelectValue></SelectTrigger><SelectContent>{availableLoaders.map((item) => <SelectItem key={item.id} value={item.id}>{item.label}</SelectItem>)}</SelectContent></Select></div>}
+          </div>
+          {versionError && <p className="files-error" role="alert">{versionError} <button type="button" className="button button-quiet" onClick={() => setVersionRetry((value) => value + 1)}>Retry</button></p>}
         </form>
         {error && <p className="files-error" role="alert">{error}</p>}
         {message && <p className="install-success" role="status">{message}</p>}
@@ -288,7 +326,7 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software, i
                     <ul>{[...plan].reverse().map((item) => <li key={item.projectId}><div><strong>{item.title}</strong><small>{item.versionNumber} · {item.filename}</small></div><span className={item.direct ? "packages-tag" : "packages-tag packages-tag-dependency"}>{item.direct ? `Selected ${kind}` : `Dependency for ${item.requiredBy.join(", ")}`}</span>{item.alreadyInstalled && <span className="packages-tag packages-tag-installed">Installed</span>}</li>)}</ul>
                   </> : null}
                 </div>
-                <button className="button button-primary" type="button" onClick={() => void install()} disabled={!canInstall || busy || loadingPlan || plan.length === 0}><Download size={15} aria-hidden="true" /> {busy ? "Installing…" : updating ? "Confirm plugin update" : `Confirm and install ${plan.filter((item) => !item.alreadyInstalled).length}`}</button>
+                <button className="button button-primary" type="button" onClick={() => void install()} disabled={!canInstall || busy || loadingPlan || plan.length === 0}><Download size={15} aria-hidden="true" /> {busy ? "Installing…" : updating ? `Confirm ${kind} update` : `Confirm and install ${plan.filter((item) => !item.alreadyInstalled).length}`}</button>
                 {!canInstall && <p className="files-error">Stop the server and confirm its status before installing.</p>}
               </>}
             </> : <p className="state-message">Select a result to see releases and required dependencies.</p>}
@@ -298,8 +336,10 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software, i
       </div>
       <aside className="packages-installed" aria-label={`Installed ${folder}`}>
         <div className="packages-installed-heading"><div><h3>Installed {folder}</h3><p>JAR files in this server’s {folder}/ folder</p></div><button type="button" className="button button-quiet" onClick={() => void refreshInstalled()} disabled={loadingInstalled}><RefreshCw size={14} aria-hidden="true" /> Refresh</button></div>
+        <SearchField id={`installed-${folder}-search`} label={`Search installed ${folder}`} placeholder="Name or JAR file" value={installedSearch} onChange={setInstalledSearch} />
         {installedError && <p className="files-error" role="alert">{installedError}</p>}
         {loadingInstalled ? <p className="state-message">Loading {folder}…</p> : installed.length === 0 ? <p className="state-message">No {folder} installed yet.</p> : <>
+          {visibleInstalled.length === 0 && <p className="state-message">No matching installed {folder}.</p>}
           {primaryFiles.length > 0 && <ul className="packages-installed-list">{primaryFiles.map(installedRow)}</ul>}
           {dependencyFiles.length > 0 && <section className="packages-installed-dependencies" aria-label={`Installed ${kind} dependencies`}><h4>Dependencies</h4><ul className="packages-installed-list">{dependencyFiles.map(installedRow)}</ul></section>}
         </>}

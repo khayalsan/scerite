@@ -3,7 +3,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type { FormEvent } from "react";
-import { ArrowLeft, Download, FileKey, FolderOpen, Globe2, HardDrive, Network, Package, Palette, Plus, Puzzle, Server, Settings, SlidersHorizontal, Terminal, X } from "lucide-react";
+import { ArrowLeft, Download, FileKey, FolderOpen, Globe2, HardDrive, Network, Package, Palette, Plus, Puzzle, ScrollText, Server, Settings, SlidersHorizontal, Terminal, Users, X } from "lucide-react";
 import { appSettings, localInstallRoot, serverEnvironments, serverProfiles } from "./lib/serverProfiles";
 import type { ServerEnvironment, ServerProfile, ServerTarget } from "./lib/serverProfiles";
 import { serverSessions } from "./lib/serverSessions";
@@ -14,10 +14,14 @@ import { ServerPropertiesPanel } from "./components/ServerPropertiesPanel";
 import { ServerInstallPanel } from "./components/ServerInstallPanel";
 import { PackagesPanel } from "./components/PackagesPanel";
 import { ServerOverviewPanel } from "./components/ServerOverviewPanel";
+import { LogsPanel } from "./components/LogsPanel";
+import { SearchField } from "./components/SearchField";
+import { PlayersPanel } from "./components/PlayersPanel";
 import { serverFiles } from "./lib/serverFiles";
 import { packageSupportForSoftware, packageSupportFromFiles } from "./lib/serverSoftware";
 import type { PackageSupport } from "./lib/serverSoftware";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select";
+import sceriteLogo from "../src-tauri/icons/logo.png";
 import "./App.css";
 
 type ProfileDraft = {
@@ -61,7 +65,7 @@ function readSavedTheme(): ThemeId {
   }
 }
 
-type ServerTab = "server" | "console" | "files" | "worlds" | "properties" | "mods" | "plugins" | "install" | "settings";
+type ServerTab = "server" | "console" | "players" | "logs" | "files" | "worlds" | "properties" | "mods" | "plugins" | "install" | "settings";
 
 const emptyDraft: ProfileDraft = {
   name: "",
@@ -205,6 +209,7 @@ function App() {
   const [propertiesProfileId, setPropertiesProfileId] = useState<string | null>(null);
   const [installProfileId, setInstallProfileId] = useState<string | null>(null);
   const [consoleOutput, setConsoleOutput] = useState("");
+  const [consoleSearch, setConsoleSearch] = useState("");
   const [consoleInput, setConsoleInput] = useState("");
   const consoleCursor = useRef(0);
   const consoleOutputRef = useRef<HTMLDivElement>(null);
@@ -593,8 +598,14 @@ function App() {
   }, [consoleProfileId, profiles, consoleRemoteState]);
 
   useEffect(() => {
-    if (consoleOutputRef.current) consoleOutputRef.current.scrollTop = consoleOutputRef.current.scrollHeight;
-  }, [consoleOutput]);
+    if (consoleOutputRef.current && !consoleSearch.trim()) consoleOutputRef.current.scrollTop = consoleOutputRef.current.scrollHeight;
+  }, [consoleOutput, consoleSearch]);
+
+  useEffect(() => {
+    if (consoleOutputRef.current && consoleSearch.trim()) consoleOutputRef.current.scrollTop = 0;
+  }, [consoleSearch]);
+
+  useEffect(() => { setConsoleSearch(""); }, [consoleProfileId]);
 
   async function sendConsoleInput(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1019,6 +1030,9 @@ function App() {
     );
   }
 
+  const normalizedConsoleSearch = consoleSearch.trim().toLowerCase();
+  const matchingConsoleLines = normalizedConsoleSearch ? consoleOutput.split(/\r?\n/).filter((line) => line.toLowerCase().includes(normalizedConsoleSearch)) : [];
+
   return (
     <main className={`app-shell${selectedProfile ? " server-detail-shell" : ""}`}>
       {selectedProfile ? (() => {
@@ -1049,7 +1063,7 @@ function App() {
         return (
           <aside className="sidebar server-page-sidebar" aria-label={`${selectedProfile.name} navigation`}>
             <Link className="brand" to="/" aria-label="Back to scerite servers" onClick={closeForm}>
-              <span className="brand-mark" aria-hidden="true">S</span>
+              <img className="brand-logo" src={sceriteLogo} alt="" />
               <span>scerite</span>
             </Link>
             <div className="server-page-context">
@@ -1086,6 +1100,12 @@ function App() {
               <button className={`server-tab${activeServerTab === "console" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "console" ? "page" : undefined} onClick={() => { setActiveServerTab("console"); if (consoleProfileId !== selectedProfile.id) toggleConsole(selectedProfile); }}>
                 <Terminal size={16} aria-hidden="true" /> Console
               </button>
+              <button className={`server-tab${activeServerTab === "players" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "players" ? "page" : undefined} onClick={() => setActiveServerTab("players")}>
+                <Users size={16} aria-hidden="true" /> Players
+              </button>
+              <button className={`server-tab${activeServerTab === "logs" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "logs" ? "page" : undefined} onClick={() => setActiveServerTab("logs")}>
+                <ScrollText size={16} aria-hidden="true" /> Logs
+              </button>
               <button className={`server-tab${activeServerTab === "files" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "files" ? "page" : undefined} onClick={() => { setActiveServerTab("files"); if (filesProfileId !== selectedProfile.id) toggleFiles(selectedProfile); }}>
                 <FolderOpen size={16} aria-hidden="true" /> Files
               </button>
@@ -1119,7 +1139,7 @@ function App() {
       })() : (
         <aside className="sidebar" aria-label="Main navigation">
           <Link className="brand" to="/" aria-label="scerite home">
-            <span className="brand-mark" aria-hidden="true">S</span>
+            <img className="brand-logo" src={sceriteLogo} alt="" />
             <span>scerite</span>
           </Link>
           <nav className="primary-nav">
@@ -1395,8 +1415,9 @@ function App() {
                                 <strong>Live console</strong>
                                 <button className="button button-quiet" type="button" onClick={() => toggleConsole(profile)}>Disconnect</button>
                               </div>
+                              <div className="console-search"><SearchField id="console-search" label="Search console output" placeholder="Find matching lines" value={consoleSearch} onChange={setConsoleSearch} />{normalizedConsoleSearch && <small>{matchingConsoleLines.length} matching lines</small>}</div>
                               <div className="console-output" ref={consoleOutputRef} role="log" aria-live="polite">
-                                <pre>{consoleOutput || "Console output will appear here."}</pre>
+                                <pre>{normalizedConsoleSearch ? matchingConsoleLines.join("\n") || "No matching console lines." : consoleOutput || "Console output will appear here."}</pre>
                               </div>
                               <form className="console-input-row" onSubmit={(event) => void sendConsoleInput(event)}>
                                 <span aria-hidden="true">&gt;</span>
@@ -1411,6 +1432,12 @@ function App() {
                               <button className="button button-primary" onClick={() => toggleConsole(profile)}>Connect console</button>
                             </div>
                           )}
+                        </section>
+                        <section className="server-tab-panel" hidden={activeServerTab !== "players"} aria-label="Server players">
+                          {activeServerTab === "players" && <PlayersPanel key={profile.id} profileId={profile.id} remote={!isLocal} running={serverRunning} />}
+                        </section>
+                        <section className="server-tab-panel" hidden={activeServerTab !== "logs"} aria-label="Server logs">
+                          {activeServerTab === "logs" && <LogsPanel key={profile.id} profileId={profile.id} remote={!isLocal} running={serverRunning} />}
                         </section>
                         <section className="server-tab-panel" hidden={activeServerTab !== "files"} aria-label="Server files">
                           {filesProfileId === profile.id ? (

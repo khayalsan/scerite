@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
+import { Check } from "lucide-react";
+import { packageSupportForSoftware } from "../lib/serverSoftware";
+import { Combobox } from "./ui/combobox";
 
 type Progress = { profileId: string; phase: string; downloaded: number; total: number };
 
@@ -85,17 +87,21 @@ export function ServerInstallPanel({ profileId, remote, rootConfigured, canInsta
       <p>Choose a Minecraft version and server type. A compatible Java runtime is shared across servers. Forge, NeoForge, and Quilt require an empty server folder; other installs leave existing files in place.</p>
     </div>
     <div className="install-form">
-      <label htmlFor="server-software">Server software</label>
-      <Select value={loader} onValueChange={(value) => setLoader(value ?? "vanilla")} disabled={busy}>
-        <SelectTrigger id="server-software" className="install-version-trigger"><SelectValue>{(selected) => software.find((item) => item.id === selected)?.label ?? "Choose software"}</SelectValue></SelectTrigger>
-        <SelectContent>{software.map((item) => <SelectItem key={item.id} value={item.id}>{item.label}</SelectItem>)}</SelectContent>
-      </Select>
+      <fieldset className="install-software-fieldset" disabled={busy}>
+        <legend>Server software</legend>
+        <div className="install-software-grid">{software.map((item) => {
+          const support = packageSupportForSoftware(item.id);
+          return <label className={`install-software-card${loader === item.id ? " install-software-card-selected" : ""}`} key={item.id}>
+            <input type="radio" name={`server-software-${profileId}`} value={item.id} checked={loader === item.id} onChange={() => setLoader(item.id)} />
+            <span className="install-software-badges">{support?.mods && <span className="install-software-badge">Mod</span>}{support?.plugins && <span className="install-software-badge">Plugin</span>}</span>
+            <strong>{item.label}</strong>
+            {loader === item.id && <Check className="install-software-check" size={16} aria-hidden="true" />}
+          </label>;
+        })}</div>
+      </fieldset>
       <label htmlFor="vanilla-version">Minecraft version</label>
       <label><input type="checkbox" checked={includeSnapshots} onChange={(event) => setIncludeSnapshots(event.target.checked)} disabled={busy} /> Include snapshots</label>
-      <Select value={version} onValueChange={(value) => setVersion(value ?? "")} disabled={loading || busy}>
-        <SelectTrigger id="vanilla-version" className="install-version-trigger"><SelectValue>{(selected) => selected || "Choose a version"}</SelectValue></SelectTrigger>
-        <SelectContent>{versions.map((item) => <SelectItem key={item} value={item}>{item}</SelectItem>)}</SelectContent>
-      </Select>
+      <Combobox id="vanilla-version" items={versions} value={version} onValueChange={setVersion} placeholder="Search Minecraft versions" disabled={loading || busy} />
       <button className="button button-primary" type="button" disabled={loading || busy || !version || !rootConfigured || !canInstall} onClick={() => void install()}>{busy ? "Installing…" : `Install ${software.find((item) => item.id === loader)?.label ?? "software"}`}</button>
       <button className="button button-secondary" type="button" disabled={loading || busy || !version || !rootConfigured || !canInstall} onClick={() => void install(true)}>Use Java for this version</button>
       <small>Already installed? Configure Java without replacing the server jar.</small>

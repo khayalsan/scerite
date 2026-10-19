@@ -1,6 +1,6 @@
 [package]
 name = "scerite"
-version = "0.3.2"
+version = "0.4.0"
 description = "A MC server manager for local/remote"
 authors = ["you"]
 edition = "2024"
@@ -29,6 +29,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring"] }
 sha1 = "0.11"
 sha2 = "0.10"
 flate2 = "1"
+fastnbt = "2.6.3"
 tar = "0.4"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 uuid = { version = "1", features = ["v4", "serde"] }

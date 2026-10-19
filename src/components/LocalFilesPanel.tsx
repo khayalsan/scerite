@@ -3,6 +3,7 @@ import type { FormEvent } from "react";
 import { File, FilePlus2, Folder, Save, X } from "lucide-react";
 import { serverFiles } from "../lib/serverFiles";
 import type { ServerFileEntry } from "../lib/serverFiles";
+import { SearchField } from "./SearchField";
 
 interface LocalFilesPanelProps {
   profileId: string;
@@ -25,6 +26,7 @@ function formatSize(size: number) {
 export function LocalFilesPanel({ profileId, serverName, canEdit, remote = false, onClose }: LocalFilesPanelProps) {
   const [directory, setDirectory] = useState("");
   const [entries, setEntries] = useState<ServerFileEntry[]>([]);
+  const [search, setSearch] = useState("");
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [content, setContent] = useState("");
   const [originalContent, setOriginalContent] = useState("");
@@ -117,6 +119,7 @@ export function LocalFilesPanel({ profileId, serverName, canEdit, remote = false
 
   const parent = directory.includes("/") ? directory.slice(0, directory.lastIndexOf("/")) : "";
   const selectedName = selectedPath?.split("/").slice(-1)[0];
+  const visibleEntries = entries.filter((entry) => entry.name.toLowerCase().includes(search.trim().toLowerCase()));
 
   return (
     <section className="files-panel" aria-label={`${serverName} files`}>
@@ -134,7 +137,8 @@ export function LocalFilesPanel({ profileId, serverName, canEdit, remote = false
             {directory && <button className="button button-quiet" onClick={goUp}>Up one folder</button>}
             <button className="button button-quiet" onClick={createFile} disabled={!canEdit}><FilePlus2 size={14} /> New file</button>
           </div>
-          {isLoading ? <p className="state-message">Loading files…</p> : entries.map((entry) => (
+          <SearchField id="files-search" label="Search this folder" placeholder="File or folder name" value={search} onChange={setSearch} />
+          {isLoading ? <p className="state-message">Loading files…</p> : visibleEntries.map((entry) => (
             <button className={`file-entry${selectedPath === entry.path ? " file-entry-selected" : ""}`} key={entry.path} onClick={() => void openFile(entry)}>
               {entry.directory ? <Folder size={15} /> : <File size={15} />}
               <span>{entry.name}</span>
@@ -142,6 +146,7 @@ export function LocalFilesPanel({ profileId, serverName, canEdit, remote = false
             </button>
           ))}
           {!isLoading && entries.length === 0 && <p className="state-message">This folder is empty.</p>}
+          {!isLoading && entries.length > 0 && visibleEntries.length === 0 && <p className="state-message">No matching files or folders.</p>}
         </div>
         <form className="file-editor" onSubmit={(event) => void saveFile(event)}>
           {selectedPath || fileName !== "" ? (

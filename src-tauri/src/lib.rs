@@ -2,6 +2,8 @@ mod remote_ssh;
 mod eula;
 mod java_runtime;
 mod server_files;
+mod server_logs;
+mod server_players;
 mod server_profiles;
 mod server_sessions;
 mod vanilla_install;
@@ -46,6 +48,8 @@ pub fn run() {
             modrinth::preview_modrinth_install,
             modrinth::install_modrinth_plan,
             modrinth::remove_modrinth_plugin,
+            modrinth::preview_modrinth_mod_removal,
+            modrinth::remove_modrinth_mod,
             vanilla_install::use_managed_java,
             commands::get_local_install_root,
             commands::get_auto_accept_eula,
@@ -69,6 +73,9 @@ pub fn run() {
             server_files::list_local_worlds,
             server_files::read_local_server_file,
             server_files::read_local_server_log_start,
+            server_logs::read_local_server_log,
+            server_players::read_local_player_data,
+            server_players::read_local_player_roster,
             server_files::write_local_server_file,
             remote_ssh::test_remote_connection,
             remote_ssh::test_remote_connection_draft,
@@ -81,6 +88,9 @@ pub fn run() {
             remote_ssh::list_remote_worlds,
             remote_ssh::read_remote_server_file,
             remote_ssh::read_remote_server_log_start,
+            remote_ssh::read_remote_server_log,
+            remote_ssh::read_remote_player_data,
+            remote_ssh::read_remote_player_roster,
             remote_ssh::detect_remote_fabric_version,
             remote_ssh::write_remote_server_file,
         ])

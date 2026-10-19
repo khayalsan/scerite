@@ -4,6 +4,25 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 ## [Unreleased]
 
+### Added
+
+- A Logs tab shows the latest server output and any older log files, including compressed archives.
+- A Players tab lists known players, shows saved player details and statistics, and opens separate Whitelist, Operators, Banned names, and Banned IPs lists for adding or removing entries.
+- Installed Modrinth mods can be updated or removed. Removal shows which mods depend on a selected mod and offers to remove dependencies no longer used by another mod.
+
+### Changed
+
+- The sidebar now shows the scerite logo instead of an initial.
+- Search fields now filter files, properties, console and log lines, installed mods and plugins, players, and player access lists.
+- The Install tab shows selectable software cards with Mod and Plugin badges and a searchable Minecraft version combobox.
+- Mods and Plugins search now shows the server version and loader beside sorting, with fewer introductory labels.
+
+### Fixed
+
+- Canceling a mod or plugin removal now leaves it installed.
+- The Minecraft version menu now has a solid background, so install controls do not show through it.
+- Remote servers that have stopped no longer stay marked Running or show a stop error when their console session disappears.
+
 ## [0.3.2] - 2026-10-19
 
 ### Added

@@ -355,6 +355,7 @@ impl ServerProfileStore {
             existing.required_by.extend(package.required_by);
             existing.required_by.sort();
             existing.required_by.dedup();
+            existing.requires = package.requires;
             existing.direct |= package.direct;
             existing.filename = package.filename;
             existing.version_id = package.version_id;
@@ -367,16 +368,19 @@ impl ServerProfileStore {
         Ok(())
     }
 
-    pub fn remove_installed_package(&self, id: Uuid, project_id: &str, clear_dependencies: bool) -> Result<(), String> {
+    pub fn remove_installed_package(&self, id: Uuid, kind: &str, project_id: &str, version_id: &str, filename: &str, clear_dependencies: bool) -> Result<(), String> {
         let mut current = self.lock()?;
         let mut data = current.clone();
         let profile = data.profiles.iter_mut().find(|profile| profile.id == id)
             .ok_or("Server profile was not found.")?;
-        let package = profile.installed_packages.iter().find(|package| package.kind == "plugin" && package.project_id == project_id)
-            .ok_or("The installed plugin record was not found.")?.clone();
-        profile.installed_packages.retain(|item| !(item.kind == "plugin" && item.project_id == project_id));
-        if clear_dependencies {
-            for item in &mut profile.installed_packages {
+        let package = profile.installed_packages.iter().find(|package| package.kind == kind && package.project_id == project_id)
+            .ok_or("The installed package record was not found.")?.clone();
+        if package.version_id != version_id || package.filename != filename {
+            return Err("The installed package changed while it was being removed. Refresh the list.".into());
+        }
+        profile.installed_packages.retain(|item| !(item.kind == kind && item.project_id == project_id));
+        if clear_dependencies && !profile.installed_packages.iter().any(|item| item.kind == kind && item.title == package.title) {
+            for item in profile.installed_packages.iter_mut().filter(|item| item.kind == kind) {
                 item.required_by.retain(|title| title != &package.title);
             }
         }
@@ -385,12 +389,12 @@ impl ServerProfileStore {
         Ok(())
     }
 
-    pub fn reconcile_plugin_dependencies(&self, id: Uuid, previous_title: &str, current_title: &str, required_ids: &[String]) -> Result<(), String> {
+    pub fn reconcile_package_dependencies(&self, id: Uuid, kind: &str, previous_title: &str, current_title: &str, required_ids: &[String]) -> Result<(), String> {
         let mut current = self.lock()?;
         let mut data = current.clone();
         let profile = data.profiles.iter_mut().find(|profile| profile.id == id)
             .ok_or("Server profile was not found.")?;
-        for package in profile.installed_packages.iter_mut().filter(|item| item.kind == "plugin") {
+        for package in profile.installed_packages.iter_mut().filter(|item| item.kind == kind) {
             if !required_ids.contains(&package.project_id) {
                 package.required_by.retain(|title| title != previous_title);
             } else if previous_title != current_title {

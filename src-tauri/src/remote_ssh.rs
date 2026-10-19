@@ -2,6 +2,7 @@ use std::{
     collections::HashMap,
     env,
     path::{Path, PathBuf},
+    io::SeekFrom,
     sync::{Arc, Mutex},
     time::Duration,
     time::Instant,
@@ -22,7 +23,7 @@ use russh_sftp::{
 use serde::Serialize;
 use tauri::State;
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
     runtime::{Builder, Runtime},
 };
 use uuid::Uuid;
@@ -32,6 +33,8 @@ use crate::server_profiles::{
     LocalLaunchConfig, ServerEnvironment, ServerProfile, ServerProfileStore, ServerTarget,
 };
 use crate::java_runtime::JavaPackage;
+use crate::server_logs::{self, ServerLogSnapshot};
+use crate::server_players::{self, PlayerData, PlayerRosterFiles};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_FILE_BYTES: u64 = 1024 * 1024;
@@ -362,6 +365,18 @@ pub async fn stop_remote_server(
         );
         let result = execute(session, &command)?;
         if result.exit_code != 0 {
+            let details = String::from_utf8_lossy(&result.stderr);
+            let pane_missing = details.contains("can't find pane")
+                || details.contains("can't find window")
+                || details.contains("can't find session");
+            if pane_missing || remote_is_running(session, profile)? == Some(false) {
+                if let Some(root) = optional_remote_root(session, profile)? {
+                    if remote_directory_has_java_process(session, &root)? {
+                        return Err("The server is running outside scerite's tmux session. Stop it using its current manager first.".into());
+                    }
+                }
+                return Ok(RemoteServerStatus { state: "stopped".into(), tmux_available: true });
+            }
             return Err(remote_command_error("Could not send the stop command", result));
         }
         Ok(RemoteServerStatus { state: "stopping".into(), tmux_available: true })
@@ -620,6 +635,146 @@ pub async fn read_remote_server_log_start(
             Ok(String::from_utf8_lossy(&bytes).into_owned())
         },
     ).await
+}
+
+#[tauri::command]
+pub async fn read_remote_server_log(
+    profile_id: Uuid,
+    name: String,
+    profiles: State<'_, ServerProfileStore>,
+    remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<ServerLogSnapshot, String> {
+    if !server_logs::valid_log_name(&name) {
+        return Err("Choose a log file from this server's logs folder.".into());
+    }
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    run_remote(profile, environment, Arc::clone(remote_sessions.inner()), move |session, profile| {
+        let sftp = session.sftp().map_err(|error| format!("Could not open SFTP: {error}"))?;
+        let root = remote_root_with_sftp(&sftp, configured_remote_root(profile)?)?;
+        let requested = resolve_remote_relative(&root, &format!("logs/{name}"), false)?;
+        reject_remote_symlink_path(&sftp, &root, &requested)?;
+        let canonical = canonical_inside(&sftp, &root, &requested)?;
+        let metadata = sftp.lstat(Path::new(&canonical))
+            .map_err(|error| format!("Could not inspect the server log: {error}"))?;
+        if metadata.file_type() != FileType::File {
+            return Err("The selected log is not a regular file.".into());
+        }
+        let (bytes, truncated) = if name.ends_with(".gz") {
+            let limit = server_logs::max_compressed_bytes();
+            if metadata.size.is_some_and(|size| size > limit) {
+                return Err("This archived log is too large to display (over 16 MB compressed).".into());
+            }
+            let bytes = sftp.read_prefix(Path::new(&canonical), limit as usize + 1)
+                .map_err(|error| format!("Could not read the server log: {error}"))?;
+            if bytes.len() as u64 > limit {
+                return Err("This archived log is too large to display (over 16 MB compressed).".into());
+            }
+            (bytes, false)
+        } else {
+            sftp.read_tail(Path::new(&canonical), server_logs::tail_bytes())
+                .map_err(|error| format!("Could not read the server log: {error}"))?
+        };
+        server_logs::decode_log(&name, bytes, truncated)
+    }).await
+}
+
+fn optional_remote_player_file(
+    sftp: &RemoteSftp,
+    root: &str,
+    relative: &str,
+) -> Result<Option<Vec<u8>>, String> {
+    let path = resolve_remote_relative(root, relative, false)?;
+    let metadata = match sftp.lstat_optional(Path::new(&path)) {
+        Ok(metadata) => metadata,
+        Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile => return Ok(None),
+        Err(error) => return Err(format!("Could not inspect player data: {error}")),
+    };
+    if metadata.file_type() != FileType::File {
+        return Err("A player data path is not a regular file.".into());
+    }
+    reject_remote_symlink_path(sftp, root, &path)?;
+    let canonical = canonical_inside(sftp, root, &path)?;
+    let limit = server_players::max_player_file_bytes();
+    if metadata.size.is_some_and(|size| size > limit) {
+        return Err("A player data file is too large to display (over 8 MB).".into());
+    }
+    let bytes = sftp.read_prefix(Path::new(&canonical), limit as usize + 1)
+        .map_err(|error| format!("Could not read player data: {error}"))?;
+    if bytes.len() as u64 > limit {
+        return Err("A player data file is too large to display (over 8 MB).".into());
+    }
+    Ok(Some(bytes))
+}
+
+fn optional_remote_player_list(sftp: &RemoteSftp, root: &str, relative: &str) -> Result<Vec<String>, String> {
+    let path = resolve_remote_relative(root, relative, false)?;
+    let metadata = match sftp.lstat_optional(Path::new(&path)) {
+        Ok(metadata) => metadata,
+        Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile => return Ok(Vec::new()),
+        Err(error) => return Err(format!("Could not inspect player files: {error}")),
+    };
+    if metadata.file_type() != FileType::Dir { return Err("A player list path is not a folder.".into()); }
+    reject_remote_symlink_path(sftp, root, &path)?;
+    let canonical = canonical_inside(sftp, root, &path)?;
+    sftp.read_player_uuids(Path::new(&canonical))
+        .map_err(|error| format!("Could not list player files: {error}"))
+}
+
+#[tauri::command]
+pub async fn read_remote_player_roster(
+    profile_id: Uuid,
+    profiles: State<'_, ServerProfileStore>,
+    remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<PlayerRosterFiles, String> {
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    run_remote(profile, environment, Arc::clone(remote_sessions.inner()), move |session, profile| {
+        let sftp = session.sftp().map_err(|error| format!("Could not open SFTP: {error}"))?;
+        let root = remote_root_with_sftp(&sftp, configured_remote_root(profile)?)?;
+        let properties = optional_remote_player_file(&sftp, &root, "server.properties")?;
+        let world = server_players::world_name(properties.as_deref())?;
+        let read_text = |name| -> Result<String, String> {
+            optional_remote_player_file(&sftp, &root, name)?.map(|bytes| String::from_utf8(bytes).map_err(|error| error.to_string()))
+                .transpose().map(|value| value.unwrap_or_default())
+        };
+        let mut uuids = Vec::new();
+        for path in server_players::player_list_paths(&world) {
+            uuids.extend(optional_remote_player_list(&sftp, &root, &path)?);
+        }
+        uuids.sort();
+        uuids.dedup();
+        Ok(PlayerRosterFiles {
+            cache: read_text("usercache.json")?, whitelist: read_text("whitelist.json")?,
+            ops: read_text("ops.json")?, bans: read_text("banned-players.json")?,
+            banned_ips: read_text("banned-ips.json")?, uuids,
+        })
+    }).await
+}
+
+#[tauri::command]
+pub async fn read_remote_player_data(
+    profile_id: Uuid,
+    uuid: Uuid,
+    profiles: State<'_, ServerProfileStore>,
+    remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<PlayerData, String> {
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    run_remote(profile, environment, Arc::clone(remote_sessions.inner()), move |session, profile| {
+        let sftp = session.sftp().map_err(|error| format!("Could not open SFTP: {error}"))?;
+        let root = remote_root_with_sftp(&sftp, configured_remote_root(profile)?)?;
+        let properties = optional_remote_player_file(&sftp, &root, "server.properties")?;
+        let world = server_players::world_name(properties.as_deref())?;
+        let mut player_file = None;
+        for path in server_players::player_data_paths(&world, uuid) {
+            player_file = optional_remote_player_file(&sftp, &root, &path)?;
+            if player_file.is_some() { break; }
+        }
+        let mut stats_file = None;
+        for path in server_players::player_stats_paths(&world, uuid) {
+            stats_file = optional_remote_player_file(&sftp, &root, &path)?;
+            if stats_file.is_some() { break; }
+        }
+        Ok(server_players::decode_player_data(player_file, stats_file))
+    }).await
 }
 
 pub(crate) async fn remote_package_names(
@@ -1250,7 +1405,7 @@ fn remote_is_running(
     );
     let result = execute(session, &command)?;
     if result.exit_code == 0 {
-        return Ok(Some(String::from_utf8_lossy(&result.stdout).trim() != "1"));
+        return Ok(Some(String::from_utf8_lossy(&result.stdout).trim() == "0"));
     }
     let details = String::from_utf8_lossy(&result.stderr);
     if details.contains("command not found") || result.exit_code == 127 {
@@ -1398,6 +1553,21 @@ impl RemoteSftp {
             )
             .map_err(|e| e.to_string())
     }
+    fn lstat_optional(&self, path: &Path) -> Result<FileAttributes, SftpError> {
+        self.runtime.block_on(self.inner.symlink_metadata(path.to_string_lossy().to_string()))
+    }
+    fn read_player_uuids(&self, path: &Path) -> Result<Vec<String>, String> {
+        let entries = self.runtime.block_on(self.inner.read_dir(path.to_string_lossy().to_string()))
+            .map_err(|error| error.to_string())?;
+        let mut uuids = Vec::new();
+        for entry in entries {
+            if entry.file_type() != FileType::File { continue; }
+            let name = entry.file_name();
+            let stem = name.strip_suffix(".dat").or_else(|| name.strip_suffix(".json"));
+            if let Some(Ok(uuid)) = stem.map(Uuid::parse_str) { uuids.push(uuid.to_string()); }
+        }
+        Ok(uuids)
+    }
     fn read_dir(&self, path: &Path) -> Result<Vec<(String, FileAttributes)>, String> {
         let path = path.to_string_lossy().into_owned();
         self.runtime.block_on(async {
@@ -1461,6 +1631,26 @@ impl RemoteSftp {
             }
             file.close().await.map_err(|e| e.to_string())?;
             Ok::<_, String>(bytes)
+        })
+    }
+    fn read_tail(&self, path: &Path, limit: usize) -> Result<(Vec<u8>, bool), String> {
+        let path = path.to_string_lossy().to_string();
+        self.runtime.block_on(async {
+            let mut file = self.inner.open(path).await.map_err(|e| e.to_string())?;
+            let size = file.seek(SeekFrom::End(0)).await.map_err(|e| e.to_string())?;
+            let truncated = size > limit as u64;
+            file.seek(SeekFrom::Start(size.saturating_sub(limit as u64)))
+                .await.map_err(|e| e.to_string())?;
+            let mut bytes = Vec::new();
+            let mut buffer = [0_u8; 8192];
+            while bytes.len() < limit {
+                let remaining = (limit - bytes.len()).min(buffer.len());
+                let count = file.read(&mut buffer[..remaining]).await.map_err(|e| e.to_string())?;
+                if count == 0 { break; }
+                bytes.extend_from_slice(&buffer[..count]);
+            }
+            file.close().await.map_err(|e| e.to_string())?;
+            Ok::<_, String>((bytes, truncated))
         })
     }
     fn write_file_exclusive(&self, path: &Path, content: &[u8]) -> Result<(), String> {
@@ -1784,36 +1974,42 @@ pub(crate) async fn install_remote_package(
     }).await
 }
 
-pub(crate) async fn remove_remote_plugin(
+pub(crate) async fn remove_remote_package(
     profile: ServerProfile,
     environment: ServerEnvironment,
     sessions: Arc<RemoteSessionManager>,
+    kind: String,
     filename: String,
 ) -> Result<(), String> {
     run_remote(profile, environment, sessions, move |session, profile| {
+        let folder = match kind.as_str() {
+            "mod" => "mods",
+            "plugin" => "plugins",
+            _ => return Err("Choose a valid package type.".into()),
+        };
         match remote_is_running(session, profile)? {
             Some(false) => {}
-            Some(true) => return Err("Stop the server before removing plugins.".into()),
+            Some(true) => return Err("Stop the server before removing packages.".into()),
             None => return Err("tmux is required to confirm the remote server is stopped.".into()),
         }
         let sftp = session.sftp()?;
         let root = remote_root_with_sftp(&sftp, configured_remote_root(profile)?)?;
         if remote_directory_has_java_process(session, &root)? {
-            return Err("A Java process is using the server folder. Stop it before removing plugins.".into());
+            return Err("A Java process is using the server folder. Stop it before removing packages.".into());
         }
-        let directory = format!("{root}/plugins");
+        let directory = format!("{root}/{folder}");
         reject_remote_symlink_path(&sftp, &root, &directory)?;
         if remote_root_with_sftp(&sftp, &directory)? != directory {
-            return Err("The plugin folder resolves outside the server folder.".into());
+            return Err("The package folder resolves outside the server folder.".into());
         }
         let path = format!("{directory}/{filename}");
         let stat = sftp.lstat(Path::new(&path))
-            .map_err(|error| format!("Could not inspect installed plugin: {error}"))?;
+            .map_err(|error| format!("Could not inspect installed package: {error}"))?;
         if stat.file_type() != FileType::File {
-            return Err("The installed plugin is not a regular file.".into());
+            return Err("The installed package is not a regular file.".into());
         }
         sftp.unlink(Path::new(&path))
-            .map_err(|error| format!("Could not remove installed plugin: {error}"))
+            .map_err(|error| format!("Could not remove installed package: {error}"))
     }).await
 }
 
