@@ -4,6 +4,8 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-19
+
 ### Added
 
 - A Logs tab shows the latest server output and any older log files, including compressed archives.
