@@ -870,6 +870,101 @@ pub async fn verify_remote_server_directory(
     .map_err(|error| format!("Remote folder check failed to finish: {error}"))?
 }
 
+pub async fn rename_remote_server_directory(
+    profile: ServerProfile,
+    environment: ServerEnvironment,
+    slug: String,
+    sessions: Arc<RemoteSessionManager>,
+) -> Result<String, String> {
+    run_remote(profile, environment.clone(), sessions, move |session, profile| {
+        if remote_is_running(session, profile)? != Some(false) {
+            return Err("Stop the server and make sure tmux is available before renaming its folder.".into());
+        }
+        let sftp = session.sftp()?;
+        let configured = configured_remote_root(profile)?;
+        if sftp.lstat(Path::new(configured))?.file_type() != FileType::Dir {
+            return Err("The server folder must be a real directory, not a symbolic link.".into());
+        }
+        let source = remote_root_with_sftp(&sftp, configured)?;
+        let environment_root = remote_root_with_sftp(&sftp, &environment.root_directory)?;
+        if source == environment_root {
+            return Err("The configured Minecraft root cannot be renamed as a server folder.".into());
+        }
+        if remote_directory_has_java_process(session, &source)? {
+            return Err("Stop the Java server process before renaming its folder.".into());
+        }
+        let parent = Path::new(&source).parent().ok_or("The server folder has no parent directory.")?;
+        let destination = parent.join(&slug).to_string_lossy().into_owned();
+        if destination != source {
+            let exists = execute(session, &format!("test -e {} || test -L {}", shell_quote(&destination), shell_quote(&destination)))?;
+            if exists.exit_code != 1 {
+                return Err("A folder with the new server name already exists or could not be checked.".into());
+            }
+            sftp.rename(Path::new(&source), Path::new(&destination))
+                .map_err(|error| format!("Could not rename the remote server folder: {error}"))?;
+        }
+        Ok(destination)
+    }).await
+}
+
+pub async fn move_remote_server_directory(
+    profile: ServerProfile,
+    environment: ServerEnvironment,
+    source: String,
+    destination: String,
+    sessions: Arc<RemoteSessionManager>,
+) -> Result<(), String> {
+    run_remote(profile, environment, sessions, move |session, _| {
+        let sftp = session.sftp()?;
+        let exists = execute(session, &format!("test -e {} || test -L {}", shell_quote(&destination), shell_quote(&destination)))?;
+        if exists.exit_code != 1 {
+            return Err("The old server folder path is occupied, so the folder cannot be moved back.".into());
+        }
+        sftp.rename(Path::new(&source), Path::new(&destination))
+            .map_err(|error| format!("Could not move the remote server folder back: {error}"))
+    }).await
+}
+
+pub(crate) async fn remote_process_usage(
+    profile: ServerProfile,
+    environment: ServerEnvironment,
+    sessions: Arc<RemoteSessionManager>,
+) -> Result<Option<(f32, u64)>, String> {
+    run_remote(profile, environment, sessions, move |session, profile| {
+        let root = remote_root(session, configured_remote_root(profile)?)?;
+        let command = format!(
+            "root={}; for process in /proc/[0-9]*; do [ -r \"$process/comm\" ] || continue; [ \"$(cat \"$process/comm\" 2>/dev/null)\" = java ] || continue; cwd=$(readlink -f -- \"$process/cwd\" 2>/dev/null) || continue; case \"$cwd\" in \"$root\"|\"$root\"/*) ps -p \"${{process##*/}}\" -o %cpu=,rss=; exit $?;; esac; done; exit 1",
+            shell_quote(&root),
+        );
+        let result = execute(session, &command)?;
+        if result.exit_code != 0 { return Ok(None); }
+        let output = String::from_utf8_lossy(&result.stdout);
+        let mut parts = output.split_whitespace();
+        let cpu = parts.next().and_then(|value| value.parse::<f32>().ok());
+        let memory = parts.next().and_then(|value| value.parse::<u64>().ok());
+        Ok(cpu.zip(memory).map(|(cpu, memory)| (cpu, memory * 1024)))
+    }).await
+}
+
+pub(crate) async fn ping_remote_server(
+    profile: ServerProfile,
+    environment: ServerEnvironment,
+    port: u16,
+    sessions: Arc<RemoteSessionManager>,
+) -> Result<(u32, u32), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let session = sessions.session(&profile, &environment)?;
+        session.runtime.block_on(async {
+            tokio::time::timeout(Duration::from_secs(3), async {
+                let channel = session.handle.channel_open_direct_tcpip("127.0.0.1", port as u32, "127.0.0.1", 0)
+                    .await.map_err(|error| error.to_string())?;
+                let mut stream = channel.into_stream();
+                crate::server_overview::ping_minecraft_stream(&mut stream, port).await
+            }).await.map_err(|_| "The Minecraft status ping timed out.".to_owned())?
+        })
+    }).await.map_err(|error| format!("Remote status ping failed to finish: {error}"))?
+}
+
 fn connect_remote(
     runtime: &Runtime,
     host: &str,

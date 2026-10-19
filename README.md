@@ -19,7 +19,9 @@ The app can create, edit, list, and remove server profiles. Local servers can be
 
 Remote process control requires `tmux` on the server and a trusted host key in `known_hosts`. Remote file operations stay inside the configured server folder, skip symbolic links, limit text files to 1 MB, and require the managed server to be stopped before writing.
 
-When adding a remote server, Scerite creates the configured Minecraft root if needed, then creates or reuses `<environment root>/servers/<server-name>`. An existing custom server folder can still be selected instead. Renaming the saved server does not rename its folder.
+When adding a remote server, Scerite creates the configured Minecraft root if needed, then creates or reuses `<environment root>/servers/<server-name>`. An existing custom server folder can still be selected instead. Renaming a stopped server also renames its folder, locally or over SSH. If the new folder name already exists, the rename is refused.
+
+The first tab on a server page shows its status, player count, address, software, version, and server-process CPU and RAM use. Player counts come from the Minecraft status response, so they may be unavailable when the server is starting or cannot be reached.
 
 ## Server software installation
 
@@ -44,7 +46,7 @@ Plugins installed through Modrinth can be updated to another compatible release 
 ## Desktop updates
 
 Installed desktop builds check the latest published GitHub release on startup. When a newer version is available, Scerite asks before downloading and installing it. Development builds do not check for updates.
-Every push to `main` runs the release workflow. It uses the version in `package.json` when it has not been released yet; otherwise it bumps the patch version in the app manifests and commits that bump to `main`. It tags the resulting commit, builds signed updater artifacts for Windows, Linux, and macOS, and publishes a GitHub release with `latest.json`.
+Merging a pull request into `main` runs the release workflow. Add clear, user-facing notes under **Unreleased** in [CHANGELOG.md](CHANGELOG.md) before merging. The workflow moves those notes into the new version, bumps the patch version in the app manifests, builds signed updater artifacts for Windows, Linux, and macOS, and publishes the release with those notes and `latest.json`.
 
 ## License
 

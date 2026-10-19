@@ -6,7 +6,12 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 ### Added
 
-- GitHub releases now include notes maintained in this changelog.
+- A Server tab shows connection details, player count, and CPU and RAM use.
+- GitHub releases now show these notes automatically.
+
+### Changed
+
+- Renaming a server also renames its folder, whether it is on this computer or reached through SSH.
 
 ### Fixed
 

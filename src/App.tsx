@@ -3,7 +3,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type { FormEvent } from "react";
-import { ArrowLeft, Download, FileKey, FolderOpen, Globe2, HardDrive, Network, Package, Palette, Plus, Puzzle, Settings, SlidersHorizontal, Terminal, X } from "lucide-react";
+import { ArrowLeft, Download, FileKey, FolderOpen, Globe2, HardDrive, Network, Package, Palette, Plus, Puzzle, Server, Settings, SlidersHorizontal, Terminal, X } from "lucide-react";
 import { appSettings, localInstallRoot, serverEnvironments, serverProfiles } from "./lib/serverProfiles";
 import type { ServerEnvironment, ServerProfile, ServerTarget } from "./lib/serverProfiles";
 import { serverSessions } from "./lib/serverSessions";
@@ -13,6 +13,7 @@ import { WorldsPanel } from "./components/WorldsPanel";
 import { ServerPropertiesPanel } from "./components/ServerPropertiesPanel";
 import { ServerInstallPanel } from "./components/ServerInstallPanel";
 import { PackagesPanel } from "./components/PackagesPanel";
+import { ServerOverviewPanel } from "./components/ServerOverviewPanel";
 import { serverFiles } from "./lib/serverFiles";
 import { packageSupportForSoftware, packageSupportFromFiles } from "./lib/serverSoftware";
 import type { PackageSupport } from "./lib/serverSoftware";
@@ -60,7 +61,7 @@ function readSavedTheme(): ThemeId {
   }
 }
 
-type ServerTab = "console" | "files" | "worlds" | "properties" | "mods" | "plugins" | "install" | "settings";
+type ServerTab = "server" | "console" | "files" | "worlds" | "properties" | "mods" | "plugins" | "install" | "settings";
 
 const emptyDraft: ProfileDraft = {
   name: "",
@@ -224,7 +225,7 @@ function App() {
   const [removingEnvironmentId, setRemovingEnvironmentId] = useState<string | null>(null);
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [isRemoving, setIsRemoving] = useState(false);
-  const [activeServerTab, setActiveServerTab] = useState<ServerTab>("console");
+  const [activeServerTab, setActiveServerTab] = useState<ServerTab>("server");
   const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId);
   const [legacyPackageSupport, setLegacyPackageSupport] = useState<{ profileId: string; support: PackageSupport } | null>(null);
   const packageSupport = packageSupportForSoftware(selectedProfile?.installedSoftware)
@@ -250,7 +251,7 @@ function App() {
 
   useEffect(() => {
     if (packageSupport && ((activeServerTab === "mods" && !packageSupport.mods) || (activeServerTab === "plugins" && !packageSupport.plugins))) {
-      setActiveServerTab("console");
+      setActiveServerTab("server");
     }
   }, [activeServerTab, packageSupport?.mods, packageSupport?.plugins]);
   const visibleProfiles = !selectedProfileId && environmentFilterId
@@ -849,6 +850,7 @@ function App() {
                   placeholder="Survival world"
                   required
                 />
+                {editingProfile && <small>Renaming this server also renames its folder. Stop the server first. Change its location in a separate save.</small>}
               </label>
 
               <fieldset className="field field-wide target-choice">
@@ -1069,6 +1071,9 @@ function App() {
               </div>
             </section>
             <nav className="server-tab-list" aria-label="Server sections">
+              <button className={`server-tab${activeServerTab === "server" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "server" ? "page" : undefined} onClick={() => setActiveServerTab("server")}>
+                <Server size={16} aria-hidden="true" /> Server
+              </button>
               <button className={`server-tab${activeServerTab === "console" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "console" ? "page" : undefined} onClick={() => { setActiveServerTab("console"); if (consoleProfileId !== selectedProfile.id) toggleConsole(selectedProfile); }}>
                 <Terminal size={16} aria-hidden="true" /> Console
               </button>
@@ -1335,6 +1340,9 @@ function App() {
               const state = status?.state ?? "checking";
               const remoteState = remoteStatus?.state;
               const serverRunning = isLocal ? state === "running" : remoteState === "running";
+              const overviewState = isLocal
+                ? !status ? "checking" : state === "stopped" ? "offline" : "online"
+                : !remoteState ? "checking" : ["running", "stopping", "unmanaged"].includes(remoteState) ? "online" : "offline";
               const remoteStateLabel = remoteState === "unreachable"
                 ? "SSH status unavailable"
                 : remoteState === "unmanaged"
@@ -1348,7 +1356,7 @@ function App() {
               return (
                 <article className={`server-row${selectedProfileId === profile.id ? " server-row-detail" : ""}`} key={profile.id} hidden={!!selectedProfileId && selectedProfileId !== profile.id}>
                   {!isDetailPage && (
-                    <Link className="server-row-open" to={`/servers/${profile.id}`} onClick={() => setActiveServerTab("console")} aria-label={`Open ${profile.name}`}>
+                    <Link className="server-row-open" to={`/servers/${profile.id}`} onClick={() => setActiveServerTab("server")} aria-label={`Open ${profile.name}`}>
                       <span className={isLocal ? "server-icon server-icon-local" : "server-icon server-icon-remote"} aria-hidden="true">
                         {isLocal ? <HardDrive size={18} /> : <Network size={18} />}
                       </span>
@@ -1368,6 +1376,9 @@ function App() {
                   {isDetailPage ? (
                     <div className="server-detail-content">
                       <div className="server-tab-content">
+                        <section className="server-tab-panel" hidden={activeServerTab !== "server"} aria-label="Server overview">
+                          {activeServerTab === "server" && <ServerOverviewPanel profile={profile} environment={target.kind === "remote" ? environments.find((item) => item.id === target.environmentId) : undefined} state={overviewState} />}
+                        </section>
                         <section className="server-tab-panel" hidden={activeServerTab !== "console"} aria-label="Server console">
                           {consoleProfileId === profile.id ? (
                             <section className="console-panel" aria-label={`${profile.name} console`}>
