@@ -2,6 +2,7 @@ use std::{
     collections::HashMap,
     env,
     path::{Path, PathBuf},
+    io::SeekFrom,
     sync::{Arc, Mutex},
     time::Duration,
     time::Instant,
@@ -22,7 +23,7 @@ use russh_sftp::{
 use serde::Serialize;
 use tauri::State;
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
     runtime::{Builder, Runtime},
 };
 use uuid::Uuid;
@@ -32,6 +33,7 @@ use crate::server_profiles::{
     LocalLaunchConfig, ServerEnvironment, ServerProfile, ServerProfileStore, ServerTarget,
 };
 use crate::java_runtime::JavaPackage;
+use crate::server_logs::{self, ServerLogSnapshot};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_FILE_BYTES: u64 = 1024 * 1024;
@@ -620,6 +622,47 @@ pub async fn read_remote_server_log_start(
             Ok(String::from_utf8_lossy(&bytes).into_owned())
         },
     ).await
+}
+
+#[tauri::command]
+pub async fn read_remote_server_log(
+    profile_id: Uuid,
+    name: String,
+    profiles: State<'_, ServerProfileStore>,
+    remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<ServerLogSnapshot, String> {
+    if !server_logs::valid_log_name(&name) {
+        return Err("Choose a log file from this server's logs folder.".into());
+    }
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    run_remote(profile, environment, Arc::clone(remote_sessions.inner()), move |session, profile| {
+        let sftp = session.sftp().map_err(|error| format!("Could not open SFTP: {error}"))?;
+        let root = remote_root_with_sftp(&sftp, configured_remote_root(profile)?)?;
+        let requested = resolve_remote_relative(&root, &format!("logs/{name}"), false)?;
+        reject_remote_symlink_path(&sftp, &root, &requested)?;
+        let canonical = canonical_inside(&sftp, &root, &requested)?;
+        let metadata = sftp.lstat(Path::new(&canonical))
+            .map_err(|error| format!("Could not inspect the server log: {error}"))?;
+        if metadata.file_type() != FileType::File {
+            return Err("The selected log is not a regular file.".into());
+        }
+        let (bytes, truncated) = if name.ends_with(".gz") {
+            let limit = server_logs::max_compressed_bytes();
+            if metadata.size.is_some_and(|size| size > limit) {
+                return Err("This archived log is too large to display (over 16 MB compressed).".into());
+            }
+            let bytes = sftp.read_prefix(Path::new(&canonical), limit as usize + 1)
+                .map_err(|error| format!("Could not read the server log: {error}"))?;
+            if bytes.len() as u64 > limit {
+                return Err("This archived log is too large to display (over 16 MB compressed).".into());
+            }
+            (bytes, false)
+        } else {
+            sftp.read_tail(Path::new(&canonical), server_logs::tail_bytes())
+                .map_err(|error| format!("Could not read the server log: {error}"))?
+        };
+        server_logs::decode_log(&name, bytes, truncated)
+    }).await
 }
 
 pub(crate) async fn remote_package_names(
@@ -1461,6 +1504,26 @@ impl RemoteSftp {
             }
             file.close().await.map_err(|e| e.to_string())?;
             Ok::<_, String>(bytes)
+        })
+    }
+    fn read_tail(&self, path: &Path, limit: usize) -> Result<(Vec<u8>, bool), String> {
+        let path = path.to_string_lossy().to_string();
+        self.runtime.block_on(async {
+            let mut file = self.inner.open(path).await.map_err(|e| e.to_string())?;
+            let size = file.seek(SeekFrom::End(0)).await.map_err(|e| e.to_string())?;
+            let truncated = size > limit as u64;
+            file.seek(SeekFrom::Start(size.saturating_sub(limit as u64)))
+                .await.map_err(|e| e.to_string())?;
+            let mut bytes = Vec::new();
+            let mut buffer = [0_u8; 8192];
+            while bytes.len() < limit {
+                let remaining = (limit - bytes.len()).min(buffer.len());
+                let count = file.read(&mut buffer[..remaining]).await.map_err(|e| e.to_string())?;
+                if count == 0 { break; }
+                bytes.extend_from_slice(&buffer[..count]);
+            }
+            file.close().await.map_err(|e| e.to_string())?;
+            Ok::<_, String>((bytes, truncated))
         })
     }
     fn write_file_exclusive(&self, path: &Path, content: &[u8]) -> Result<(), String> {

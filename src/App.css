@@ -894,6 +894,28 @@
   flex-direction: column;
 }
 
+.server-detail-shell .server-tab-panel[aria-label="Server logs"]:not([hidden]) {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+.logs-panel { display: flex; min-height: 0; flex: 1 1 auto; flex-direction: column; gap: 16px; padding: 18px; }
+.logs-header { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
+.logs-header h2 { margin: 0 0 4px; font-size: 20px; }
+.logs-header p { margin: 0; color: var(--app-muted); font-size: 13px; }
+.logs-layout { display: grid; min-height: 0; flex: 1 1 auto; grid-template-columns: minmax(155px, 210px) minmax(0, 1fr); gap: 12px; }
+.logs-list { display: flex; min-height: 0; flex-direction: column; gap: 4px; overflow-y: auto; }
+.logs-item { min-height: 36px; padding: 7px 10px; border: 0; border-radius: 8px; color: var(--app-muted); background: transparent; cursor: pointer; font: inherit; text-align: left; overflow-wrap: anywhere; }
+.logs-item:hover, .logs-item-active { color: var(--app-accent); background: var(--app-accent-soft); }
+.logs-item:focus-visible { outline: 3px solid color-mix(in srgb, var(--app-accent) 32%, transparent); outline-offset: 2px; }
+.logs-reader { display: flex; min-width: 0; min-height: 0; flex-direction: column; border: 1px solid var(--app-line); border-radius: 9px; background: var(--app-ground); }
+.logs-reader-heading { display: flex; justify-content: space-between; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--app-line); }
+.logs-reader-heading span { color: var(--app-muted); font-size: 12px; }
+.logs-reader pre { min-height: 0; flex: 1 1 auto; margin: 0; padding: 14px; overflow: auto; font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 640px) { .logs-layout { grid-template-columns: 1fr; grid-template-rows: minmax(80px, 140px) minmax(0, 1fr); } }
+
 .server-detail-shell .server-tab-empty {
   width: 100%;
   min-height: 0;

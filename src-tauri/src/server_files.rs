@@ -172,7 +172,7 @@ pub fn write_local_server_file(
     fs::write(path, content).map_err(|error| format!("Could not save the server file: {error}"))
 }
 
-fn local_server_root(
+pub(crate) fn local_server_root(
     profile_id: Uuid,
     profiles: &State<'_, ServerProfileStore>,
 ) -> Result<PathBuf, String> {
@@ -189,7 +189,7 @@ fn local_server_root(
         .map_err(|_| "The server folder could not be found or opened.".to_owned())
 }
 
-fn resolve_existing(root: &Path, relative_path: &str) -> Result<PathBuf, String> {
+pub(crate) fn resolve_existing(root: &Path, relative_path: &str) -> Result<PathBuf, String> {
     let relative = safe_relative_path(relative_path)?;
     let path = root
         .join(relative)

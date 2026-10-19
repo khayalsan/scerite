@@ -4,6 +4,10 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 ## [Unreleased]
 
+### Added
+
+- A Logs tab shows the latest server output and any older log files, including compressed archives.
+
 ### Changed
 
 - The sidebar now shows the scerite logo instead of an initial.
