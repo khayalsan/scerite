@@ -477,14 +477,25 @@ function App() {
   async function controlRemoteServer(profileId: string, action: "start" | "stop") {
     setBusySessionId(profileId);
     setSessionError(null);
+    if (action === "start") {
+      setActiveServerTab("console");
+      setConsoleProfileId(profileId);
+      setConsoleOutput("Starting server…");
+    }
     try {
-      if (action === "start" && consoleProfileId === profileId) setConsoleOutput("");
       const status = await serverSessions[action === "start" ? "startRemote" : "stopRemote"](profileId);
       setRemoteStatuses((current) => ({ ...current, [profileId]: status }));
       setConnectedRemotes((current) => ({ ...current, [profileId]: true }));
     } catch (error) {
       setSessionError(errorText(error));
-      setRemoteStatuses((current) => ({ ...current, [profileId]: { state: "unreachable" } }));
+      try {
+        const status = await serverSessions.remoteStatus(profileId);
+        setRemoteStatuses((current) => ({ ...current, [profileId]: status }));
+        setConnectedRemotes((current) => ({ ...current, [profileId]: true }));
+      } catch {
+        setRemoteStatuses((current) => ({ ...current, [profileId]: { state: "unreachable" } }));
+        setConnectedRemotes((current) => ({ ...current, [profileId]: false }));
+      }
     } finally {
       setBusySessionId(null);
     }
@@ -532,8 +543,8 @@ function App() {
     if (!consoleProfileId) return;
     const profile = profiles.find((item) => item.id === consoleProfileId);
     if (profile?.target.kind === "remote") {
-      if (consoleRemoteState !== "running" && consoleRemoteState !== "stopping") {
-        setConsoleOutput(consoleRemoteState === "stopped" ? "Server is stopped." : "SSH status is unavailable.");
+      if (consoleRemoteState === "unreachable") {
+        setConsoleOutput("SSH status is unavailable.");
         return;
       }
       let active = true;
@@ -541,7 +552,7 @@ function App() {
       const refresh = async () => {
         try {
           const snapshot = await serverSessions.remoteConsole(consoleProfileId);
-          if (active) setConsoleOutput(snapshot.lines.slice(-1000).join("\n"));
+          if (active) setConsoleOutput(snapshot.lines.slice(-1000).join("\n") || (consoleRemoteState === "stopped" ? "Server is stopped. No console output is available." : "Console output will appear here."));
         } catch (error) {
           if (active) {
             setSessionError(errorText(error));
@@ -549,7 +560,7 @@ function App() {
             setConnectedRemotes((current) => ({ ...current, [consoleProfileId]: false }));
           }
         } finally {
-          if (active) timer = window.setTimeout(() => void refresh(), 2000);
+          if (active && consoleRemoteState !== "stopped") timer = window.setTimeout(() => void refresh(), 2000);
         }
       };
       setConsoleOutput("");

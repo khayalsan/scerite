@@ -282,15 +282,57 @@ pub async fn start_remote_server(
             Some(actual)
         } else { None };
         let command = launch_command(launch, managed_java.as_deref());
+        let name = shell_quote(&session_name(profile.id));
+        let existing = execute(session, &format!("tmux has-session -t {name}"))?;
+        if existing.exit_code == 0 {
+            let removed = execute(session, &format!("tmux kill-session -t {name}"))?;
+            if removed.exit_code != 0 {
+                return Err(remote_command_error("Could not clear the previous remote console", removed));
+            }
+        }
         let tmux_command = format!(
-            "tmux new-session -d -s {} -c {} {}",
-            shell_quote(&session_name(profile.id)),
+            "tmux new-session -d -s {name} -c {} 'sleep 30'",
             shell_quote(&root),
-            shell_quote(&command),
         );
         let result = execute(session, &tmux_command)?;
         if result.exit_code != 0 {
             return Err(remote_command_error("Could not start the remote server", result));
+        }
+        let retain = execute(
+            session,
+            &format!("tmux set-window-option -t {name} remain-on-exit on"),
+        )?;
+        if retain.exit_code != 0 {
+            let _ = execute(session, &format!("tmux kill-session -t {name}"));
+            return Err(remote_command_error("Could not retain the remote console after exit", retain));
+        }
+        let launch = execute(
+            session,
+            &format!(
+                "tmux respawn-pane -k -t {name} -c {} {}",
+                shell_quote(&root),
+                shell_quote(&command),
+            ),
+        )?;
+        if launch.exit_code != 0 {
+            let _ = execute(session, &format!("tmux kill-session -t {name}"));
+            return Err(remote_command_error("Could not launch the remote server", launch));
+        }
+        if remote_is_running(session, profile)? == Some(false) {
+            let output = execute(session, &format!("tmux capture-pane -p -S -1000 -t {name}"))?;
+            let details = String::from_utf8_lossy(&output.stdout);
+            let last_lines = details
+                .lines()
+                .rev()
+                .take(12)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect::<Vec<_>>()
+                .join("\n");
+            return Err(format!(
+                "The server exited during startup. Check its console for the full output.\n{last_lines}"
+            ));
         }
         Ok(RemoteServerStatus { state: "running".into(), tmux_available: true })
     })
@@ -335,13 +377,13 @@ pub async fn remote_server_console(
 ) -> Result<RemoteConsoleSnapshot, String> {
     let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
     run_remote(profile, environment, Arc::clone(remote_sessions.inner()), |session, profile| {
-        if remote_is_running(session, profile)? != Some(true) {
+        let running = remote_is_running(session, profile)?;
+        if running != Some(true) {
             if let Some(root) = optional_remote_root(session, profile)? {
                 if remote_directory_has_java_process(session, &root)? {
                     return Err("The server is running outside scerite's tmux session; its console is not attached.".into());
                 }
             }
-            return Ok(RemoteConsoleSnapshot { lines: Vec::new() });
         }
         let command = format!(
             "tmux capture-pane -p -S -1000 -t {}",
@@ -349,6 +391,9 @@ pub async fn remote_server_console(
         );
         let result = execute(session, &command)?;
         if result.exit_code != 0 {
+            if running != Some(true) {
+                return Ok(RemoteConsoleSnapshot { lines: Vec::new() });
+            }
             return Err(remote_command_error("Could not read the remote console", result));
         }
         let output = String::from_utf8_lossy(&result.stdout);
@@ -1195,12 +1240,12 @@ fn remote_is_running(
     profile: &ServerProfile,
 ) -> Result<Option<bool>, String> {
     let command = format!(
-        "tmux has-session -t {}",
+        "tmux display-message -p -t {} '#{{pane_dead}}'",
         shell_quote(&session_name(profile.id))
     );
     let result = execute(session, &command)?;
     if result.exit_code == 0 {
-        return Ok(Some(true));
+        return Ok(Some(String::from_utf8_lossy(&result.stdout).trim() != "1"));
     }
     let details = String::from_utf8_lossy(&result.stderr);
     if details.contains("command not found") || result.exit_code == 127 {

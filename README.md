@@ -17,7 +17,7 @@ Profile data contains server names, local or remote server folders, launch comma
 
 The app can create, edit, list, and remove server profiles. Local servers can be launched in sessions that survive the desktop app, with a live console and a guarded file editor. Remote Linux profiles can use SSH to manage persistent `tmux` sessions, send console commands, and browse or edit files over SFTP.
 
-Remote process control requires `tmux` on the server and a trusted host key in `known_hosts`. Remote file operations stay inside the configured server folder, skip symbolic links, limit text files to 1 MB, and require the managed server to be stopped before writing.
+Remote process control requires `tmux` on the server and a trusted host key in `known_hosts`. If a remote server exits, its last console output remains available until the next start. Remote file operations stay inside the configured server folder, skip symbolic links, limit text files to 1 MB, and require the managed server to be stopped before writing.
 
 When adding a remote server, Scerite creates the configured Minecraft root if needed, then creates or reuses `<environment root>/servers/<server-name>`. An existing custom server folder can still be selected instead. Renaming a stopped server also renames its folder, locally or over SSH. If the new folder name already exists, the rename is refused.
 
