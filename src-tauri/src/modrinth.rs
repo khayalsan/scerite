@@ -130,7 +130,7 @@ pub async fn search_modrinth(
         return Err("Choose a valid search order.".into());
     }
     let facets = serde_json::json!([
-        [format!("project_type:{kind}")],
+        [format!("all_project_types:{kind}")],
         [format!("categories:{loader}")],
         [format!("versions:{game_version}")],
         [
@@ -155,7 +155,7 @@ pub async fn search_modrinth(
     Ok(hits
         .iter()
         .filter(|hit| {
-            hit["project_type"].as_str() == Some(kind.as_str())
+            hit["all_project_types"].as_array().is_some_and(|items| items.iter().any(|item| item.as_str() == Some(kind.as_str())))
                 && hit["categories"].as_array().is_some_and(|items| items.iter().any(|item| item.as_str() == Some(loader.as_str())))
                 && hit["versions"].as_array().is_some_and(|items| items.iter().any(|item| item.as_str() == Some(game_version.as_str())))
         })
@@ -516,19 +516,29 @@ async fn resolve_install_plan(
         }
         if packages.len() >= 32 { return Err("This install requires more than 32 packages. Install it manually.".into()); }
         let project = get_json(client, api_url(&format!("project/{id}"))?).await?;
-        if project["id"].as_str() != Some(id) || project["project_type"].as_str() != Some(kind) {
+        // Modrinth's project detail reports plugins as the legacy "mod" type;
+        // the selected release's loader and server compatibility distinguish them.
+        let project_type = project["project_type"].as_str();
+        if project["id"].as_str() != Some(id)
+            || (project_type != Some("mod") && !(kind == "plugin" && project_type == Some("plugin"))) {
             return Err("A required dependency has the wrong Modrinth project type.".into());
         }
         let title = project["title"].as_str().unwrap_or(id).to_owned();
         let file = installable_file(&version)?.clone();
         let suggested_filename = safe_filename(file["filename"].as_str().unwrap_or_default(), id, selected_id);
         let installed = profile.installed_packages.iter().find(|item| item.kind == kind && item.project_id == id && existing_names.contains(&item.filename));
-        let filename = installed.map(|item| item.filename.clone()).unwrap_or(suggested_filename);
+        let updating = installed.filter(|item| item.version_id != selected_id);
+        if updating.is_some() && (kind != "plugin" || request.parent_id.is_some()) {
+            return Err(format!("{title} is already installed at another version. Remove its JAR before installing this release."));
+        }
+        if updating.is_some_and(|item| !item.required_by.is_empty()) {
+            return Err("A plugin required by another package cannot be updated here.".into());
+        }
+        let filename = if let Some(item) = updating {
+            if suggested_filename == item.filename { format!("{id}-{selected_id}.jar") } else { suggested_filename }
+        } else { installed.map(|item| item.filename.clone()).unwrap_or(suggested_filename) };
         if packages.iter().any(|item| item.entry.filename == filename) {
             return Err(format!("Multiple packages use the filename {filename}. Rename the existing package before installing."));
-        }
-        if installed.is_some_and(|item| item.version_id != selected_id) {
-            return Err(format!("{title} is already installed at another version. Remove its JAR before installing this release."));
         }
         let already_installed = if existing_names.contains(&filename) {
             let expected = file["hashes"]["sha512"].as_str().ok_or("Modrinth did not provide a package checksum.")?;
@@ -698,6 +708,12 @@ pub async fn install_modrinth_plan(
     if actual_versions != expected_versions {
         return Err("The required package list changed. Review the install plan again before confirming.".into());
     }
+    let previous_plugin = if kind == "plugin" {
+        profile.installed_packages.iter().find(|item| item.kind == "plugin" && item.project_id == project_id && item.version_id != version_id && names.contains(&item.filename)).cloned()
+    } else { None };
+    let current_title = plan.iter().find(|item| item.entry.project_id == project_id)
+        .map(|item| item.entry.title.clone()).unwrap_or_default();
+    let required_ids: Vec<_> = plan.iter().filter(|item| !item.entry.direct).map(|item| item.entry.project_id.clone()).collect();
     let mut installed = 0;
     for package in plan {
         if !package.entry.already_installed {
@@ -705,6 +721,12 @@ pub async fn install_modrinth_plan(
                 .await
                 .map_err(|error| format!("Could not finish installing packages after {installed} JAR(s): {error}. Refresh the installed list before retrying."))?;
             installed += 1;
+        }
+        if kind == "plugin" && package.entry.project_id == project_id {
+            if let Some(previous) = profile.installed_packages.iter().find(|item| item.kind == "plugin" && item.project_id == project_id && item.version_id != package.entry.version_id) {
+                remove_tracked_plugin(profile_id, &project_id, &previous.version_id, false, &profiles, &local_sessions, &remote_sessions)
+                    .await.map_err(|error| format!("The new plugin JAR was installed, but the previous version remains: {error}"))?;
+            }
         }
         profiles.record_installed_package(profile_id, InstalledPackage {
             kind: kind.clone(),
@@ -716,6 +738,83 @@ pub async fn install_modrinth_plan(
             direct: package.entry.direct,
         })?;
     }
+    if let Some(previous) = previous_plugin {
+        profiles.reconcile_plugin_dependencies(profile_id, &previous.title, &current_title, &required_ids)?;
+    }
     if installed == 0 { Ok("All selected packages are already installed. Dependency labels are up to date.".into()) }
     else { Ok(format!("Installed {installed} JAR(s), including required dependencies.")) }
+}
+
+async fn remove_tracked_plugin(
+    profile_id: Uuid,
+    project_id: &str,
+    version_id: &str,
+    clear_dependencies: bool,
+    profiles: &ServerProfileStore,
+    local_sessions: &LocalSessionManager,
+    remote_sessions: &Arc<RemoteSessionManager>,
+) -> Result<(), String> {
+    let profile = profiles.list()?.into_iter().find(|item| item.id == profile_id)
+        .ok_or("Server profile was not found.")?;
+    profile.target.validate()?;
+    let package = profile.installed_packages.iter().find(|item| item.kind == "plugin" && item.project_id == project_id && item.version_id == version_id)
+        .ok_or("The installed plugin changed. Refresh the list before removing it.")?;
+    if !package.required_by.is_empty() {
+        return Err("This plugin is required by another installed plugin. Remove that plugin first.".into());
+    }
+    if profile.installed_packages.iter().any(|item| item.kind == "plugin" && item.project_id != project_id && item.filename == package.filename) {
+        return Err("Another package record uses this JAR. It was not removed.".into());
+    }
+    if !catalog_id(project_id) || !catalog_id(version_id)
+        || safe_filename(&package.filename, project_id, version_id) != package.filename {
+        return Err("The saved plugin record has an invalid file name or catalog ID.".into());
+    }
+    if matches!(profile.target, ServerTarget::Local { .. })
+        && !matches!(local_sessions.status(profile_id)?.state, LocalServerState::Stopped) {
+        return Err("Stop the server before removing plugins.".into());
+    }
+    let version = get_json(&client()?, api_url(&format!("version/{version_id}"))?).await?;
+    if version["project_id"].as_str() != Some(project_id) {
+        return Err("The saved plugin does not match its Modrinth project.".into());
+    }
+    let expected = installable_file(&version)?["hashes"]["sha512"].as_str()
+        .ok_or("Modrinth did not provide the installed plugin checksum.")?;
+    if !existing_package_matches(&profile, "plugins", &package.filename, expected, &profiles, &remote_sessions).await? {
+        return Err("The installed JAR differs from its published version. It was not removed.".into());
+    }
+    match &profile.target {
+        ServerTarget::Local { directory, .. } => {
+            if !matches!(local_sessions.status(profile_id)?.state, LocalServerState::Stopped) {
+                return Err("Stop the server before removing plugins.".into());
+            }
+            let root = fs::canonicalize(directory).map_err(|_| "The server folder could not be opened.")?;
+            let folder = root.join("plugins");
+            if fs::canonicalize(&folder).map_err(|error| format!("Could not inspect plugins folder: {error}"))? != folder {
+                return Err("The plugins folder is a symbolic link or leaves the server folder.".into());
+            }
+            let path = folder.join(&package.filename);
+            if fs::symlink_metadata(&path).map_err(|error| format!("Could not inspect plugin: {error}"))?.file_type().is_symlink() {
+                return Err("The installed plugin is a symbolic link.".into());
+            }
+            fs::remove_file(path).map_err(|error| format!("Could not remove plugin: {error}"))?;
+        }
+        ServerTarget::Remote { environment_id, .. } => {
+            let environment = profiles.environment(*environment_id)?;
+            remote_ssh::remove_remote_plugin(profile.clone(), environment, Arc::clone(remote_sessions), package.filename.clone()).await?;
+        }
+    }
+    profiles.remove_installed_package(profile_id, project_id, clear_dependencies)
+        .map_err(|error| format!("The plugin JAR was removed, but its saved record could not be updated: {error}"))
+}
+
+#[tauri::command]
+pub async fn remove_modrinth_plugin(
+    profile_id: Uuid,
+    project_id: String,
+    version_id: String,
+    profiles: State<'_, ServerProfileStore>,
+    local_sessions: State<'_, LocalSessionManager>,
+    remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<(), String> {
+    remove_tracked_plugin(profile_id, &project_id, &version_id, true, &profiles, &local_sessions, &remote_sessions).await
 }

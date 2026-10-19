@@ -31,7 +31,9 @@ The installer reads the required Java major version from Mojang's release metada
 
 ## Mods and plugins
 
-The **Mods & plugins** tab lists JAR files in the selected server's `mods/` or `plugins/` folder. Enter the server's Minecraft version and loader, then search Modrinth for compatible server packages. Select a published release to download and install its primary JAR. Downloads are checked against Modrinth's SHA-512 checksum and never replace an existing file. The server must be stopped. Required dependencies are shown but are not installed automatically; install them separately before starting the server. The tab supports local and remote Linux servers.
+The **Mods & plugins** tab lists JAR files in the selected server's `mods/` or `plugins/` folder. Enter the server's Minecraft version and loader, then search Modrinth for compatible server packages. Select a published release to download and install its primary JAR and required dependencies. Downloads are checked against Modrinth's SHA-512 checksum and never replace an existing file. The server must be stopped. The tab supports local and remote Linux servers.
+
+Plugins installed through Modrinth can be updated to another compatible release or removed from the installed list. Updates verify the new JAR before removing the previous one. Removal checks the installed JAR against its published checksum and refuses to remove plugins still required by another installed plugin. Untracked JARs remain visible but have no update or removal controls.
 
 ## Development
 

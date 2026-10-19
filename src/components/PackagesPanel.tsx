@@ -196,13 +196,29 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software, i
     finally { setBusy(false); }
   }
 
+  async function removePlugin(record: InstalledPackage) {
+    if (!window.confirm(`Remove ${record.title} (${record.filename}) from this server?`)) return;
+    setBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      await invoke("remove_modrinth_plugin", { profileId, projectId: record.projectId, versionId: record.versionId });
+      setMessage(`Removed ${record.title}.`);
+      await refreshInstalled();
+      setPlan([]);
+    } catch (cause) { setError(errorText(cause)); await refreshInstalled(); }
+    finally { setBusy(false); }
+  }
+
   const selectedVersion = versions.find((version) => version.id === selectedVersionId);
+  const selectedInstalled = installedPackages.find((item) => item.kind === kind && item.projectId === selectedProject?.id && installed.some((file) => file.name === item.filename));
+  const updating = kind === "plugin" && selectedInstalled && selectedInstalled.versionId !== selectedVersionId;
   const dependencyFiles = installed.filter((entry) => installedPackages.some((item) => item.kind === kind && item.filename === entry.name && !item.direct && item.requiredBy.length > 0));
   const primaryFiles = installed.filter((entry) => !dependencyFiles.includes(entry));
 
   function installedRow(entry: ServerFileEntry) {
     const record = installedPackages.find((item) => item.kind === kind && item.filename === entry.name);
-    return <li key={entry.path}><Package size={16} aria-hidden="true" /><span className="packages-installed-copy" title={entry.name}><strong>{record?.title ?? entry.name}</strong>{record && <small>{entry.name}</small>}{record?.requiredBy.length ? <em className="packages-tag packages-tag-dependency">Dependency for {record.requiredBy.join(", ")}</em> : null}</span><small>{(entry.size / 1024 / 1024).toFixed(1)} MB</small></li>;
+    return <li key={entry.path}><Package size={16} aria-hidden="true" /><span className="packages-installed-copy" title={entry.name}><strong>{record?.title ?? entry.name}</strong>{record && <small>{entry.name}</small>}{record?.requiredBy.length ? <em className="packages-tag packages-tag-dependency">Dependency for {record.requiredBy.join(", ")}</em> : null}</span><small>{(entry.size / 1024 / 1024).toFixed(1)} MB</small>{kind === "plugin" && record && <span className="packages-installed-actions"><button type="button" className="button button-quiet" disabled={busy || !gameVersion || record.requiredBy.length > 0} onClick={() => void chooseProject({ id: record.projectId, title: record.title, description: "", author: "", iconUrl: null, downloads: 0 })}>Update</button><button type="button" className="button button-quiet" disabled={busy || !canInstall || record.requiredBy.length > 0} onClick={() => void removePlugin(record)}>Remove</button></span>}</li>;
   }
 
   useEffect(() => {
@@ -249,7 +265,7 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software, i
           </button>)}</div>
           <div className="packages-version">
             {selectedProject ? <>
-              <div className="packages-detail-heading">{selectedProject.iconUrl && <img src={selectedProject.iconUrl} alt="" />}<div><h3>{selectedProject.title}</h3><p>by {selectedProject.author}</p></div></div>
+              <div className="packages-detail-heading">{selectedProject.iconUrl && <img src={selectedProject.iconUrl} alt="" />}<div><h3>{selectedProject.title}</h3>{selectedProject.author && <p>by {selectedProject.author}</p>}</div></div>
               <p>{selectedProject.description}</p>
               {loadingVersions ? <p role="status">Loading compatible releases…</p> : versions.length === 0 ? <p>No compatible releases were found.</p> : <>
                 <label htmlFor="package-version">Release</label>
@@ -258,14 +274,15 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software, i
                   <SelectContent>{versions.map((version) => <SelectItem key={version.id} value={version.id}>{version.name || version.versionNumber}</SelectItem>)}</SelectContent>
                 </Select>
                 {selectedVersion && <p>{selectedVersion.versionNumber}</p>}
+                {updating && <p>The new JAR is verified before the previous version is removed. If cleanup fails, both JARs may remain; review the installed list before starting the server.</p>}
                 <div className="packages-plan" aria-live="polite">
                   <h4>Review download</h4>
                   {loadingPlan ? <p>Finding required dependencies…</p> : plan.length > 0 ? <>
-                    <p>{plan.filter((item) => !item.alreadyInstalled).length} JARs to add · {plan.filter((item) => item.alreadyInstalled).length} already installed</p>
+                    <p>{plan.filter((item) => !item.alreadyInstalled).length} JARs to add · {plan.filter((item) => item.alreadyInstalled).length} already installed{updating ? ` · replaces ${selectedInstalled.filename}` : ""}</p>
                     <ul>{[...plan].reverse().map((item) => <li key={item.projectId}><div><strong>{item.title}</strong><small>{item.versionNumber} · {item.filename}</small></div><span className={item.direct ? "packages-tag" : "packages-tag packages-tag-dependency"}>{item.direct ? `Selected ${kind}` : `Dependency for ${item.requiredBy.join(", ")}`}</span>{item.alreadyInstalled && <span className="packages-tag packages-tag-installed">Installed</span>}</li>)}</ul>
                   </> : null}
                 </div>
-                <button className="button button-primary" type="button" onClick={() => void install()} disabled={!canInstall || busy || loadingPlan || plan.length === 0}><Download size={15} aria-hidden="true" /> {busy ? "Installing…" : `Confirm and install ${plan.filter((item) => !item.alreadyInstalled).length}`}</button>
+                <button className="button button-primary" type="button" onClick={() => void install()} disabled={!canInstall || busy || loadingPlan || plan.length === 0}><Download size={15} aria-hidden="true" /> {busy ? "Installing…" : updating ? "Confirm plugin update" : `Confirm and install ${plan.filter((item) => !item.alreadyInstalled).length}`}</button>
                 {!canInstall && <p className="files-error">Stop the server and confirm its status before installing.</p>}
               </>}
             </> : <p className="state-message">Select a result to see releases and required dependencies.</p>}

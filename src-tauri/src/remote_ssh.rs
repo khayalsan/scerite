@@ -951,14 +951,16 @@ async fn connect_remote_async(
             error: Arc::clone(&key_error),
         };
         let config = Arc::new(client::Config {
-            inactivity_timeout: Some(CONNECTION_IDLE_TIMEOUT),
+            // Quiet installs and long-running commands can exceed the cache's idle lifetime.
+            // Keep the transport alive until the operation finishes instead of closing it mid-command.
+            inactivity_timeout: None,
+            keepalive_interval: Some(Duration::from_secs(15)),
             ..Default::default()
         });
         match tokio::time::timeout(CONNECT_TIMEOUT, client::connect(config, address, handler)).await
         {
             Ok(Ok(mut handle)) => {
                 if authenticate(&mut handle, username, identity_file).await? {
-                    let _ = handle.send_keepalive(false).await;
                     return Ok(Arc::new(handle));
                 }
                 return Err("SSH authentication failed. Check the selected key or load the key into your SSH agent; encrypted private keys must be unlocked by the agent.".into());
@@ -1634,6 +1636,39 @@ pub(crate) async fn install_remote_package(
         })();
         let _ = sftp.unlink(Path::new(&temporary));
         result
+    }).await
+}
+
+pub(crate) async fn remove_remote_plugin(
+    profile: ServerProfile,
+    environment: ServerEnvironment,
+    sessions: Arc<RemoteSessionManager>,
+    filename: String,
+) -> Result<(), String> {
+    run_remote(profile, environment, sessions, move |session, profile| {
+        match remote_is_running(session, profile)? {
+            Some(false) => {}
+            Some(true) => return Err("Stop the server before removing plugins.".into()),
+            None => return Err("tmux is required to confirm the remote server is stopped.".into()),
+        }
+        let sftp = session.sftp()?;
+        let root = remote_root_with_sftp(&sftp, configured_remote_root(profile)?)?;
+        if remote_directory_has_java_process(session, &root)? {
+            return Err("A Java process is using the server folder. Stop it before removing plugins.".into());
+        }
+        let directory = format!("{root}/plugins");
+        reject_remote_symlink_path(&sftp, &root, &directory)?;
+        if remote_root_with_sftp(&sftp, &directory)? != directory {
+            return Err("The plugin folder resolves outside the server folder.".into());
+        }
+        let path = format!("{directory}/{filename}");
+        let stat = sftp.lstat(Path::new(&path))
+            .map_err(|error| format!("Could not inspect installed plugin: {error}"))?;
+        if stat.file_type() != FileType::File {
+            return Err("The installed plugin is not a regular file.".into());
+        }
+        sftp.unlink(Path::new(&path))
+            .map_err(|error| format!("Could not remove installed plugin: {error}"))
     }).await
 }
 
