@@ -21,6 +21,7 @@ use uuid::Uuid;
 
 use crate::server_profiles::{ServerProfileStore, ServerTarget};
 use crate::eula;
+use crate::server_port;
 
 const MANAGER_ARGUMENT: &str = "--scerite-session-manager";
 const TOKEN_FILE: &str = "session-manager.token";
@@ -728,6 +729,9 @@ pub mod commands {
         let ServerTarget::Local { directory, launch } = profile.target else {
             unreachable!("require_local_profile only returns local targets")
         };
+        if matches!(manager.status(profile_id)?.state, LocalServerState::Stopped) {
+            server_port::ensure_local_port(&directory)?;
+        }
         if profiles.auto_accept_eula()?
             && matches!(manager.status(profile_id)?.state, LocalServerState::Stopped)
         {

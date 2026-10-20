@@ -35,7 +35,7 @@ export function ServerOverviewPanel({ profile, environment, state }: { profile: 
         }).catch(() => {});
     }
     return () => { active = false; };
-  }, [profile.id, profile.target.directory, profile.installedVersion, remote]);
+  }, [profile.id, profile.target.directory, profile.installedVersion, remote, state]);
 
   useEffect(() => {
     if (state !== "online" || port === null) { setUsage(null); return; }
