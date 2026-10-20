@@ -22,6 +22,8 @@ pub struct PlayerStatistic {
 #[derive(Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlayerData {
+    pub has_saved_data: bool,
+    pub has_saved_statistics: bool,
     pub gamemode: Option<String>,
     pub level: Option<i64>,
     pub health: Option<f64>,
@@ -96,6 +98,8 @@ pub(crate) fn decode_player_data(
     stats_file: Option<Vec<u8>>,
 ) -> PlayerData {
     let mut data = PlayerData::default();
+    data.has_saved_data = player_file.is_some();
+    data.has_saved_statistics = stats_file.is_some();
     if let Some(bytes) = player_file {
         let mut decoded = Vec::new();
         let parsed = GzDecoder::new(bytes.as_slice())

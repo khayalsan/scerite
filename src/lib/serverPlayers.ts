@@ -3,6 +3,8 @@ import { serverLogs } from "./serverLogs";
 
 export interface PlayerStatistic { category: string; key: string; value: number }
 export interface PlayerData {
+  hasSavedData: boolean;
+  hasSavedStatistics: boolean;
   gamemode: string | null;
   level: number | null;
   health: number | null;
