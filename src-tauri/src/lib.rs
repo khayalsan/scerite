@@ -10,6 +10,7 @@ mod vanilla_install;
 mod software_install;
 mod modrinth;
 mod server_overview;
+mod server_port;
 
 use server_profiles::{ServerProfileStore, commands};
 use server_sessions::{LocalSessionManager, commands as session_commands};

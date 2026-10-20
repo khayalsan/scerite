@@ -35,6 +35,7 @@ use crate::server_profiles::{
 use crate::java_runtime::JavaPackage;
 use crate::server_logs::{self, ServerLogSnapshot};
 use crate::server_players::{self, PlayerData, PlayerRosterFiles};
+use crate::server_port;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_FILE_BYTES: u64 = 1024 * 1024;
@@ -269,6 +270,7 @@ pub async fn start_remote_server(
         if remote_directory_has_java_process(session, &root)? {
             return Err("A Java process is already using the remote server folder outside scerite. Stop it there before starting this profile.".into());
         }
+        ensure_remote_port(session, &root)?;
         if auto_accept_eula {
             enable_remote_eula(session, &root)?;
         }
@@ -2254,6 +2256,71 @@ fn enable_remote_eula(session: &RemoteConnection, root: &str) -> Result<(), Stri
     if let Err(error) = result {
         let _ = sftp.unlink(Path::new(&temporary));
         return Err(format!("Could not enable remote eula.txt: {error}"));
+    }
+    Ok(())
+}
+
+fn ensure_remote_port(session: &RemoteConnection, root: &str) -> Result<(), String> {
+    let sftp = session.sftp()?;
+    let path = format!("{}/server.properties", root.trim_end_matches('/'));
+    let metadata = match sftp.lstat_optional(Path::new(&path)) {
+        Ok(metadata) => Some(metadata),
+        Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile => None,
+        Err(error) => return Err(format!("Could not inspect remote server.properties: {error}")),
+    };
+    let current = if let Some(metadata) = metadata {
+        if metadata.file_type() != FileType::File {
+            return Err("Remote server.properties must be a regular file, not a symbolic link.".into());
+        }
+        if metadata.size.unwrap_or(0) > server_port::MAX_PROPERTIES_BYTES {
+            return Err("Remote server.properties is too large to update its port safely.".into());
+        }
+        let bytes = sftp.read_file(Path::new(&path))?;
+        if bytes.len() as u64 > server_port::MAX_PROPERTIES_BYTES {
+            return Err("Remote server.properties is too large to update its port safely.".into());
+        }
+        Some(String::from_utf8(bytes)
+            .map_err(|_| "Remote server.properties is not UTF-8 text and was not changed.".to_owned())?)
+    } else {
+        None
+    };
+    let requested = server_port::configured_port(current.as_deref())?;
+    let sockets = execute(session, "cat /proc/net/tcp /proc/net/tcp6")?;
+    if sockets.exit_code != 0 {
+        return Err("Could not check remote listening ports through /proc. The server was not started.".into());
+    }
+    let used: std::collections::HashSet<u16> = String::from_utf8_lossy(&sockets.stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            fields.next()?;
+            let address = fields.next()?;
+            fields.next()?;
+            (fields.next()? == "0A").then(|| address.rsplit(':').next())
+                .flatten()
+                .and_then(|port| u16::from_str_radix(port, 16).ok())
+        })
+        .collect();
+    let Some(port) = server_port::available_port(requested, |candidate| Ok(used.contains(&candidate)))? else {
+        return Ok(());
+    };
+    let updated = server_port::updated_content(current.as_deref(), port);
+    if updated.len() as u64 > server_port::MAX_PROPERTIES_BYTES {
+        return Err("Remote server.properties is too large to update its port safely.".into());
+    }
+    let temporary = format!("{}/.scerite-{}.tmp", root.trim_end_matches('/'), Uuid::new_v4());
+    if let Err(error) = sftp.write_file_exclusive(Path::new(&temporary), updated.as_bytes()) {
+        let _ = sftp.unlink(Path::new(&temporary));
+        return Err(format!("Port {requested} is in use, but the remote port change could not be prepared: {error}"));
+    }
+    let result = if current.is_some() {
+        sftp.posix_rename(Path::new(&temporary), Path::new(&path))
+    } else {
+        sftp.rename(Path::new(&temporary), Path::new(&path))
+    };
+    if let Err(error) = result {
+        let _ = sftp.unlink(Path::new(&temporary));
+        return Err(format!("Port {requested} is in use, but remote server.properties could not be updated to port {port}: {error}"));
     }
     Ok(())
 }
