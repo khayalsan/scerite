@@ -1,4 +1,5 @@
 mod remote_ssh;
+mod online_player_cache;
 mod eula;
 mod java_runtime;
 mod server_files;
@@ -92,6 +93,8 @@ pub fn run() {
             remote_ssh::read_remote_server_log,
             remote_ssh::read_remote_player_data,
             remote_ssh::read_remote_player_roster,
+            online_player_cache::read_online_player_cache,
+            online_player_cache::write_online_player_cache,
             remote_ssh::detect_remote_fabric_version,
             remote_ssh::write_remote_server_file,
         ])

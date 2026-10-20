@@ -8,6 +8,7 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 - Starting a second server on the same machine now assigns it a free Minecraft port when its configured port is already in use.
 - The Players tab explains when a player has no saved data yet and looks up heads by player name when available.
+- The Players tab now shows saved players first, then checks the live online list with the server's `list` command and saves its response in Scerite's app data.
 
 ## [0.4.0] - 2026-10-19
 

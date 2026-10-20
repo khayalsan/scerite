@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { serverLogs } from "./serverLogs";
+import { onlinePlayers } from "./onlinePlayers";
 
 export interface PlayerStatistic { category: string; key: string; value: number }
 export interface PlayerData {
@@ -46,18 +46,7 @@ function namedEntries(value: string): NamedEntry[] {
   } catch { return []; }
 }
 
-function onlineNames(log: string): Set<string> {
-  const names = new Set<string>();
-  for (const line of log.split(/\r?\n/)) {
-    const event = line.match(/(?:\]: |\]: \[[^\]]+\]: )([A-Za-z0-9_]{3,16}) (joined|left) the game\b/);
-    if (!event) continue;
-    if (event[2] === "joined") names.add(event[1].toLowerCase());
-    else names.delete(event[1].toLowerCase());
-  }
-  return names;
-}
-
-export async function loadPlayers(remote: boolean, profileId: string, running: boolean): Promise<{ players: PlayerRecord[]; lists: AccessLists; warning: string | null }> {
+export async function loadPlayers(remote: boolean, profileId: string, running: boolean, onRoster?: (players: PlayerRecord[], lists: AccessLists) => void): Promise<{ players: PlayerRecord[]; lists: AccessLists; warning: string | null; onlineUnavailable: boolean }> {
   const { cache, whitelist, ops, bans, bannedIps, uuids } = await invoke<PlayerRosterFiles>(
     remote ? "read_remote_player_roster" : "read_local_player_roster", { profileId },
   );
@@ -95,16 +84,31 @@ export async function loadPlayers(remote: boolean, profileId: string, running: b
 
   for (const uuid of uuids) ensure(uuid, null);
 
+  const snapshot = () => [...byKey.values()].map((player) => ({ ...player }))
+    .sort((a, b) => Number(b.online) - Number(a.online) || (a.name ?? a.uuid ?? "").localeCompare(b.name ?? b.uuid ?? ""));
+  onRoster?.(snapshot(), lists);
+
+  try {
+    const cached = await onlinePlayers.cached(profileId);
+    if (cached) {
+      for (const name of cached.names) ensure(null, name);
+      onRoster?.(snapshot(), lists);
+    }
+  } catch { /* A missing or damaged cache must not hide the saved roster. */ }
+
   let warning: string | null = null;
+  let onlineUnavailable = false;
   if (running) {
     try {
-      const log = await serverLogs.read(remote, profileId, "latest.log");
-      const seen = onlineNames(log.text);
-      for (const name of seen) { const player = ensure(null, name); if (player) player.online = true; }
-      if (log.truncated) warning = "Only the recent part of latest.log was read. Earlier joins may be missed.";
-    } catch { warning = "The latest log could not be read, so online status is unavailable."; }
+      const result = await onlinePlayers.refresh(remote, profileId);
+      for (const name of result.names) { const player = ensure(null, name); if (player) player.online = true; }
+      warning = result.cacheWarning;
+    } catch {
+      warning = "The list command did not return a player list, so online status is unavailable.";
+      onlineUnavailable = true;
+    }
   }
-  return { players: [...byKey.values()].sort((a, b) => Number(b.online) - Number(a.online) || (a.name ?? a.uuid ?? "").localeCompare(b.name ?? b.uuid ?? "")), lists, warning };
+  return { players: snapshot(), lists, warning, onlineUnavailable };
 }
 
 export const playerData = (remote: boolean, profileId: string, uuid: string) =>

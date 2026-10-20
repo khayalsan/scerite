@@ -38,6 +38,8 @@ export function PlayersPanel({ profileId, remote, running }: PlayersPanelProps) 
   const [entryInput, setEntryInput] = useState("");
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
+  const [onlineLoading, setOnlineLoading] = useState(false);
+  const [onlineUnavailable, setOnlineUnavailable] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [warning, setWarning] = useState<string | null>(null);
@@ -47,11 +49,16 @@ export function PlayersPanel({ profileId, remote, running }: PlayersPanelProps) 
   useEffect(() => {
     let active = true;
     setLoading(true);
-    void loadPlayers(remote, profileId, running).then((result) => {
-      if (active) { setPlayers(result.players); setLists(result.lists); setWarning(result.warning); }
+    setOnlineLoading(false);
+    setOnlineUnavailable(false);
+    setWarning(null);
+    void loadPlayers(remote, profileId, running, (roster, accessLists) => {
+      if (active) { setPlayers(roster); setLists(accessLists); setLoading(false); setOnlineLoading(running); }
+    }).then((result) => {
+      if (active) { setPlayers(result.players); setLists(result.lists); setWarning(result.warning); setOnlineUnavailable(result.onlineUnavailable); }
     }).catch((reason: unknown) => {
       if (active) setWarning(`Could not read the player list: ${errorText(reason)}`);
-    }).finally(() => { if (active) setLoading(false); });
+    }).finally(() => { if (active) { setLoading(false); setOnlineLoading(false); } });
     return () => { active = false; };
   }, [profileId, remote, running, revision]);
 
@@ -112,8 +119,8 @@ export function PlayersPanel({ profileId, remote, running }: PlayersPanelProps) 
 
   return <div className="players-panel">
     <header className="players-header">
-      <div><h2>Players</h2><p>Known players from server files. Online status is estimated from recent join and leave messages in latest.log.</p></div>
-      <button className="button button-quiet" type="button" onClick={() => setRevision((value) => value + 1)} disabled={loading}><RefreshCw size={14} aria-hidden="true" /> Refresh</button>
+      <div><h2>Players</h2><p>Known players from server files. Online status is checked with the server's list command when this page loads or refreshes.</p></div>
+      <button className="button button-quiet" type="button" onClick={() => setRevision((value) => value + 1)} disabled={loading || onlineLoading}><RefreshCw size={14} aria-hidden="true" /> Refresh</button>
     </header>
     {warning && <p className="notice notice-error" role="status">{warning}</p>}
     {message && <p className="notice" role="status">{message}</p>}
@@ -139,7 +146,7 @@ export function PlayersPanel({ profileId, remote, running }: PlayersPanelProps) 
       <section className="player-detail" aria-label={`${selected.name ?? selected.uuid} details`}>
         <div className="player-identity">
           {selected.name || selected.uuid ? <img className="player-head" src={`https://mc-heads.net/avatar/${encodeURIComponent(selected.name ?? selected.uuid ?? "")}/80`} alt="" onError={(event) => { event.currentTarget.style.display = "none"; }} /> : <UserRound size={48} aria-hidden="true" />}
-          <div><h3>{selected.name ?? "Unknown player"}</h3><span className="player-uuid">{selected.uuid ?? "UUID unavailable"}</span><div className="player-badges"><span>{selected.online ? "Online (estimated)" : "Offline / not seen online"}</span><span>{selected.whitelisted ? "Whitelisted" : "Not whitelisted"}</span><span>{selected.operator ? "Operator" : "Not operator"}</span><span>{selected.banned ? "Banned" : "Not banned"}</span></div></div>
+          <div><h3>{selected.name ?? "Unknown player"}</h3><span className="player-uuid">{selected.uuid ?? "UUID unavailable"}</span><div className="player-badges"><span>{onlineLoading ? "Checking online status…" : onlineUnavailable ? "Online status unavailable" : selected.online ? "Online (last checked)" : "Offline / not listed"}</span><span>{selected.whitelisted ? "Whitelisted" : "Not whitelisted"}</span><span>{selected.operator ? "Operator" : "Not operator"}</span><span>{selected.banned ? "Banned" : "Not banned"}</span></div></div>
         </div>
         {detailLoading ? <p className="state-message">Reading saved player data…</p> : <>
           <p className="players-caption">Game details are from the last saved player file and may lag behind a running server.</p>
@@ -173,12 +180,12 @@ export function PlayersPanel({ profileId, remote, running }: PlayersPanelProps) 
         </div>
       </section>
       <section className="player-roster" aria-label="Player list">
-        <div className="player-roster-heading"><h3>Known players</h3><span>{players.filter((player) => player.online).length} online estimated · {players.length} total</span></div>
+        <div className="player-roster-heading"><h3>Known players</h3><span>{onlineLoading ? "Checking online status…" : onlineUnavailable ? "Online status unavailable" : `${players.filter((player) => player.online).length} online at last check`} · {players.length} total</span></div>
         <SearchField id="players-roster-search" label="Search players" placeholder="Name or UUID" value={search} onChange={setSearch} />
         {loading ? <p className="state-message">Loading players…</p> : visiblePlayers.length ? <div className="player-list">{visiblePlayers.map((player) => <button type="button" key={player.key} onClick={() => { setSelectedKey(player.key); setMessage(null); }}>
           <span className={`player-presence${player.online ? " player-presence-online" : ""}`} aria-hidden="true" />
           <span><strong>{player.name ?? "Unknown player"}</strong><small>{player.uuid ?? "Name from server log"}</small></span>
-          <em>{player.online ? "Online" : "Offline"}</em>
+          <em>{onlineLoading ? "Checking…" : onlineUnavailable ? "Unknown" : player.online ? "Online" : "Offline"}</em>
         </button>)}</div> : <p className="state-message">{players.length ? "No matching players." : "No known players yet. Players appear after joining or being added to a server list."}</p>}
       </section>
     </>}
