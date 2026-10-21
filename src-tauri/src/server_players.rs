@@ -239,6 +239,18 @@ fn optional_local_player_list(root: &Path, relative: &str) -> Result<Vec<String>
 }
 
 #[tauri::command]
+pub fn read_local_player_usercache(
+    profile_id: Uuid,
+    profiles: State<'_, ServerProfileStore>,
+) -> Result<String, String> {
+    let root = local_server_root(profile_id, &profiles)?;
+    optional_local_file(&root, "usercache.json")?
+        .map(|bytes| String::from_utf8(bytes).map_err(|error| error.to_string()))
+        .transpose()
+        .map(|value| value.unwrap_or_default())
+}
+
+#[tauri::command]
 pub fn read_local_player_roster(
     profile_id: Uuid,
     profiles: State<'_, ServerProfileStore>,
