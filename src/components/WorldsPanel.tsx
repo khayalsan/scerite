@@ -184,6 +184,19 @@ export function WorldsPanel({ profileId, remote, canEdit, running }: WorldsPanel
     finally { setBusy(null); }
   }
 
+  async function restoreBackup(backup: WorldBackup) {
+    if (!canEdit || busy) return;
+    const label = backup.modified ? new Date(backup.modified * 1000).toLocaleString() : backup.path;
+    if (!window.confirm(`Restore ${backup.name} from the ${backup.kind === "zip" ? "ZIP backup" : "preserved world"} saved ${label}? Scerite will preserve the current world first. Keep the server stopped until restoration finishes.`)) return;
+    setBusy("restore"); setError(null); setMessage(null);
+    try {
+      const preserved = await serverWorlds.restore(remote, profileId, backup);
+      setMessage(preserved ? `World restored. The previous world is preserved at ${preserved}` : `World ${backup.name} restored.`);
+      setRevision((value) => value + 1);
+    } catch (reason) { setError(`Could not restore ${backup.name}: ${errorText(reason)}`); }
+    finally { setBusy(null); }
+  }
+
   async function applyRule(name: string) {
     const value = ruleValues[name]?.trim() ?? "";
     if (!running || !/^(?:[A-Za-z0-9_]{1,64}|[a-z0-9_.-]+:[a-z0-9_/.-]+)$/.test(name) || !validRuleValue(value)) {
@@ -224,6 +237,8 @@ export function WorldsPanel({ profileId, remote, canEdit, running }: WorldsPanel
   }
 
   const parent = directory?.slice(0, directory.lastIndexOf("/")) ?? "";
+  const backupGroups = [...new Set(backups.map((backup) => backup.name))]
+    .map((name) => ({ name, entries: backups.filter((backup) => backup.name === name) }));
 
   return (
     <section className="worlds-panel" aria-label="World browser">
@@ -306,12 +321,16 @@ export function WorldsPanel({ profileId, remote, canEdit, running }: WorldsPanel
         </div>
       )}
       <section className="worlds-backups" aria-label="World backups">
-        <div><h3>Backed up worlds</h3><p>ZIP backups are in Scerite app data. Preserved folders are on the server and can be recovered from their shown path.</p></div>
+        <div><h3>Backed up worlds</h3><p>Restore a chosen backup or the latest one for a world. Scerite preserves the current world before restoring.</p></div>
         {backupsError && <p className="files-error" role="alert">Could not list backups: {backupsError}</p>}
         {backupsLoading ? <p className="state-message">Finding backups…</p> : backups.length === 0 ? <p className="state-message">No backups yet. Stop a server and choose Back up on a world.</p> : (
-          <div className="worlds-backup-list">{backups.map((backup) => <div className="worlds-backup" key={backup.path}>
-            <Archive size={16} aria-hidden="true" />
-            <div><strong>{backup.name}</strong><small>{backup.kind === "zip" ? "ZIP backup" : "Preserved world folder"}{backup.modified ? ` · ${new Date(backup.modified * 1000).toLocaleString()}` : ""}</small><code>{backup.path}</code></div>
+          <div className="worlds-backup-groups">{backupGroups.map((group) => <div className="worlds-backup-group" key={group.name}>
+            <div className="worlds-backup-group-heading"><strong>{group.name}</strong><button className="button button-secondary" type="button" disabled={!canEdit || !!busy} onClick={() => void restoreBackup(group.entries[0])}>{busy === "restore" ? "Restoring…" : "Restore latest"}</button></div>
+            <div className="worlds-backup-list">{group.entries.map((backup) => <div className="worlds-backup" key={backup.path}>
+              <Archive size={16} aria-hidden="true" />
+              <div><strong>{backup.kind === "zip" ? "ZIP backup" : "Preserved world folder"}</strong><small>{backup.modified ? new Date(backup.modified * 1000).toLocaleString() : "Date unavailable"}</small><code>{backup.path}</code></div>
+              <button className="button button-quiet" type="button" disabled={!canEdit || !!busy} onClick={() => void restoreBackup(backup)}>Restore this</button>
+            </div>)}</div>
           </div>)}</div>
         )}
       </section>

@@ -323,8 +323,47 @@ fn backup_name(name: &str, zip: bool) -> Option<String> {
     let id = stem.get(stem.len().checked_sub(36)?..)?;
     Uuid::parse_str(id).ok()?;
     let prefix = stem.strip_suffix(id)?.strip_suffix('-')?;
-    let world = if zip { prefix.rsplit_once('-')?.0 } else { prefix };
+    let world = if zip { prefix.rsplit_once('-')?.0 } else {
+        prefix.rsplit_once("-at-").filter(|(_, time)| time.len() == 10 && time.parse::<u64>().is_ok())
+            .map(|(name, _)| name).unwrap_or(prefix)
+    };
     valid_world_name(world).then(|| world.to_owned())
+}
+
+pub(crate) fn preserved_backup_time(name: &str) -> Option<u64> {
+    let stem = name.get(..name.len().checked_sub(37)?)?;
+    let (_, time) = stem.rsplit_once("-at-")?;
+    (time.len() == 10).then(|| time.parse().ok()).flatten()
+}
+
+fn zip_backup_time(name: &str) -> Option<u64> {
+    let stem = name.strip_suffix(".zip")?;
+    let prefix = stem.get(..stem.len().checked_sub(37)?)?;
+    prefix.rsplit_once('-')?.1.parse().ok()
+}
+
+pub(crate) fn preserved_backup_filename(name: &str) -> Result<String, String> {
+    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH)
+        .map_err(|error| error.to_string())?.as_secs();
+    Ok(format!("{name}-at-{timestamp}-{}", Uuid::new_v4()))
+}
+
+pub(crate) fn checked_app_backup(
+    app: &AppHandle, profile_id: Uuid, world_name: &str, path: &str,
+) -> Result<PathBuf, String> {
+    if !valid_world_name(world_name) { return Err("Choose a valid world folder.".into()); }
+    let folder = app.path().app_data_dir().map_err(|error| error.to_string())?
+        .join("world-backups").join(profile_id.to_string());
+    let source = Path::new(path);
+    let filename = source.file_name().and_then(|name| name.to_str())
+        .ok_or("Choose a valid ZIP backup.")?;
+    if source.parent() != Some(folder.as_path()) || backup_name(filename, true).as_deref() != Some(world_name) {
+        return Err("The selected ZIP is not a backup of this world.".into());
+    }
+    if !fs::symlink_metadata(source).is_ok_and(|metadata| metadata.file_type().is_file()) {
+        return Err("The selected ZIP backup is missing or is not a regular file.".into());
+    }
+    Ok(source.to_path_buf())
 }
 
 pub(crate) fn preserved_backup_name(name: &str) -> Option<String> {
@@ -350,7 +389,7 @@ pub(crate) fn app_world_backups(app: &AppHandle, profile_id: Uuid) -> Result<Vec
         let filename = entry.file_name().to_string_lossy().into_owned();
         if let Some(name) = backup_name(&filename, true) {
             backups.push(WorldBackup { name, path: entry.path().to_string_lossy().into_owned(),
-                kind: "zip".into(), modified: modified_seconds(&metadata) });
+                kind: "zip".into(), modified: zip_backup_time(&filename).or_else(|| modified_seconds(&metadata)) });
         }
     }
     Ok(backups)
@@ -375,7 +414,7 @@ pub fn list_local_world_backups(
             let filename = entry.file_name().to_string_lossy().into_owned();
             if let Some(name) = backup_name(&filename, false) {
                 backups.push(WorldBackup { name, path: entry.path().to_string_lossy().into_owned(),
-                    kind: "preserved".into(), modified: modified_seconds(&metadata) });
+                    kind: "preserved".into(), modified: preserved_backup_time(&filename).or_else(|| modified_seconds(&metadata)) });
             }
         }
     }
@@ -479,7 +518,7 @@ fn preserved_world_path(root: &Path, name: &str) -> Result<PathBuf, String> {
     }
     fs::create_dir_all(&backups)
         .map_err(|error| format!("Could not create the world backup folder: {error}"))?;
-    Ok(backups.join(format!("{name}-{}", Uuid::new_v4())))
+    Ok(backups.join(preserved_backup_filename(name)?))
 }
 
 #[tauri::command]
@@ -530,9 +569,23 @@ pub async fn upload_local_world(
 ) -> Result<String, String> {
     require_stopped(profile_id, &manager)?;
     let root = local_server_root(profile_id, &profiles)?;
-    let world = checked_local_world(&root, &world_name)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        let (mut archive, entries) = open_archive(Path::new(&source))?;
+    checked_local_world(&root, &world_name)?;
+    tauri::async_runtime::spawn_blocking(move || install_local_archive(&root, &world_name, Path::new(&source), true))
+        .await.map_err(|error| error.to_string())?
+}
+
+fn install_local_archive(root: &Path, world_name: &str, source: &Path, require_existing: bool) -> Result<String, String> {
+        let (mut archive, entries) = open_archive(source)?;
+        let world = root.join(world_name);
+        let existing = match fs::symlink_metadata(&world) {
+            Ok(metadata) if metadata.file_type().is_dir() => {
+                checked_local_world(root, world_name)?;
+                true
+            }
+            Ok(_) => return Err("The world path is not a regular folder.".into()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound && !require_existing => false,
+            Err(error) => return Err(format!("Could not inspect the current world: {error}")),
+        };
         let staging = root.join(format!(".scerite-world-upload-{}", Uuid::new_v4()));
         fs::create_dir(&staging)
             .map_err(|error| format!("Could not create upload folder: {error}"))?;
@@ -556,27 +609,75 @@ pub async fn upload_local_world(
             if !staging.join("level.dat").is_file() {
                 return Err("The ZIP does not contain level.dat.".into());
             }
-            let preserved = preserved_world_path(&root, &world_name)?;
-            fs::rename(&world, &preserved)
-                .map_err(|error| format!("Could not preserve the current world: {error}"))?;
+            let preserved = if existing {
+                let preserved = preserved_world_path(root, world_name)?;
+                fs::rename(&world, &preserved)
+                    .map_err(|error| format!("Could not preserve the current world: {error}"))?;
+                Some(preserved)
+            } else { None };
             if let Err(error) = fs::rename(&staging, &world) {
-                let recovery = fs::rename(&preserved, &world)
-                    .err()
-                    .map(|_| format!(" The previous world remains at {}.", preserved.display()))
+                let recovery = preserved.as_ref().and_then(|path| fs::rename(path, &world)
+                    .err().map(|_| format!(" The previous world remains at {}.", path.display())))
                     .unwrap_or_default();
                 return Err(format!(
                     "Could not install the uploaded world: {error}.{recovery}"
                 ));
             }
-            Ok(preserved.to_string_lossy().into_owned())
+            Ok(preserved.map(|path| path.to_string_lossy().into_owned()).unwrap_or_default())
         })();
         if result.is_err() {
             let _ = fs::remove_dir_all(&staging);
         }
         result
-    })
-    .await
-    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn restore_local_world_backup(
+    app: AppHandle, profile_id: Uuid, world_name: String, backup_kind: String, backup_path: String,
+    profiles: State<'_, ServerProfileStore>, manager: State<'_, LocalSessionManager>,
+) -> Result<String, String> {
+    require_stopped(profile_id, &manager)?;
+    let root = local_server_root(profile_id, &profiles)?;
+    match backup_kind.as_str() {
+        "zip" => {
+            let source = checked_app_backup(&app, profile_id, &world_name, &backup_path)?;
+            tauri::async_runtime::spawn_blocking(move || install_local_archive(&root, &world_name, &source, false))
+                .await.map_err(|error| error.to_string())?
+        }
+        "preserved" => {
+            if !valid_world_name(&world_name) { return Err("Choose a valid world folder.".into()); }
+            let source = Path::new(&backup_path);
+            let folder = root.join(".scerite-world-backups");
+            let filename = source.file_name().and_then(|name| name.to_str()).ok_or("Choose a valid preserved world.")?;
+            if source.parent() != Some(folder.as_path()) || backup_name(filename, false).as_deref() != Some(&world_name) {
+                return Err("The selected folder is not a backup of this world.".into());
+            }
+            if !fs::symlink_metadata(source).is_ok_and(|metadata| metadata.file_type().is_dir())
+                || !fs::symlink_metadata(source.join("level.dat")).is_ok_and(|metadata| metadata.file_type().is_file()) {
+                return Err("The selected preserved world is missing or invalid.".into());
+            }
+            let destination = root.join(&world_name);
+            let preserved = match fs::symlink_metadata(&destination) {
+                Ok(metadata) if metadata.file_type().is_dir() => {
+                    checked_local_world(&root, &world_name)?;
+                    let preserved = preserved_world_path(&root, &world_name)?;
+                    fs::rename(&destination, &preserved).map_err(|error| format!("Could not preserve the current world: {error}"))?;
+                    Some(preserved)
+                }
+                Ok(_) => return Err("The current world path is not a regular folder.".into()),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+                Err(error) => return Err(format!("Could not inspect the current world: {error}")),
+            };
+            if let Err(error) = fs::rename(source, &destination) {
+                let recovery = preserved.as_ref().and_then(|path| fs::rename(path, &destination)
+                    .err().map(|_| format!(" The previous world remains at {}.", path.display())))
+                    .unwrap_or_default();
+                return Err(format!("Could not restore the world: {error}.{recovery}"));
+            }
+            Ok(preserved.map(|path| path.to_string_lossy().into_owned()).unwrap_or_default())
+        }
+        _ => Err("Choose a valid world backup.".into()),
+    }
 }
 
 fn restore_local_worlds(moved: &[(PathBuf, PathBuf)]) -> String {

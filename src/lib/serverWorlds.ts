@@ -11,6 +11,10 @@ export const serverWorlds = {
     invoke<WorldSettings>(`read_${remote ? "remote" : "local"}_world_settings`, { profileId, worldName }),
   backups: (remote: boolean, profileId: string) =>
     invoke<WorldBackup[]>(`list_${remote ? "remote" : "local"}_world_backups`, { profileId }),
+  restore: (remote: boolean, profileId: string, backup: WorldBackup) =>
+    invoke<string>(`restore_${remote ? "remote" : "local"}_world_backup`, {
+      profileId, worldName: backup.name, backupKind: backup.kind, backupPath: backup.path,
+    }),
   backup: (remote: boolean, profileId: string, worldName: string) =>
     invoke<string>(command(remote, "backup"), { profileId, worldName }),
   download: (remote: boolean, profileId: string, worldName: string, destination: string) =>

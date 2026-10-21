@@ -1884,13 +1884,19 @@
 .worlds-backups { display: grid; gap: 10px; padding-top: 18px; border-top: 1px solid var(--app-line); }
 .worlds-backups h3 { margin: 0 0 4px; font-size: 15px; }
 .worlds-backups p { margin: 0; color: var(--app-muted); font-size: 12px; }
-.worlds-backup-list { display: grid; gap: 8px; }
+.worlds-backup-groups, .worlds-backup-list { display: grid; gap: 8px; }
+.worlds-backup-group { display: grid; gap: 8px; }
+.worlds-backup-group + .worlds-backup-group { padding-top: 16px; border-top: 1px solid var(--app-line); }
+.worlds-backup-group-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.worlds-backup-group-heading strong { font-size: 13px; }
 .worlds-backup { display: flex; align-items: start; gap: 10px; min-width: 0; padding: 10px 12px; border: 1px solid var(--app-line); border-radius: 8px; background: var(--app-paper); }
 .worlds-backup > svg { flex: 0 0 auto; margin-top: 2px; color: var(--app-accent); }
-.worlds-backup > div { display: grid; min-width: 0; gap: 3px; }
+.worlds-backup > div { display: grid; flex: 1 1 auto; min-width: 0; gap: 3px; }
 .worlds-backup strong { font-size: 13px; }
 .worlds-backup small { color: var(--app-muted); font-size: 11px; }
 .worlds-backup code { overflow-wrap: anywhere; color: var(--app-muted); font-size: 11px; }
+.worlds-backup .button { flex: 0 0 auto; align-self: center; }
+@media (max-width: 680px) { .worlds-backup { flex-wrap: wrap; } .worlds-backup .button { margin-left: 26px; } }
 
 .worlds-settings { display: grid; gap: 18px; min-width: 0; padding-top: 18px; border-top: 1px solid var(--app-line); }
 .worlds-settings-heading, .worlds-settings-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }

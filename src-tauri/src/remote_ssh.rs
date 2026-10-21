@@ -2586,7 +2586,7 @@ fn remote_preserved_world(sftp: &RemoteSftp, root: &str, name: &str) -> Result<S
         Err(error) => return Err(format!("Could not inspect the world backup folder: {error}")),
     }
     let backups = canonical_inside(sftp, root, &backups)?;
-    Ok(format!("{backups}/{name}-{}", Uuid::new_v4()))
+    Ok(format!("{backups}/{}", world_management::preserved_backup_filename(name)?))
 }
 
 fn restore_remote_worlds(sftp: &RemoteSftp, moved: &[(String, String)]) -> String {
@@ -2708,7 +2708,7 @@ pub async fn list_remote_world_backups(
             let path = format!("{folder}/{filename}");
             if !sftp.lstat(Path::new(&format!("{path}/level.dat")))
                 .is_ok_and(|level| level.file_type() == FileType::File) { continue; }
-            result.push(WorldBackup { name, path, kind: "preserved".into(), modified: metadata.mtime.map(u64::from) });
+            result.push(WorldBackup { name, path, kind: "preserved".into(), modified: world_management::preserved_backup_time(&filename).or_else(|| metadata.mtime.map(u64::from)) });
         }
         Ok(result)
     }).await?;
@@ -2760,7 +2760,25 @@ pub async fn upload_remote_world(
         let sftp = session.sftp().map_err(|error| format!("Could not open SFTP: {error}"))?;
         let root = remote_root_with_sftp(&sftp, configured_remote_root(profile)?)?;
         require_remote_world_stopped(session, profile, &root)?;
-        let world = checked_remote_world(&sftp, &root, &world_name)?;
+        checked_remote_world(&sftp, &root, &world_name)?;
+        install_remote_archive(session, &sftp, &root, &world_name, &mut archive, entries, true)
+    }).await
+}
+
+fn install_remote_archive(
+    session: &RemoteConnection, sftp: &RemoteSftp, root: &str, world_name: &str,
+    archive: &mut zip::ZipArchive<File>, entries: Vec<world_management::ArchiveEntry>, require_existing: bool,
+) -> Result<String, String> {
+        let world = resolve_remote_relative(root, world_name, false)?;
+        let existing = match sftp.lstat_optional(Path::new(&world)) {
+            Ok(metadata) if metadata.file_type() == FileType::Dir => {
+                checked_remote_world(sftp, root, world_name)?;
+                true
+            }
+            Ok(_) => return Err("The world path is not a regular folder.".into()),
+            Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile && !require_existing => false,
+            Err(error) => return Err(format!("Could not inspect the current world: {error}")),
+        };
         let staging = format!("{root}/.scerite-world-upload-{}", Uuid::new_v4());
         sftp.mkdir(Path::new(&staging)).map_err(|error| format!("Could not create upload folder: {error}"))?;
         let result = (|| {
@@ -2782,22 +2800,78 @@ pub async fn upload_remote_world(
             if sftp.lstat(Path::new(&format!("{staging}/level.dat")))?.file_type() != FileType::File {
                 return Err("The ZIP does not contain level.dat.".into());
             }
-            let preserved = remote_preserved_world(&sftp, &root, &world_name)?;
-            sftp.rename(Path::new(&world), Path::new(&preserved))
-                .map_err(|error| format!("Could not preserve the current world: {error}"))?;
+            let preserved = if existing {
+                let preserved = remote_preserved_world(sftp, root, world_name)?;
+                sftp.rename(Path::new(&world), Path::new(&preserved))
+                    .map_err(|error| format!("Could not preserve the current world: {error}"))?;
+                Some(preserved)
+            } else { None };
             if let Err(error) = sftp.rename(Path::new(&staging), Path::new(&world)) {
-                let recovery = sftp.rename(Path::new(&preserved), Path::new(&world)).err()
-                    .map(|_| format!(" The previous world remains at {preserved}."))
+                let recovery = preserved.as_ref().and_then(|path| sftp.rename(Path::new(path), Path::new(&world)).err()
+                    .map(|_| format!(" The previous world remains at {path}.")))
                     .unwrap_or_default();
                 return Err(format!("Could not install the uploaded world: {error}.{recovery}"));
             }
-            Ok(preserved)
+            Ok(preserved.unwrap_or_default())
         })();
         if result.is_err() {
             // This path is generated under the verified server root and never contains user input.
             let _ = execute(session, &format!("rm -rf -- {}", shell_quote(&staging)));
         }
         result
+}
+
+#[tauri::command]
+pub async fn restore_remote_world_backup(
+    app: AppHandle, profile_id: Uuid, world_name: String, backup_kind: String, backup_path: String,
+    profiles: State<'_, ServerProfileStore>, remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<String, String> {
+    if !world_management::valid_world_name(&world_name) { return Err("Choose a valid world folder.".into()); }
+    let source = if backup_kind == "zip" {
+        Some(world_management::checked_app_backup(&app, profile_id, &world_name, &backup_path)?)
+    } else if backup_kind == "preserved" { None }
+    else { return Err("Choose a valid world backup.".into()); };
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    run_remote(profile, environment, Arc::clone(remote_sessions.inner()), move |session, profile| {
+        let sftp = session.sftp().map_err(|error| format!("Could not open SFTP: {error}"))?;
+        let root = remote_root_with_sftp(&sftp, configured_remote_root(profile)?)?;
+        require_remote_world_stopped(session, profile, &root)?;
+        if let Some(source) = source {
+            let (mut archive, entries) = world_management::open_archive(&source)?;
+            return install_remote_archive(session, &sftp, &root, &world_name, &mut archive, entries, false);
+        }
+        let filename = Path::new(&backup_path).file_name().and_then(|name| name.to_str())
+            .ok_or("Choose a valid preserved world.")?;
+        let folder = format!("{root}/.scerite-world-backups");
+        let expected = format!("{folder}/{filename}");
+        if backup_path != expected || world_management::preserved_backup_name(filename).as_deref() != Some(&world_name) {
+            return Err("The selected folder is not a backup of this world.".into());
+        }
+        reject_remote_symlink_path(&sftp, &root, &expected)?;
+        let source = canonical_inside(&sftp, &root, &expected)?;
+        if sftp.lstat(Path::new(&source))?.file_type() != FileType::Dir
+            || sftp.lstat(Path::new(&format!("{source}/level.dat")))?.file_type() != FileType::File {
+            return Err("The selected preserved world is missing or invalid.".into());
+        }
+        let world = resolve_remote_relative(&root, &world_name, false)?;
+        let preserved = match sftp.lstat_optional(Path::new(&world)) {
+            Ok(metadata) if metadata.file_type() == FileType::Dir => {
+                checked_remote_world(&sftp, &root, &world_name)?;
+                let preserved = remote_preserved_world(&sftp, &root, &world_name)?;
+                sftp.rename(Path::new(&world), Path::new(&preserved))
+                    .map_err(|error| format!("Could not preserve the current world: {error}"))?;
+                Some(preserved)
+            }
+            Ok(_) => return Err("The current world path is not a regular folder.".into()),
+            Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile => None,
+            Err(error) => return Err(format!("Could not inspect the current world: {error}")),
+        };
+        if let Err(error) = sftp.rename(Path::new(&source), Path::new(&world)) {
+            let recovery = preserved.as_ref().and_then(|path| sftp.rename(Path::new(path), Path::new(&world)).err()
+                .map(|_| format!(" The previous world remains at {path}."))).unwrap_or_default();
+            return Err(format!("Could not restore the world: {error}.{recovery}"));
+        }
+        Ok(preserved.unwrap_or_default())
     }).await
 }
 
