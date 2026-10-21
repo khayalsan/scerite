@@ -12,8 +12,8 @@ import type { InstalledPackage } from "../lib/serverProfiles";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { SearchField } from "./SearchField";
 
-type Project = { id: string; title: string; description: string; author: string; iconUrl: string | null; downloads: number };
-type Version = { id: string; name: string; versionNumber: string; requiredDependencies: number };
+type Project = { id: string; title: string; description: string; author: string; iconUrl: string | null; downloads: number; environment: string[] };
+type Version = { id: string; name: string; versionNumber: string; requiredDependencies: number; environment: string | null };
 type PlanEntry = { projectId: string; versionId: string; title: string; versionNumber: string; filename: string; requiredBy: string[]; alreadyInstalled: boolean; direct: boolean };
 type RemovalPreview = { dependents: { projectId: string; title: string }[]; cleanup: { projectId: string; title: string }[] };
 
@@ -28,6 +28,36 @@ function formatSize(size: number) {
   if (size < 1024) return `${size} B`;
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+type ClientRequirement = "required" | "optional" | "server";
+
+function clientRequirement(environment: string | null): ClientRequirement | null {
+  switch (environment) {
+    case "client_and_server": return "required";
+    case "server_only_client_optional":
+    case "client_or_server_prefers_both": return "optional";
+    case "server_only":
+    case "dedicated_server_only":
+    case "client_or_server": return "server";
+    default: return null;
+  }
+}
+
+function projectRequirement(environments: string[]): ClientRequirement | null {
+  if (!environments.length) return null;
+  const requirements = environments.map(clientRequirement);
+  return requirements.every((requirement) => requirement && requirement === requirements[0]) ? requirements[0] : null;
+}
+
+function RequirementBadge({ requirement }: { requirement: ClientRequirement | null }) {
+  if (!requirement) return null;
+  const details = {
+    required: { label: "Required", title: "Players must install this mod to join." },
+    optional: { label: "Optional", title: "Players can install this mod for added functionality, but can join without it." },
+    server: { label: "Server", title: "Only the server needs this mod; players can join without installing it." },
+  }[requirement];
+  return <span className={`packages-requirement packages-requirement-${requirement}`} title={details.title} aria-label={`${details.label}: ${details.title}`}>{details.label}</span>;
 }
 
 function minecraftVersion(text: string) {
@@ -265,7 +295,7 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software, i
 
   function installedRow(entry: ServerFileEntry) {
     const record = installedPackages.find((item) => item.kind === kind && item.filename === entry.name);
-    return <li key={entry.path}><Package size={16} aria-hidden="true" /><span className="packages-installed-copy" title={entry.name}><strong>{record?.title ?? entry.name}</strong>{record && <small>{entry.name}</small>}{record?.requiredBy.length ? <em className="packages-tag packages-tag-dependency">Dependency for {record.requiredBy.join(", ")}</em> : null}</span><small>{formatSize(entry.size)}</small>{record && <span className="packages-installed-actions"><button type="button" className="button button-quiet" aria-label={`Update ${record.title}`} disabled={busy || !gameVersion || record.requiredBy.length > 0} onClick={() => void chooseProject({ id: record.projectId, title: record.title, description: "", author: "", iconUrl: null, downloads: 0 })}>Update</button><button type="button" className="button button-quiet" aria-label={`Remove ${record.title}`} disabled={busy || !canInstall || (kind === "plugin" && record.requiredBy.length > 0)} onClick={() => void removePackage(record)}>Remove</button></span>}</li>;
+    return <li key={entry.path}><Package size={16} aria-hidden="true" /><span className="packages-installed-copy" title={entry.name}><strong>{record?.title ?? entry.name}</strong>{record && <small>{entry.name}</small>}{record?.requiredBy.length ? <em className="packages-tag packages-tag-dependency">Dependency for {record.requiredBy.join(", ")}</em> : null}</span><small>{formatSize(entry.size)}</small>{record && <span className="packages-installed-actions"><button type="button" className="button button-quiet" aria-label={`Update ${record.title}`} disabled={busy || !gameVersion || record.requiredBy.length > 0} onClick={() => void chooseProject({ id: record.projectId, title: record.title, description: "", author: "", iconUrl: null, downloads: 0, environment: [] })}>Update</button><button type="button" className="button button-quiet" aria-label={`Remove ${record.title}`} disabled={busy || !canInstall || (kind === "plugin" && record.requiredBy.length > 0)} onClick={() => void removePackage(record)}>Remove</button></span>}</li>;
   }
 
   useEffect(() => {
@@ -302,10 +332,11 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software, i
         </form>
         {error && <p className="files-error" role="alert">{error}</p>}
         {message && <p className="install-success" role="status">{message}</p>}
+        {kind === "mod" && projects.length > 0 && <p className="packages-requirement-help">Player install: Required to join · Optional for extra features · Server means no player download needed.</p>}
         {(projects.length > 0 || selectedProject) && <div className="packages-browser">
           <div className="packages-results" aria-label="Search results">{projects.map((project) => <button key={project.id} type="button" className={`packages-result${selectedProject?.id === project.id ? " packages-result-selected" : ""}`} onClick={() => void chooseProject(project)} disabled={busy}>
             <span className="packages-result-icon">{project.iconUrl ? <img src={project.iconUrl} alt="" loading="lazy" /> : <Package size={20} aria-hidden="true" />}</span>
-            <span className="packages-result-copy"><strong>{project.title}</strong><span>{project.description}</span><small>by {project.author} · {Intl.NumberFormat(undefined, { notation: "compact" }).format(project.downloads)} downloads</small>{installedPackages.some((item) => item.kind === kind && item.projectId === project.id && installed.some((file) => file.name === item.filename)) && <em>Installed</em>}</span>
+            <span className="packages-result-copy"><span className="packages-result-title"><strong>{project.title}</strong>{kind === "mod" && <RequirementBadge requirement={projectRequirement(project.environment)} />}</span><span>{project.description}</span><small>by {project.author} · {Intl.NumberFormat(undefined, { notation: "compact" }).format(project.downloads)} downloads</small>{installedPackages.some((item) => item.kind === kind && item.projectId === project.id && installed.some((file) => file.name === item.filename)) && <em>Installed</em>}</span>
           </button>)}</div>
           <div className="packages-version">
             {selectedProject ? <>
@@ -317,7 +348,7 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software, i
                   <SelectTrigger id="package-version"><SelectValue>{(value) => versions.find((version) => version.id === value)?.name ?? "Choose release"}</SelectValue></SelectTrigger>
                   <SelectContent>{versions.map((version) => <SelectItem key={version.id} value={version.id}>{version.name || version.versionNumber}</SelectItem>)}</SelectContent>
                 </Select>
-                {selectedVersion && <p>{selectedVersion.versionNumber}</p>}
+                {selectedVersion && <p>{selectedVersion.versionNumber} {kind === "mod" && <RequirementBadge requirement={clientRequirement(selectedVersion.environment)} />}</p>}
                 {updating && <p>The new JAR is verified before the previous version is removed. If cleanup fails, both JARs may remain; review the installed list before starting the server.</p>}
                 <div className="packages-plan" aria-live="polite">
                   <h4>Review download</h4>

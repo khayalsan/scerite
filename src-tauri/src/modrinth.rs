@@ -31,6 +31,7 @@ pub struct CatalogProject {
     author: String,
     icon_url: Option<String>,
     downloads: u64,
+    environment: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -40,6 +41,7 @@ pub struct CatalogVersion {
     name: String,
     version_number: String,
     required_dependencies: usize,
+    environment: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -169,6 +171,7 @@ pub async fn search_modrinth(
                 author: hit["author"].as_str().unwrap_or_default().to_owned(),
                 icon_url: hit["icon_url"].as_str().filter(|url| url.starts_with("https://cdn.modrinth.com/")).map(str::to_owned),
                 downloads: hit["downloads"].as_u64().unwrap_or(0),
+                environment: hit["environment"].as_array().map(|items| items.iter().filter_map(|item| item.as_str().map(str::to_owned)).collect()).unwrap_or_default(),
             })
         })
         .collect())
@@ -232,6 +235,7 @@ pub async fn list_modrinth_versions(
                         .filter(|dependency| dependency["dependency_type"] == "required")
                         .count()
                 }),
+                environment: item["environment"].as_str().map(str::to_owned),
             })
         })
         .collect())
