@@ -1233,9 +1233,14 @@ function App() {
               Servers
               <span className="nav-count">{profiles.length}</span>
             </Link>
+            {isAppSettings && profiles.length > 0 && <div className="sidebar-server-shortcuts" aria-label="Saved server shortcuts">
+              <span className="sidebar-server-shortcuts-title">Saved servers</span>
+              {profiles.map((profile) => <Link className="sidebar-server-link" to={`/servers/${profile.id}`} key={profile.id} title={profile.name} aria-label={`Open ${profile.name}`}>
+                <Server size={16} aria-hidden="true" /><span>{profile.name}</span>
+              </Link>)}
+            </div>}
           </nav>
           <div className="sidebar-footer">
-            <span className="sidebar-app-status"><span className="connection-dot" aria-hidden="true" />Desktop app</span>
             <Link className={`sidebar-settings-link${isAppSettings ? " sidebar-settings-link-active" : ""}`} to="/settings" aria-current={isAppSettings ? "page" : undefined} onClick={closeForm}>
               <Settings size={17} aria-hidden="true" /> <span>App settings</span>
             </Link>
