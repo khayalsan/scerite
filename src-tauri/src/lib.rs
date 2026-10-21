@@ -13,6 +13,7 @@ mod software_install;
 mod modrinth;
 mod server_overview;
 mod server_port;
+mod world_management;
 
 use server_profiles::{ServerProfileStore, commands};
 use server_sessions::{LocalSessionManager, commands as session_commands};
@@ -74,6 +75,17 @@ pub fn run() {
             session_commands::send_local_console_input,
             server_files::list_local_server_files,
             server_files::list_local_worlds,
+            world_management::read_local_world_settings,
+            world_management::read_auto_backup_settings,
+            world_management::save_auto_backup_settings,
+            world_management::delete_world_zip_backup,
+            world_management::list_local_world_backups,
+            world_management::restore_local_world_backup,
+            world_management::backup_local_world,
+            world_management::auto_backup_local_world,
+            world_management::download_local_world,
+            world_management::upload_local_world,
+            world_management::regenerate_local_world,
             server_files::read_local_server_file,
             server_files::read_local_server_log_start,
             server_logs::read_local_server_log,
@@ -90,6 +102,14 @@ pub fn run() {
             remote_ssh::send_remote_console_input,
             remote_ssh::list_remote_server_files,
             remote_ssh::list_remote_worlds,
+            remote_ssh::read_remote_world_settings,
+            remote_ssh::list_remote_world_backups,
+            remote_ssh::restore_remote_world_backup,
+            remote_ssh::backup_remote_world,
+            remote_ssh::auto_backup_remote_world,
+            remote_ssh::download_remote_world,
+            remote_ssh::upload_remote_world,
+            remote_ssh::regenerate_remote_world,
             remote_ssh::read_remote_server_file,
             remote_ssh::read_remote_server_log_start,
             remote_ssh::read_remote_server_log,

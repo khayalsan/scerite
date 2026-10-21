@@ -7,6 +7,7 @@ import { ArrowLeft, Download, FileKey, FolderOpen, Globe2, HardDrive, Network, P
 import { appSettings, localInstallRoot, serverEnvironments, serverProfiles } from "./lib/serverProfiles";
 import type { ServerEnvironment, ServerProfile, ServerTarget } from "./lib/serverProfiles";
 import { serverSessions } from "./lib/serverSessions";
+import { serverWorlds } from "./lib/serverWorlds";
 import type { LocalServerStatus, RemoteServerStatus } from "./lib/serverSessions";
 import { LocalFilesPanel } from "./components/LocalFilesPanel";
 import { WorldsPanel } from "./components/WorldsPanel";
@@ -200,6 +201,9 @@ function App() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [sessionError, setSessionError] = useState<string | null>(null);
+  const [autoBackupBusyIds, setAutoBackupBusyIds] = useState<Record<string, boolean>>({});
+  const [backupRevisions, setBackupRevisions] = useState<Record<string, number>>({});
+  const observedServerStates = useRef<Record<string, string>>({});
   const [statuses, setStatuses] = useState<Record<string, LocalServerStatus>>({});
   const [remoteStatuses, setRemoteStatuses] = useState<Record<string, RemoteServerStatus | { state: "unreachable" }>>({});
   const [busySessionId, setBusySessionId] = useState<string | null>(null);
@@ -543,6 +547,24 @@ function App() {
     const timer = window.setInterval(() => void refresh(), 4000);
     return () => { active = false; window.clearInterval(timer); };
   }, [remoteMonitorKey]);
+
+  useEffect(() => {
+    for (const profile of profiles) {
+      const remote = profile.target.kind === "remote";
+      const state = remote ? remoteStatuses[profile.id]?.state : statuses[profile.id]?.state;
+      if (!state || state === "unreachable" || state === "unmanaged") continue;
+      const previous = observedServerStates.current[profile.id];
+      observedServerStates.current[profile.id] = state;
+      if (!(["running", "stopping"].includes(previous) && state === "stopped")) continue;
+      setAutoBackupBusyIds((current) => ({ ...current, [profile.id]: true }));
+      void serverWorlds.autoBackup(remote, profile.id)
+        .then((path) => {
+          if (path) setBackupRevisions((current) => ({ ...current, [profile.id]: (current[profile.id] ?? 0) + 1 }));
+        })
+        .catch((error: unknown) => setSessionError(`Automatic world backup failed: ${errorText(error)}`))
+        .finally(() => setAutoBackupBusyIds((current) => ({ ...current, [profile.id]: false })));
+    }
+  }, [profiles, statuses, remoteStatuses]);
 
   useEffect(() => {
     if (!consoleProfileId) return;
@@ -1045,7 +1067,7 @@ function App() {
         const remoteStatus = !isLocal ? remoteStatuses[selectedProfile.id] : undefined;
         const state = status?.state ?? "checking";
         const remoteState = remoteStatus?.state;
-        const isBusy = busySessionId === selectedProfile.id;
+        const isBusy = busySessionId === selectedProfile.id || !!autoBackupBusyIds[selectedProfile.id];
         const isConnected = !!connectedRemotes[selectedProfile.id];
         const statusLabel = isLocal
           ? status ? state : "Checking status…"
@@ -1380,7 +1402,7 @@ function App() {
                   ? "SSH reachable · tmux required"
                   : remoteState ? `SSH reachable · ${remoteState}` : "SSH reachable";
               const remoteStateTone = remoteState === "running" ? "running" : remoteState === "stopped" && remoteStatus?.tmuxAvailable ? "stopped" : "stopping";
-              const isBusy = busySessionId === profile.id;
+              const isBusy = busySessionId === profile.id || !!autoBackupBusyIds[profile.id];
               const isDetailPage = selectedProfileId === profile.id;
               return (
                 <article className={`server-row${selectedProfileId === profile.id ? " server-row-detail" : ""}`} key={profile.id} hidden={!!selectedProfileId && selectedProfileId !== profile.id}>
@@ -1451,7 +1473,7 @@ function App() {
                           )}
                         </section>
                         <section className="server-tab-panel" hidden={activeServerTab !== "worlds"} aria-label="Server worlds">
-                          {activeServerTab === "worlds" && <WorldsPanel key={profile.id} profileId={profile.id} remote={!isLocal} />}
+                          {activeServerTab === "worlds" && <WorldsPanel key={profile.id} profileId={profile.id} remote={!isLocal} running={serverRunning} canEdit={!autoBackupBusyIds[profile.id] && (isLocal ? state === "stopped" : remoteState === "stopped" && !!remoteStatus?.tmuxAvailable)} backupRevision={backupRevisions[profile.id] ?? 0} />}
                         </section>
                         {packageSupport?.mods && <section className="server-tab-panel" hidden={activeServerTab !== "mods"} aria-label="Server mods">
                           {activeServerTab === "mods" && <PackagesPanel key={`${profile.id}-mods`} kind="mod" software={profile.installedSoftware} installedVersion={profile.installedVersion} profileId={profile.id} remote={!isLocal} canInstall={isLocal ? state === "stopped" : remoteState === "stopped"} />}
