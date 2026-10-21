@@ -241,6 +241,23 @@ pub async fn list_modrinth_versions(
         .collect())
 }
 
+#[tauri::command]
+pub async fn list_modrinth_version_environments(version_ids: Vec<String>) -> Result<HashMap<String, String>, String> {
+    if version_ids.len() > 100 || version_ids.iter().any(|id| !catalog_id(id)) {
+        return Err("Too many or invalid Modrinth version IDs.".into());
+    }
+    if version_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let mut url = api_url("versions")?;
+    url.query_pairs_mut().append_pair("ids", &serde_json::json!(version_ids).to_string());
+    let data = get_json(&client()?, url).await?;
+    let versions = data.as_array().ok_or("Modrinth returned an invalid version list.")?;
+    Ok(versions.iter().filter_map(|item| {
+        Some((item["id"].as_str()?.to_owned(), item["environment"].as_str()?.to_owned()))
+    }).collect())
+}
+
 fn safe_filename(original: &str, project_id: &str, version_id: &str) -> String {
     if original.len() <= 120
         && !original.starts_with('.')
