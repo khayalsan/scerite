@@ -14,6 +14,32 @@ use crate::server_sessions::{LocalServerState, LocalSessionManager};
 const MAX_FILE_BYTES: u64 = 1024 * 1024;
 const MAX_DIRECTORY_ENTRIES: usize = 1000;
 
+pub(crate) fn validate_server_icon(bytes: &[u8]) -> Result<(), String> {
+    if bytes.len() > MAX_FILE_BYTES as usize || bytes.len() < 33 ||
+        &bytes[..8] != b"\x89PNG\r\n\x1a\n" || &bytes[12..16] != b"IHDR" ||
+        u32::from_be_bytes(bytes[16..20].try_into().unwrap()) != 64 ||
+        u32::from_be_bytes(bytes[20..24].try_into().unwrap()) != 64 {
+        return Err("Choose an image that can be saved as a 64×64 PNG under 1 MB.".into());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn upload_local_server_icon(
+    profile_id: Uuid,
+    bytes: Vec<u8>,
+    profiles: State<'_, ServerProfileStore>,
+    manager: State<'_, LocalSessionManager>,
+) -> Result<(), String> {
+    if !matches!(manager.status(profile_id)?.state, LocalServerState::Stopped) {
+        return Err("Stop the server before changing its multiplayer icon.".into());
+    }
+    validate_server_icon(&bytes)?;
+    let root = local_server_root(profile_id, &profiles)?;
+    let path = resolve_for_write(&root, "server-icon.png")?;
+    fs::write(path, bytes).map_err(|error| format!("Could not save the server icon: {error}"))
+}
+
 #[tauri::command]
 pub fn read_local_server_log_start(
     profile_id: Uuid,
