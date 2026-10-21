@@ -49,6 +49,7 @@ pub fn run() {
             software_install::install_server_software,
             modrinth::search_modrinth,
             modrinth::list_modrinth_versions,
+            modrinth::list_modrinth_version_environments,
             modrinth::preview_modrinth_install,
             modrinth::install_modrinth_plan,
             modrinth::remove_modrinth_plugin,

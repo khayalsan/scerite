@@ -31,6 +31,7 @@ pub struct CatalogProject {
     author: String,
     icon_url: Option<String>,
     downloads: u64,
+    environment: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -40,6 +41,7 @@ pub struct CatalogVersion {
     name: String,
     version_number: String,
     required_dependencies: usize,
+    environment: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -169,6 +171,7 @@ pub async fn search_modrinth(
                 author: hit["author"].as_str().unwrap_or_default().to_owned(),
                 icon_url: hit["icon_url"].as_str().filter(|url| url.starts_with("https://cdn.modrinth.com/")).map(str::to_owned),
                 downloads: hit["downloads"].as_u64().unwrap_or(0),
+                environment: hit["environment"].as_array().map(|items| items.iter().filter_map(|item| item.as_str().map(str::to_owned)).collect()).unwrap_or_default(),
             })
         })
         .collect())
@@ -232,9 +235,27 @@ pub async fn list_modrinth_versions(
                         .filter(|dependency| dependency["dependency_type"] == "required")
                         .count()
                 }),
+                environment: item["environment"].as_str().map(str::to_owned),
             })
         })
         .collect())
+}
+
+#[tauri::command]
+pub async fn list_modrinth_version_environments(version_ids: Vec<String>) -> Result<HashMap<String, String>, String> {
+    if version_ids.len() > 100 || version_ids.iter().any(|id| !catalog_id(id)) {
+        return Err("Too many or invalid Modrinth version IDs.".into());
+    }
+    if version_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let mut url = api_url("versions")?;
+    url.query_pairs_mut().append_pair("ids", &serde_json::json!(version_ids).to_string());
+    let data = get_json(&client()?, url).await?;
+    let versions = data.as_array().ok_or("Modrinth returned an invalid version list.")?;
+    Ok(versions.iter().filter_map(|item| {
+        Some((item["id"].as_str()?.to_owned(), item["environment"].as_str()?.to_owned()))
+    }).collect())
 }
 
 fn safe_filename(original: &str, project_id: &str, version_id: &str) -> String {
