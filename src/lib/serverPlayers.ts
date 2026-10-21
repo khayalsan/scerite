@@ -46,22 +46,13 @@ function namedEntries(value: string): NamedEntry[] {
   } catch { return []; }
 }
 
-export async function loadPlayers(remote: boolean, profileId: string, running: boolean, onRoster?: (players: PlayerRecord[], lists: AccessLists) => void): Promise<{ players: PlayerRecord[]; lists: AccessLists; warning: string | null; onlineUnavailable: boolean }> {
-  const { cache, whitelist, ops, bans, bannedIps, uuids } = await invoke<PlayerRosterFiles>(
-    remote ? "read_remote_player_roster" : "read_local_player_roster", { profileId },
-  );
+export async function loadPlayers(remote: boolean, profileId: string, running: boolean, onRoster?: (players: PlayerRecord[], lists: AccessLists, ready: boolean) => void): Promise<{ players: PlayerRecord[]; lists: AccessLists; warning: string | null; onlineUnavailable: boolean }> {
+  let lists: AccessLists = { whitelist: [], operators: [], bannedNames: [], bannedIps: [] };
+  const byKey = new Map<string, PlayerRecord>();
   const listNames = (value: string): AccessEntry[] => namedEntries(value).map((entry) => ({
     value: typeof entry.name === "string" && entry.name ? entry.name : typeof entry.uuid === "string" ? entry.uuid : "",
     reason: typeof entry.reason === "string" ? entry.reason : null,
   })).filter((entry) => entry.value !== "");
-  const lists: AccessLists = {
-    whitelist: listNames(whitelist), operators: listNames(ops), bannedNames: listNames(bans),
-    bannedIps: namedEntries(bannedIps).map((entry) => ({
-      value: typeof entry.ip === "string" ? entry.ip : "",
-      reason: typeof entry.reason === "string" ? entry.reason : null,
-    })).filter((entry) => entry.value !== ""),
-  };
-  const byKey = new Map<string, PlayerRecord>();
   const ensure = (uuidValue: unknown, nameValue: unknown): PlayerRecord | null => {
     const uuid = typeof uuidValue === "string" && uuidPattern.test(uuidValue) ? uuidValue.toLowerCase() : null;
     const name = typeof nameValue === "string" && playerNamePattern.test(nameValue) ? nameValue : null;
@@ -77,24 +68,48 @@ export async function loadPlayers(remote: boolean, profileId: string, running: b
     byKey.set(player.key, player);
     return player;
   };
+  const snapshot = () => [...byKey.values()].map((player) => ({ ...player }))
+    .sort((a, b) => Number(b.online) - Number(a.online) || (a.name ?? a.uuid ?? "").localeCompare(b.name ?? b.uuid ?? ""));
+  let cachedOnlineNames: string[] = [];
+  try {
+    const cached = await invoke<{ uuid: string | null; name: string | null }[]>("read_player_identity_cache", { profileId });
+    for (const player of cached) ensure(player.uuid, player.name);
+    if (byKey.size) onRoster?.(snapshot(), lists, false);
+  } catch { /* A missing or damaged cache must not hide the saved roster. */ }
+  try {
+    const cached = await onlinePlayers.cached(profileId);
+    cachedOnlineNames = cached?.names ?? [];
+    for (const name of cachedOnlineNames) ensure(null, name);
+    if (byKey.size) onRoster?.(snapshot(), lists, false);
+  } catch { /* Online cache is optional. */ }
+
+  try {
+    const cache = await invoke<string>(remote ? "read_remote_player_usercache" : "read_local_player_usercache", { profileId });
+    for (const entry of namedEntries(cache)) ensure(entry.uuid, entry.name);
+    if (byKey.size) onRoster?.(snapshot(), lists, false);
+  } catch { /* The full roster read still reports file errors. */ }
+
+  const { cache, whitelist, ops, bans, bannedIps, uuids } = await invoke<PlayerRosterFiles>(
+    remote ? "read_remote_player_roster" : "read_local_player_roster", { profileId },
+  );
+  byKey.clear();
+  lists = {
+    whitelist: listNames(whitelist), operators: listNames(ops), bannedNames: listNames(bans),
+    bannedIps: namedEntries(bannedIps).map((entry) => ({
+      value: typeof entry.ip === "string" ? entry.ip : "",
+      reason: typeof entry.reason === "string" ? entry.reason : null,
+    })).filter((entry) => entry.value !== ""),
+  };
   for (const entry of namedEntries(cache)) ensure(entry.uuid, entry.name);
   for (const entry of namedEntries(whitelist)) { const player = ensure(entry.uuid, entry.name); if (player) player.whitelisted = true; }
   for (const entry of namedEntries(ops)) { const player = ensure(entry.uuid, entry.name); if (player) player.operator = true; }
   for (const entry of namedEntries(bans)) { const player = ensure(entry.uuid, entry.name); if (player) player.banned = true; }
-
   for (const uuid of uuids) ensure(uuid, null);
-
-  const snapshot = () => [...byKey.values()].map((player) => ({ ...player }))
-    .sort((a, b) => Number(b.online) - Number(a.online) || (a.name ?? a.uuid ?? "").localeCompare(b.name ?? b.uuid ?? ""));
-  onRoster?.(snapshot(), lists);
-
-  try {
-    const cached = await onlinePlayers.cached(profileId);
-    if (cached) {
-      for (const name of cached.names) ensure(null, name);
-      onRoster?.(snapshot(), lists);
-    }
-  } catch { /* A missing or damaged cache must not hide the saved roster. */ }
+  onRoster?.(snapshot(), lists, true);
+  const identities = snapshot().map(({ uuid, name }) => ({ uuid, name }));
+  void invoke("write_player_identity_cache", { profileId, players: identities }).catch(() => {});
+  for (const name of cachedOnlineNames) ensure(null, name);
+  if (cachedOnlineNames.length) onRoster?.(snapshot(), lists, true);
 
   let warning: string | null = null;
   let onlineUnavailable = false;

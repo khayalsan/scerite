@@ -4,6 +4,10 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 ## [Unreleased]
 
+### Changed
+
+- The Players tab now shows previously found players right away while it refreshes the full list and their access status.
+
 ## [0.4.1] - 2026-10-20
 
 ### Fixed
