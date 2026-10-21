@@ -2708,7 +2708,7 @@ pub async fn list_remote_world_backups(
             let path = format!("{folder}/{filename}");
             if !sftp.lstat(Path::new(&format!("{path}/level.dat")))
                 .is_ok_and(|level| level.file_type() == FileType::File) { continue; }
-            result.push(WorldBackup { name, path, kind: "preserved".into(), modified: world_management::preserved_backup_time(&filename).or_else(|| metadata.mtime.map(u64::from)) });
+            result.push(WorldBackup { name, path, kind: "preserved".into(), modified: world_management::preserved_backup_time(&filename).or_else(|| metadata.mtime.map(u64::from)), automatic: false });
         }
         Ok(result)
     }).await?;
@@ -2732,6 +2732,37 @@ pub async fn backup_remote_world(
         export_remote_world(&sftp, &world, &world_name, &destination)?;
         Ok(destination.to_string_lossy().into_owned())
     }).await
+}
+
+#[tauri::command]
+pub async fn auto_backup_remote_world(
+    app: AppHandle, profile_id: Uuid,
+    profiles: State<'_, ServerProfileStore>, remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<Option<String>, String> {
+    let settings = profiles.auto_backup_settings(profile_id)?;
+    if !settings.enabled { return Ok(None); }
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    let app_for_remote = app.clone();
+    let (path, name) = run_remote(profile, environment, Arc::clone(remote_sessions.inner()), move |session, profile| {
+        let sftp = session.sftp().map_err(|error| format!("Could not open SFTP: {error}"))?;
+        let root = remote_root_with_sftp(&sftp, configured_remote_root(profile)?)?;
+        require_remote_world_stopped(session, profile, &root)?;
+        let properties_path = format!("{root}/server.properties");
+        reject_remote_symlink_path(&sftp, &root, &properties_path)?;
+        let properties_path = canonical_inside(&sftp, &root, &properties_path)?;
+        if sftp.lstat(Path::new(&properties_path))?.file_type() != FileType::File {
+            return Err("server.properties is missing or is not a regular file.".into());
+        }
+        let properties = sftp.read_prefix(Path::new(&properties_path), MAX_FILE_BYTES as usize + 1)?;
+        if properties.len() as u64 > MAX_FILE_BYTES { return Err("server.properties is too large to read for automatic backup.".into()); }
+        let name = server_players::world_name(Some(&properties))?;
+        let world = checked_remote_world(&sftp, &root, &name)?;
+        let destination = world_management::backup_destination_for(&app_for_remote, profile_id, &name, true)?;
+        export_remote_world(&sftp, &world, &name, &destination)?;
+        Ok((destination.to_string_lossy().into_owned(), name))
+    }).await?;
+    world_management::prune_automatic_backups(&app, profile_id, &name, settings.keep, &path)?;
+    Ok(Some(path))
 }
 
 #[tauri::command]

@@ -15,7 +15,8 @@ use zip::{CompressionMethod, ZipArchive, ZipWriter, write::SimpleFileOptions};
 
 use crate::{
     server_files::{local_server_root, resolve_existing},
-    server_profiles::ServerProfileStore,
+    server_players,
+    server_profiles::{AutoBackupSettings, ServerProfileStore},
     server_sessions::{LocalServerState, LocalSessionManager},
 };
 
@@ -44,6 +45,29 @@ pub struct WorldBackup {
     pub path: String,
     pub kind: String,
     pub modified: Option<u64>,
+    pub automatic: bool,
+}
+
+#[tauri::command]
+pub fn read_auto_backup_settings(profile_id: Uuid, profiles: State<'_, ServerProfileStore>) -> Result<AutoBackupSettings, String> {
+    profiles.auto_backup_settings(profile_id)
+}
+
+#[tauri::command]
+pub fn save_auto_backup_settings(
+    profile_id: Uuid, enabled: bool, keep: u8, profiles: State<'_, ServerProfileStore>,
+) -> Result<AutoBackupSettings, String> {
+    profiles.set_auto_backup_settings(profile_id, AutoBackupSettings { enabled, keep })
+}
+
+#[tauri::command]
+pub fn delete_world_zip_backup(
+    app: AppHandle, profile_id: Uuid, world_name: String, backup_path: String,
+    profiles: State<'_, ServerProfileStore>,
+) -> Result<(), String> {
+    profiles.auto_backup_settings(profile_id)?;
+    let path = checked_app_backup(&app, profile_id, &world_name, &backup_path)?;
+    fs::remove_file(path).map_err(|error| format!("Could not delete the ZIP backup: {error}"))
 }
 
 pub(crate) fn valid_world_name(name: &str) -> bool {
@@ -299,15 +323,22 @@ pub(crate) fn backup_destination(
     profile_id: Uuid,
     name: &str,
 ) -> Result<PathBuf, String> {
+    backup_destination_for(app, profile_id, name, false)
+}
+
+pub(crate) fn backup_destination_for(
+    app: &AppHandle, profile_id: Uuid, name: &str, automatic: bool,
+) -> Result<PathBuf, String> {
     if !valid_world_name(name) {
         return Err("Choose a valid world folder.".into());
     }
-    let directory = app
+    let mut directory = app
         .path()
         .app_data_dir()
         .map_err(|error| error.to_string())?
         .join("world-backups")
         .join(profile_id.to_string());
+    if automatic { directory = directory.join("auto"); }
     fs::create_dir_all(&directory)
         .map_err(|error| format!("Could not create the backup folder: {error}"))?;
     let timestamp = SystemTime::now()
@@ -357,7 +388,9 @@ pub(crate) fn checked_app_backup(
     let source = Path::new(path);
     let filename = source.file_name().and_then(|name| name.to_str())
         .ok_or("Choose a valid ZIP backup.")?;
-    if source.parent() != Some(folder.as_path()) || backup_name(filename, true).as_deref() != Some(world_name) {
+    let parent = source.parent().ok_or("Choose a valid ZIP backup.")?;
+    if (parent != folder && parent != folder.join("auto"))
+        || backup_name(filename, true).as_deref() != Some(world_name) {
         return Err("The selected ZIP is not a backup of this world.".into());
     }
     if !fs::symlink_metadata(source).is_ok_and(|metadata| metadata.file_type().is_file()) {
@@ -382,17 +415,38 @@ pub(crate) fn app_world_backups(app: &AppHandle, profile_id: Uuid) -> Result<Vec
         return Err("The app world backup path is not a regular folder.".into());
     }
     let mut backups = Vec::new();
-    for entry in fs::read_dir(folder).map_err(|error| format!("Could not list world backups: {error}"))? {
+    for (directory, automatic) in [(folder.clone(), false), (folder.join("auto"), true)] {
+        if automatic && !directory.exists() { continue; }
+        if !fs::symlink_metadata(&directory).is_ok_and(|metadata| metadata.file_type().is_dir()) {
+            return Err("The automatic backup path is not a regular folder.".into());
+        }
+        for entry in fs::read_dir(directory).map_err(|error| format!("Could not list world backups: {error}"))? {
         let entry = entry.map_err(|error| format!("Could not read a world backup: {error}"))?;
         let metadata = fs::symlink_metadata(entry.path()).map_err(|error| error.to_string())?;
         if !metadata.file_type().is_file() { continue; }
         let filename = entry.file_name().to_string_lossy().into_owned();
         if let Some(name) = backup_name(&filename, true) {
             backups.push(WorldBackup { name, path: entry.path().to_string_lossy().into_owned(),
-                kind: "zip".into(), modified: zip_backup_time(&filename).or_else(|| modified_seconds(&metadata)) });
+                kind: "zip".into(), modified: zip_backup_time(&filename).or_else(|| modified_seconds(&metadata)), automatic });
+        }
         }
     }
     Ok(backups)
+}
+
+pub(crate) fn prune_automatic_backups(
+    app: &AppHandle, profile_id: Uuid, name: &str, keep: u8, newest: &str,
+) -> Result<(), String> {
+    let mut backups: Vec<_> = app_world_backups(app, profile_id)?.into_iter()
+        .filter(|backup| backup.automatic && backup.name == name).collect();
+    backups.sort_by(|a, b| (b.path == newest).cmp(&(a.path == newest))
+        .then_with(|| b.modified.cmp(&a.modified)));
+    for backup in backups.into_iter().skip(usize::from(keep)) {
+        checked_app_backup(app, profile_id, name, &backup.path)?;
+        fs::remove_file(&backup.path)
+            .map_err(|error| format!("The new backup was saved, but an older automatic backup could not be removed: {error}"))?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -414,7 +468,7 @@ pub fn list_local_world_backups(
             let filename = entry.file_name().to_string_lossy().into_owned();
             if let Some(name) = backup_name(&filename, false) {
                 backups.push(WorldBackup { name, path: entry.path().to_string_lossy().into_owned(),
-                    kind: "preserved".into(), modified: preserved_backup_time(&filename).or_else(|| modified_seconds(&metadata)) });
+                    kind: "preserved".into(), modified: preserved_backup_time(&filename).or_else(|| modified_seconds(&metadata)), automatic: false });
             }
         }
     }
@@ -539,6 +593,33 @@ pub async fn backup_local_world(
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn auto_backup_local_world(
+    app: AppHandle, profile_id: Uuid,
+    profiles: State<'_, ServerProfileStore>, manager: State<'_, LocalSessionManager>,
+) -> Result<Option<String>, String> {
+    let settings = profiles.auto_backup_settings(profile_id)?;
+    if !settings.enabled { return Ok(None); }
+    require_stopped(profile_id, &manager)?;
+    let root = local_server_root(profile_id, &profiles)?;
+    let properties_path = root.join("server.properties");
+    if !fs::symlink_metadata(&properties_path).is_ok_and(|metadata| metadata.file_type().is_file()) {
+        return Err("server.properties is missing or is not a regular file.".into());
+    }
+    let properties = fs::read(properties_path)
+        .map_err(|error| format!("Could not read server.properties for automatic backup: {error}"))?;
+    let name = server_players::world_name(Some(&properties))?;
+    let world = checked_local_world(&root, &name)?;
+    let destination = backup_destination_for(&app, profile_id, &name, true)?;
+    let name_for_archive = name.clone();
+    let path = tauri::async_runtime::spawn_blocking(move || {
+        export_local_world(&world, &name_for_archive, &destination)?;
+        Ok::<_, String>(destination.to_string_lossy().into_owned())
+    }).await.map_err(|error| error.to_string())??;
+    prune_automatic_backups(&app, profile_id, &name, settings.keep, &path)?;
+    Ok(Some(path))
 }
 
 #[tauri::command]

@@ -13,6 +13,7 @@ interface WorldsPanelProps {
   remote: boolean;
   canEdit: boolean;
   running: boolean;
+  backupRevision: number;
 }
 
 function errorText(error: unknown) {
@@ -33,11 +34,16 @@ function validRuleValue(value: string) {
     (!/^-?\d/.test(value) || (Number.isSafeInteger(Number(value)) && Math.abs(Number(value)) <= 2147483647));
 }
 
-export function WorldsPanel({ profileId, remote, canEdit, running }: WorldsPanelProps) {
+export function WorldsPanel({ profileId, remote, canEdit, running, backupRevision }: WorldsPanelProps) {
   const [worlds, setWorlds] = useState<ServerFileEntry[]>([]);
   const [backups, setBackups] = useState<WorldBackup[]>([]);
   const [backupsLoading, setBackupsLoading] = useState(true);
   const [backupsError, setBackupsError] = useState<string | null>(null);
+  const [autoBackupEnabled, setAutoBackupEnabled] = useState(false);
+  const [autoBackupKeep, setAutoBackupKeep] = useState("3");
+  const [autoBackupLoading, setAutoBackupLoading] = useState(true);
+  const [autoBackupSaving, setAutoBackupSaving] = useState(false);
+  const [autoBackupError, setAutoBackupError] = useState<string | null>(null);
   const [activeWorldName, setActiveWorldName] = useState("");
   const [selectedWorld, setSelectedWorld] = useState<string | null>(null);
   const [directory, setDirectory] = useState<string | null>(null);
@@ -93,7 +99,19 @@ export function WorldsPanel({ profileId, remote, canEdit, running }: WorldsPanel
       .catch((reason: unknown) => { if (active) setBackupsError(errorText(reason)); })
       .finally(() => { if (active) setBackupsLoading(false); });
     return () => { active = false; };
-  }, [profileId, remote, revision]);
+  }, [profileId, remote, revision, backupRevision]);
+
+  useEffect(() => {
+    let active = true;
+    setAutoBackupLoading(true);
+    void serverWorlds.autoBackupSettings(profileId)
+      .then((settings) => {
+        if (active) { setAutoBackupEnabled(settings.enabled); setAutoBackupKeep(String(settings.keep)); }
+      })
+      .catch((reason: unknown) => { if (active) setAutoBackupError(errorText(reason)); })
+      .finally(() => { if (active) setAutoBackupLoading(false); });
+    return () => { active = false; };
+  }, [profileId]);
 
   useEffect(() => {
     if (!selectedWorld) { setSettings(null); return; }
@@ -197,6 +215,32 @@ export function WorldsPanel({ profileId, remote, canEdit, running }: WorldsPanel
     finally { setBusy(null); }
   }
 
+  async function saveAutoBackupSettings() {
+    const keep = Number(autoBackupKeep);
+    if (!Number.isInteger(keep) || keep < 1 || keep > 100) {
+      setAutoBackupError("Keep between 1 and 100 automatic backups."); return;
+    }
+    setAutoBackupSaving(true); setAutoBackupError(null);
+    try {
+      const saved = await serverWorlds.saveAutoBackupSettings(profileId, autoBackupEnabled, keep);
+      setAutoBackupEnabled(saved.enabled); setAutoBackupKeep(String(saved.keep));
+      setMessage("Automatic backup settings saved.");
+    } catch (reason) { setAutoBackupError(errorText(reason)); }
+    finally { setAutoBackupSaving(false); }
+  }
+
+  async function deleteBackup(backup: WorldBackup) {
+    if (backup.kind !== "zip" || busy) return;
+    if (!window.confirm(`Delete this ${backup.automatic ? "automatic" : "manual"} ZIP backup of ${backup.name}? This cannot be undone.`)) return;
+    setBusy("delete"); setError(null); setMessage(null);
+    try {
+      await serverWorlds.deleteZipBackup(profileId, backup);
+      setMessage(`Deleted the ZIP backup of ${backup.name}.`);
+      setRevision((value) => value + 1);
+    } catch (reason) { setError(`Could not delete the backup: ${errorText(reason)}`); }
+    finally { setBusy(null); }
+  }
+
   async function applyRule(name: string) {
     const value = ruleValues[name]?.trim() ?? "";
     if (!running || !/^(?:[A-Za-z0-9_]{1,64}|[a-z0-9_.-]+:[a-z0-9_/.-]+)$/.test(name) || !validRuleValue(value)) {
@@ -253,6 +297,13 @@ export function WorldsPanel({ profileId, remote, canEdit, running }: WorldsPanel
       </header>
       {error && <p className="files-error" role="alert">{error}</p>}
       {message && <p className="notice" role="status">{message}</p>}
+      <section className="worlds-auto-backup" aria-label="Automatic world backups">
+        <div><h4>Automatic backups</h4><p>While Scerite is open, back up the active world after the server stops. Only automatic ZIPs are removed when the limit is reached.</p></div>
+        <label className="worlds-auto-toggle"><input type="checkbox" checked={autoBackupEnabled} onChange={(event) => setAutoBackupEnabled(event.currentTarget.checked)} disabled={autoBackupLoading || autoBackupSaving} /> Back up when the server stops</label>
+        <label className="worlds-auto-keep">Automatic backups to keep<input type="number" min="1" max="100" step="1" value={autoBackupKeep} onChange={(event) => setAutoBackupKeep(event.currentTarget.value)} disabled={autoBackupLoading || autoBackupSaving} /></label>
+        <button className="button button-secondary" type="button" disabled={autoBackupLoading || autoBackupSaving} onClick={() => void saveAutoBackupSettings()}>{autoBackupSaving ? "Saving…" : "Save settings"}</button>
+        {autoBackupError && <p className="files-error" role="alert">{autoBackupError}</p>}
+      </section>
       {isLoading ? <p className="state-message">Finding worlds…</p> : worlds.length === 0 ? (
         <p className="state-message">No world folders were found. A world appears here after the server creates a folder containing level.dat.</p>
       ) : (
@@ -321,15 +372,16 @@ export function WorldsPanel({ profileId, remote, canEdit, running }: WorldsPanel
         </div>
       )}
       <section className="worlds-backups" aria-label="World backups">
-        <div><h3>Backed up worlds</h3><p>Restore a chosen backup or the latest one for a world. Scerite preserves the current world before restoring.</p></div>
+        <div><h3>Backed up worlds</h3><p>Restore a chosen backup or the latest one for a world. Manual ZIPs stay until you delete them.</p></div>
         {backupsError && <p className="files-error" role="alert">Could not list backups: {backupsError}</p>}
-        {backupsLoading ? <p className="state-message">Finding backups…</p> : backups.length === 0 ? <p className="state-message">No backups yet. Stop a server and choose Back up on a world.</p> : (
+        {backupsLoading ? <p className="state-message">Finding backups…</p> : backups.length === 0 ? <p className="state-message">No backups yet. Stop the server to create a manual backup, or enable automatic backups above.</p> : (
           <div className="worlds-backup-groups">{backupGroups.map((group) => <div className="worlds-backup-group" key={group.name}>
             <div className="worlds-backup-group-heading"><strong>{group.name}</strong><button className="button button-secondary" type="button" disabled={!canEdit || !!busy} onClick={() => void restoreBackup(group.entries[0])}>{busy === "restore" ? "Restoring…" : "Restore latest"}</button></div>
             <div className="worlds-backup-list">{group.entries.map((backup) => <div className="worlds-backup" key={backup.path}>
               <Archive size={16} aria-hidden="true" />
-              <div><strong>{backup.kind === "zip" ? "ZIP backup" : "Preserved world folder"}</strong><small>{backup.modified ? new Date(backup.modified * 1000).toLocaleString() : "Date unavailable"}</small><code>{backup.path}</code></div>
+              <div><strong>{backup.automatic ? "Automatic ZIP" : backup.kind === "zip" ? "Manual ZIP" : "Preserved world folder"}</strong><small>{backup.modified ? new Date(backup.modified * 1000).toLocaleString() : "Date unavailable"}</small><code>{backup.path}</code></div>
               <button className="button button-quiet" type="button" disabled={!canEdit || !!busy} onClick={() => void restoreBackup(backup)}>Restore this</button>
+              {backup.kind === "zip" && <button className="button button-quiet" type="button" disabled={!!busy} onClick={() => void deleteBackup(backup)}>Delete</button>}
             </div>)}</div>
           </div>)}</div>
         )}
