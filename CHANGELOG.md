@@ -4,6 +4,11 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 ## [Unreleased]
 
+### Added
+
+- Server settings now let you choose how much RAM Java can use when starting a server.
+- The Server tab shows recent TPS for Paper-compatible servers when their console reports it.
+
 ### Changed
 
 - The Players tab now shows previously found players right away while it refreshes the full list and their access status.
