@@ -14,6 +14,7 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 ### Changed
 
+- App settings now open from the bottom-left sidebar button, with shortcuts to saved servers in the sidebar. The Servers page uses the available width, and the theme control blends into its setting row.
 - The Players tab now shows previously found players right away while it refreshes the full list and their access status.
 
 ### Fixed

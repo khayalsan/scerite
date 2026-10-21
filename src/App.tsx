@@ -212,6 +212,7 @@ function App() {
   const [theme, setTheme] = useState<ThemeId>(readSavedTheme);
   const navigate = useNavigate();
   const { pathname } = useLocation();
+  const isAppSettings = pathname === "/settings";
   const selectedProfileId = pathname.startsWith("/servers/") ? pathname.slice("/servers/".length) : null;
   const [profiles, setProfiles] = useState<ServerProfile[]>([]);
   const [environments, setEnvironments] = useState<ServerEnvironment[]>([]);
@@ -1214,6 +1215,9 @@ function App() {
                 <Settings size={16} aria-hidden="true" /> Settings
               </button>
             </nav>
+            <Link className="sidebar-settings-link server-page-app-settings" to="/settings" onClick={closeForm}>
+              <Settings size={17} aria-hidden="true" /> <span>App settings</span>
+            </Link>
           </aside>
         );
       })() : (
@@ -1223,15 +1227,23 @@ function App() {
             <span>scerite</span>
           </Link>
           <nav className="primary-nav">
-            <Link className="nav-link nav-link-active" to="/" aria-current="page">
+            <Link className={`nav-link${!isAppSettings ? " nav-link-active" : ""}`} to="/" aria-current={!isAppSettings ? "page" : undefined}>
               <span className="nav-indicator" aria-hidden="true" />
+              <Server className="sidebar-servers-icon" size={17} aria-hidden="true" />
               Servers
               <span className="nav-count">{profiles.length}</span>
             </Link>
+            {isAppSettings && profiles.length > 0 && <div className="sidebar-server-shortcuts" aria-label="Saved server shortcuts">
+              <span className="sidebar-server-shortcuts-title">Saved servers</span>
+              {profiles.map((profile) => <Link className="sidebar-server-link" to={`/servers/${profile.id}`} key={profile.id} title={profile.name} aria-label={`Open ${profile.name}`}>
+                <Server size={16} aria-hidden="true" /><span>{profile.name}</span>
+              </Link>)}
+            </div>}
           </nav>
           <div className="sidebar-footer">
-            <span className="connection-dot" aria-hidden="true" />
-            <span>Desktop app</span>
+            <Link className={`sidebar-settings-link${isAppSettings ? " sidebar-settings-link-active" : ""}`} to="/settings" aria-current={isAppSettings ? "page" : undefined} onClick={closeForm}>
+              <Settings size={17} aria-hidden="true" /> <span>App settings</span>
+            </Link>
           </div>
         </aside>
       )}
@@ -1242,34 +1254,12 @@ function App() {
         aria-labelledby={!selectedProfileId ? "page-title" : undefined}
         aria-label={selectedProfileId ? `${selectedProfile?.name ?? "Server"} workspace` : undefined}
       >
-        {!selectedProfileId && <header className="page-header">
+        {!selectedProfileId && !isAppSettings && <header className="page-header">
           <div>
             <h1 id="page-title">Servers</h1>
             <p>Manage local servers and group remote servers by environment.</p>
           </div>
           <div className="page-actions">
-            <label className="theme-picker">
-              <Palette size={16} aria-hidden="true" />
-              <span>Theme</span>
-              <Select
-                value={theme}
-                onValueChange={(value) => {
-                  const selectedTheme = themes.find((option) => option.id === value);
-                  if (selectedTheme) setTheme(selectedTheme.id);
-                }}
-              >
-                <SelectTrigger aria-label="Color theme" className="theme-select-trigger">
-                  <SelectValue>
-                    {(selected) => themes.find((option) => option.id === selected)?.label ?? "Violet Night"}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  {themes.map((option) => (
-                    <SelectItem key={option.id} value={option.id}>{option.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </label>
             {!isEnvironmentFormOpen && (
               <button className="button button-secondary" onClick={() => openNewEnvironment()}>
                 <Plus size={16} aria-hidden="true" /> Add environment
@@ -1283,13 +1273,31 @@ function App() {
           </div>
         </header>}
 
-        {!selectedProfileId && isEnvironmentFormOpen && renderEnvironmentForm()}
-        {!selectedProfileId && isFormOpen && !isEnvironmentFormOpen && renderProfileForm()}
+        {!selectedProfileId && !isAppSettings && isEnvironmentFormOpen && renderEnvironmentForm()}
+        {!selectedProfileId && !isAppSettings && isFormOpen && !isEnvironmentFormOpen && renderProfileForm()}
 
-        {!selectedProfileId && (
+        {isAppSettings && <header className="page-header"><div><h1 id="page-title">App settings</h1><p>Preferences for this app and local server files.</p></div></header>}
+
+        {isAppSettings && (
           <section className="app-settings-section" aria-labelledby="app-settings-title">
             <div className="environment-section-heading">
-              <h2 id="app-settings-title">App settings</h2>
+              <h2 id="app-settings-title">Preferences</h2>
+            </div>
+            <div className="app-setting-row app-theme-row">
+              <span className="app-setting-copy"><strong>Theme</strong><small>Choose the app's appearance.</small></span>
+              <label className="theme-picker">
+                <Palette size={16} aria-hidden="true" />
+                <span className="sr-only">Theme</span>
+                <Select value={theme} onValueChange={(value) => {
+                  const selectedTheme = themes.find((option) => option.id === value);
+                  if (selectedTheme) setTheme(selectedTheme.id);
+                }}>
+                  <SelectTrigger aria-label="Color theme" className="theme-select-trigger">
+                    <SelectValue>{(selected) => themes.find((option) => option.id === selected)?.label ?? "Violet Night"}</SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>{themes.map((option) => <SelectItem key={option.id} value={option.id}>{option.label}</SelectItem>)}</SelectContent>
+                </Select>
+              </label>
             </div>
             <label className="app-setting-row">
               <span className="app-setting-copy">
@@ -1317,7 +1325,7 @@ function App() {
           </section>
         )}
 
-        {!selectedProfileId && (
+        {isAppSettings && (
           <section className="local-root-section" aria-labelledby="local-root-title">
             <div className="environment-section-heading">
               <h2 id="local-root-title">This computer</h2>
@@ -1339,7 +1347,7 @@ function App() {
           </section>
         )}
 
-        {!selectedProfileId && environments.length > 0 && (
+        {!selectedProfileId && !isAppSettings && environments.length > 0 && (
           <section className="environment-section" aria-label="Remote environments">
             <div className="environment-section-heading">
               <h2>Remote environments</h2>
@@ -1377,7 +1385,7 @@ function App() {
           </section>
         )}
 
-        {loadError && profiles.length > 0 && (
+        {!isAppSettings && loadError && profiles.length > 0 && (
           <div className="notice notice-error" role="alert">
             <div>
               <strong>Could not refresh saved servers.</strong>
@@ -1387,7 +1395,7 @@ function App() {
           </div>
         )}
 
-        {actionError && (
+        {!isAppSettings && actionError && (
           <div className="notice notice-error" role="alert">
             <div>
               <strong>Could not remove the saved profile.</strong>
@@ -1397,19 +1405,19 @@ function App() {
           </div>
         )}
 
-        {sessionError && (
+        {!isAppSettings && sessionError && (
           <div className="notice notice-error" role="alert">
             <div><strong>Could not complete the server action.</strong><span>{sessionError}</span></div>
             <button className="button button-quiet" onClick={() => setSessionError(null)}>Dismiss</button>
           </div>
         )}
 
-        {!selectedProfileId && <div className="list-heading">
+        {!selectedProfileId && !isAppSettings && <div className="list-heading">
           <h2>{filteredEnvironment ? `${filteredEnvironment.name} servers` : "Saved servers"}</h2>
           {!isLoading && <span>{visibleProfiles.length} {visibleProfiles.length === 1 ? "server" : "servers"}</span>}
         </div>}
 
-        {isLoading ? (
+        {!isAppSettings && (isLoading ? (
           <p className="state-message" role="status">Loading saved servers…</p>
         ) : loadError && profiles.length === 0 ? (
           <div className="empty-state">
@@ -1590,7 +1598,7 @@ function App() {
               );
             })}
           </div>
-        )}
+        ))}
       </section>
     </main>
   );
