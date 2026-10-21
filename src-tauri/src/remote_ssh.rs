@@ -38,6 +38,7 @@ use crate::java_runtime::JavaPackage;
 use crate::server_logs::{self, ServerLogSnapshot};
 use crate::server_players::{self, PlayerData, PlayerRosterFiles};
 use crate::server_port;
+use crate::server_files::validate_server_icon;
 use crate::world_management::{self, WorldBackup, WorldSettings};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -969,6 +970,46 @@ pub async fn write_remote_server_file(
         Ok(())
     })
     .await
+}
+
+#[tauri::command]
+pub async fn upload_remote_server_icon(
+    profile_id: Uuid,
+    bytes: Vec<u8>,
+    profiles: State<'_, ServerProfileStore>,
+    remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<(), String> {
+    validate_server_icon(&bytes)?;
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    run_remote(profile, environment, Arc::clone(remote_sessions.inner()), move |session, profile| {
+        match remote_is_running(session, profile)? {
+            Some(true) => return Err("Stop the server before changing its multiplayer icon.".into()),
+            Some(false) => {}
+            None => return Err("tmux is required to confirm the remote server is stopped before changing its icon.".into()),
+        }
+        let sftp = session.sftp().map_err(|error| format!("Could not open SFTP: {error}"))?;
+        let root = remote_root_with_sftp(&sftp, configured_remote_root(profile)?)?;
+        if remote_directory_has_java_process(session, &root)? {
+            return Err("A Java process is using the remote server folder. Stop it before changing the icon.".into());
+        }
+        let destination = format!("{root}/server-icon.png");
+        if let Ok(metadata) = sftp.lstat(Path::new(&destination)) {
+            if metadata.file_type() != FileType::File {
+                return Err("The server icon path is not a regular file.".into());
+            }
+            canonical_inside(&sftp, &root, &destination)?;
+        }
+        let temporary = format!("{root}/.scerite-{}.tmp", Uuid::new_v4());
+        if let Err(error) = sftp.write_file_exclusive(Path::new(&temporary), &bytes) {
+            let _ = sftp.unlink(Path::new(&temporary));
+            return Err(format!("Could not upload the server icon: {error}"));
+        }
+        if let Err(error) = sftp.posix_rename(Path::new(&temporary), Path::new(&destination)) {
+            let _ = sftp.unlink(Path::new(&temporary));
+            return Err(format!("Could not save the server icon: {error}"));
+        }
+        Ok(())
+    }).await
 }
 
 async fn run_remote<T, F>(

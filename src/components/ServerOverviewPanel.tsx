@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { ServerEnvironment, ServerProfile } from "../lib/serverProfiles";
 import { serverFiles } from "../lib/serverFiles";
 import { serverSessions } from "../lib/serverSessions";
+import { ServerIconControl } from "./ServerIconControl";
 
 type Usage = { playersOnline: number | null; maxPlayers: number | null; cpuPercent: number | null; memoryBytes: number | null };
 
@@ -133,5 +134,6 @@ export function ServerOverviewPanel({ profile, environment, state }: { profile: 
       <div><dt>RAM</dt><dd>{state === "offline" ? "0 MB" : memoryLabel(usage?.memoryBytes)}</dd></div>
       <div><dt>TPS (1m)</dt><dd title={supportsTps ? "Average ticks per second over the last minute; refreshed every 30 seconds." : "TPS requires a Paper-compatible server with a tps console command."}>{state === "online" ? tps == null ? tpsLoading ? "Checking…" : "Unavailable" : tps.toFixed(1) : "—"}</dd></div>
     </dl>
+    <ServerIconControl key={profile.id} profileId={profile.id} remote={remote} running={state !== "offline"} />
   </section>;
 }

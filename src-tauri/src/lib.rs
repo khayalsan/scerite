@@ -93,6 +93,7 @@ pub fn run() {
             server_players::read_local_player_roster,
             server_players::read_local_player_usercache,
             server_files::write_local_server_file,
+            server_files::upload_local_server_icon,
             remote_ssh::test_remote_connection,
             remote_ssh::test_remote_connection_draft,
             remote_ssh::remote_server_status,
@@ -122,6 +123,7 @@ pub fn run() {
             online_player_cache::write_online_player_cache,
             remote_ssh::detect_remote_fabric_version,
             remote_ssh::write_remote_server_file,
+            remote_ssh::upload_remote_server_icon,
         ])
         .run(tauri::generate_context!())
         .expect("error while running scerite");

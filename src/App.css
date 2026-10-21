@@ -997,6 +997,15 @@
 .server-overview-details dd { margin: 0; overflow-wrap: anywhere; font-size: 15px; font-weight: 650; font-variant-numeric: tabular-nums; }
 .server-overview-status-online { color: var(--success, #74c69d); }
 .server-overview-status-offline { color: var(--app-muted); }
+.server-icon-control { margin-top: 20px; padding: 18px; border: 1px solid var(--app-line); border-radius: 10px; background: var(--app-ground); }
+.server-icon-control h3 { margin: 0 0 4px; font-size: 16px; }
+.server-icon-control p { margin: 0; color: var(--app-muted); font-size: 13px; }
+.server-icon-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 16px; }
+.server-icon-actions img { flex: none; width: 64px; height: 64px; border-radius: 6px; image-rendering: pixelated; }
+.server-icon-actions input { max-width: 100%; min-width: 0; }
+.server-icon-control small { display: block; margin-top: 10px; color: var(--app-muted); }
+.server-icon-control .form-error { margin-top: 10px; color: var(--danger, #ff8097); }
+.server-icon-control [role="status"] { margin-top: 10px; color: var(--success, #74c69d); }
 @media (max-width: 640px) { .server-overview { padding: 16px; } .server-overview-details > div { grid-template-columns: 95px minmax(0, 1fr); } }
 
 .install-panel {
