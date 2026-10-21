@@ -726,6 +726,23 @@ fn optional_remote_player_list(sftp: &RemoteSftp, root: &str, relative: &str) ->
 }
 
 #[tauri::command]
+pub async fn read_remote_player_usercache(
+    profile_id: Uuid,
+    profiles: State<'_, ServerProfileStore>,
+    remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<String, String> {
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    run_remote(profile, environment, Arc::clone(remote_sessions.inner()), move |session, profile| {
+        let sftp = session.sftp().map_err(|error| format!("Could not open SFTP: {error}"))?;
+        let root = remote_root_with_sftp(&sftp, configured_remote_root(profile)?)?;
+        optional_remote_player_file(&sftp, &root, "usercache.json")?
+            .map(|bytes| String::from_utf8(bytes).map_err(|error| error.to_string()))
+            .transpose()
+            .map(|value| value.unwrap_or_default())
+    }).await
+}
+
+#[tauri::command]
 pub async fn read_remote_player_roster(
     profile_id: Uuid,
     profiles: State<'_, ServerProfileStore>,

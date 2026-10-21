@@ -9,6 +9,10 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 - The Worlds tab shows saved seeds and gamerules, including the newer Minecraft gamerule formats. You can change gamerules on a running server, back up or download a stopped world as a ZIP, upload a replacement ZIP, and generate the active world again with new settings while preserving the previous world. Backups and preserved world folders can be restored individually or by choosing the latest backup for a world.
 - Each server can automatically back up its active world when Scerite observes it stop. You can choose how many automatic backups to keep (default 3); older automatic ZIPs are removed after a new one is saved. Manual ZIPs remain until you delete them.
 
+### Changed
+
+- The Players tab now shows previously found players right away while it refreshes the full list and their access status.
+
 ### Fixed
 
 - Long world settings and file lists can now scroll within the Worlds tab.
