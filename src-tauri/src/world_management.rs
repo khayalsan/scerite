@@ -34,7 +34,16 @@ pub struct WorldRule {
 #[serde(rename_all = "camelCase")]
 pub struct WorldSettings {
     actual_seed: Option<String>,
-    gamerules: Vec<WorldRule>,
+    pub(crate) gamerules: Vec<WorldRule>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorldBackup {
+    pub name: String,
+    pub path: String,
+    pub kind: String,
+    pub modified: Option<u64>,
 }
 
 pub(crate) fn valid_world_name(name: &str) -> bool {
@@ -71,10 +80,11 @@ pub(crate) fn decode_settings(bytes: &[u8]) -> Result<WorldSettings, String> {
         .and_then(Value::as_i64)
         .map(|seed| seed.to_string());
     let mut gamerules = BTreeMap::new();
-    if let Some(Value::Compound(rules)) = data.get("GameRules") {
+    if let Some(Value::Compound(rules)) = data.get("game_rules").or_else(|| data.get("GameRules")) {
         for (name, value) in rules {
             let text = match value {
                 Value::String(text) => Some(text.clone()),
+                Value::Byte(value) => Some((*value != 0).to_string()),
                 _ => value.as_i64().map(|number| number.to_string()),
             };
             if let Some(text) = text {
@@ -89,6 +99,37 @@ pub(crate) fn decode_settings(bytes: &[u8]) -> Result<WorldSettings, String> {
             .map(|(name, value)| WorldRule { name, value })
             .collect(),
     })
+}
+
+pub(crate) fn decode_separate_rules(bytes: &[u8]) -> Result<Vec<WorldRule>, String> {
+    let mut decoded = Vec::new();
+    GzDecoder::new(bytes)
+        .take(MAX_LEVEL_BYTES + 1)
+        .read_to_end(&mut decoded)
+        .map_err(|error| format!("Could not read game_rules.dat: {error}"))?;
+    if decoded.len() as u64 > MAX_LEVEL_BYTES {
+        return Err("game_rules.dat is too large to inspect.".into());
+    }
+    let root: HashMap<String, Value> = fastnbt::from_bytes(&decoded)
+        .map_err(|error| format!("Could not decode game_rules.dat: {error}"))?;
+    let rules = root.get("data").and_then(|value| match value {
+        Value::Compound(data) => data.get("gamerules"),
+        _ => None,
+    });
+    let Some(Value::Compound(rules)) = rules else {
+        return Err("game_rules.dat does not contain gamerules.".into());
+    };
+    let mut result = Vec::new();
+    for (name, value) in rules {
+        let text = match value {
+            Value::String(text) => Some(text.clone()),
+            Value::Byte(value) => Some((*value != 0).to_string()),
+            _ => value.as_i64().map(|number| number.to_string()),
+        };
+        if let Some(value) = text { result.push(WorldRule { name: name.clone(), value }); }
+    }
+    result.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(result)
 }
 
 pub(crate) fn checked_local_world(root: &Path, name: &str) -> Result<PathBuf, String> {
@@ -115,13 +156,18 @@ pub fn read_local_world_settings(
     profiles: State<'_, ServerProfileStore>,
 ) -> Result<WorldSettings, String> {
     let root = local_server_root(profile_id, &profiles)?;
-    checked_local_world(&root, &world_name)?;
+    let world = checked_local_world(&root, &world_name)?;
     let level = resolve_existing(&root, &format!("{world_name}/level.dat"))?;
     let metadata = fs::metadata(&level).map_err(|error| error.to_string())?;
     if metadata.len() > MAX_LEVEL_BYTES {
         return Err("level.dat is too large to inspect.".into());
     }
-    decode_settings(&fs::read(level).map_err(|error| format!("Could not read level.dat: {error}"))?)
+    let mut settings = decode_settings(&fs::read(level).map_err(|error| format!("Could not read level.dat: {error}"))?)?;
+    let separate = world.join("data/minecraft/game_rules.dat");
+    if fs::symlink_metadata(&separate).is_ok_and(|metadata| metadata.file_type().is_file()) {
+        settings.gamerules = decode_separate_rules(&fs::read(separate).map_err(|error| format!("Could not read game_rules.dat: {error}"))?)?;
+    }
+    Ok(settings)
 }
 
 fn require_stopped(
@@ -269,6 +315,72 @@ pub(crate) fn backup_destination(
         .map_err(|error| error.to_string())?
         .as_secs();
     Ok(directory.join(format!("{name}-{timestamp}-{}.zip", Uuid::new_v4())))
+}
+
+fn backup_name(name: &str, zip: bool) -> Option<String> {
+    let stem = if zip { name.strip_suffix(".zip")? } else { name };
+    // UUIDs contain hyphens, so take the fixed-width suffix instead.
+    let id = stem.get(stem.len().checked_sub(36)?..)?;
+    Uuid::parse_str(id).ok()?;
+    let prefix = stem.strip_suffix(id)?.strip_suffix('-')?;
+    let world = if zip { prefix.rsplit_once('-')?.0 } else { prefix };
+    valid_world_name(world).then(|| world.to_owned())
+}
+
+pub(crate) fn preserved_backup_name(name: &str) -> Option<String> {
+    backup_name(name, false)
+}
+
+fn modified_seconds(metadata: &fs::Metadata) -> Option<u64> {
+    metadata.modified().ok()?.duration_since(UNIX_EPOCH).ok().map(|time| time.as_secs())
+}
+
+pub(crate) fn app_world_backups(app: &AppHandle, profile_id: Uuid) -> Result<Vec<WorldBackup>, String> {
+    let folder = app.path().app_data_dir().map_err(|error| error.to_string())?
+        .join("world-backups").join(profile_id.to_string());
+    if !folder.exists() { return Ok(Vec::new()); }
+    if !fs::symlink_metadata(&folder).is_ok_and(|metadata| metadata.file_type().is_dir()) {
+        return Err("The app world backup path is not a regular folder.".into());
+    }
+    let mut backups = Vec::new();
+    for entry in fs::read_dir(folder).map_err(|error| format!("Could not list world backups: {error}"))? {
+        let entry = entry.map_err(|error| format!("Could not read a world backup: {error}"))?;
+        let metadata = fs::symlink_metadata(entry.path()).map_err(|error| error.to_string())?;
+        if !metadata.file_type().is_file() { continue; }
+        let filename = entry.file_name().to_string_lossy().into_owned();
+        if let Some(name) = backup_name(&filename, true) {
+            backups.push(WorldBackup { name, path: entry.path().to_string_lossy().into_owned(),
+                kind: "zip".into(), modified: modified_seconds(&metadata) });
+        }
+    }
+    Ok(backups)
+}
+
+#[tauri::command]
+pub fn list_local_world_backups(
+    app: AppHandle, profile_id: Uuid, profiles: State<'_, ServerProfileStore>,
+) -> Result<Vec<WorldBackup>, String> {
+    let root = local_server_root(profile_id, &profiles)?;
+    let mut backups = app_world_backups(&app, profile_id)?;
+    let folder = root.join(".scerite-world-backups");
+    if folder.exists() {
+        if !fs::symlink_metadata(&folder).is_ok_and(|metadata| metadata.file_type().is_dir()) {
+            return Err("The preserved world path is not a regular folder.".into());
+        }
+        for entry in fs::read_dir(folder).map_err(|error| format!("Could not list preserved worlds: {error}"))? {
+            let entry = entry.map_err(|error| format!("Could not read a preserved world: {error}"))?;
+            let metadata = fs::symlink_metadata(entry.path()).map_err(|error| error.to_string())?;
+            if !metadata.file_type().is_dir() || !fs::symlink_metadata(entry.path().join("level.dat"))
+                .is_ok_and(|level| level.file_type().is_file()) { continue; }
+            let filename = entry.file_name().to_string_lossy().into_owned();
+            if let Some(name) = backup_name(&filename, false) {
+                backups.push(WorldBackup { name, path: entry.path().to_string_lossy().into_owned(),
+                    kind: "preserved".into(), modified: modified_seconds(&metadata) });
+            }
+        }
+    }
+    backups.sort_by(|a, b| b.modified.cmp(&a.modified));
+    Ok(backups)
 }
 
 fn zip_local_directory(

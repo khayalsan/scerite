@@ -4,7 +4,7 @@ import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialo
 import { serverFiles } from "../lib/serverFiles";
 import type { ServerFileEntry } from "../lib/serverFiles";
 import { serverWorlds } from "../lib/serverWorlds";
-import type { WorldSettings } from "../lib/serverWorlds";
+import type { WorldBackup, WorldSettings } from "../lib/serverWorlds";
 import { serverSessions } from "../lib/serverSessions";
 import { SearchField } from "./SearchField";
 
@@ -35,6 +35,9 @@ function validRuleValue(value: string) {
 
 export function WorldsPanel({ profileId, remote, canEdit, running }: WorldsPanelProps) {
   const [worlds, setWorlds] = useState<ServerFileEntry[]>([]);
+  const [backups, setBackups] = useState<WorldBackup[]>([]);
+  const [backupsLoading, setBackupsLoading] = useState(true);
+  const [backupsError, setBackupsError] = useState<string | null>(null);
   const [activeWorldName, setActiveWorldName] = useState("");
   const [selectedWorld, setSelectedWorld] = useState<string | null>(null);
   const [directory, setDirectory] = useState<string | null>(null);
@@ -82,6 +85,17 @@ export function WorldsPanel({ profileId, remote, canEdit, running }: WorldsPanel
   }, [profileId, remote, revision]);
 
   useEffect(() => {
+    let active = true;
+    setBackupsLoading(true);
+    setBackupsError(null);
+    void serverWorlds.backups(remote, profileId)
+      .then((found) => { if (active) setBackups(found); })
+      .catch((reason: unknown) => { if (active) setBackupsError(errorText(reason)); })
+      .finally(() => { if (active) setBackupsLoading(false); });
+    return () => { active = false; };
+  }, [profileId, remote, revision]);
+
+  useEffect(() => {
     if (!selectedWorld) { setSettings(null); return; }
     let active = true;
     setSettings(null);
@@ -125,6 +139,7 @@ export function WorldsPanel({ profileId, remote, canEdit, running }: WorldsPanel
     try {
       const path = await serverWorlds.backup(remote, profileId, selectedWorld);
       setMessage(`Backup saved to ${path}`);
+      setRevision((value) => value + 1);
     } catch (reason) { setError(`Could not back up the world: ${errorText(reason)}`); }
     finally { setBusy(null); }
   }
@@ -171,7 +186,7 @@ export function WorldsPanel({ profileId, remote, canEdit, running }: WorldsPanel
 
   async function applyRule(name: string) {
     const value = ruleValues[name]?.trim() ?? "";
-    if (!running || !/^[A-Za-z0-9_]{1,64}$/.test(name) || !validRuleValue(value)) {
+    if (!running || !/^(?:[A-Za-z0-9_]{1,64}|[a-z0-9_.-]+:[a-z0-9_/.-]+)$/.test(name) || !validRuleValue(value)) {
       setError("Enter a true/false value or a whole number for this gamerule."); return;
     }
     setBusy(name); setError(null); setMessage(null);
@@ -255,14 +270,14 @@ export function WorldsPanel({ profileId, remote, canEdit, running }: WorldsPanel
         {settingsLoading ? <p className="state-message">Reading world settings…</p> : settingsError ? <p className="files-error">Could not read world settings: {settingsError}</p> : settings && <>
           <div className="worlds-seed"><span>Current world seed</span><strong>{settings.actualSeed ?? "Unavailable"}</strong></div>
           <section className="worlds-gamerules" aria-label="Gamerules">
-            <div><h4>Gamerules</h4><p>Values come from the last saved world file. Send changes to a running active world.</p></div>
+            <div><h4>Gamerules</h4><p>Rules and values come from the last saved world data. Send changes to a running active world.</p></div>
             <SearchField id="world-gamerule-search" label="Search gamerules" placeholder="Find a gamerule" value={ruleSearch} onChange={setRuleSearch} />
             {settings.gamerules.filter((rule) => rule.name.toLowerCase().includes(ruleSearch.trim().toLowerCase())).map((rule) => <div className="worlds-gamerule" key={rule.name}>
               <label htmlFor={`world-rule-${rule.name}`}>{rule.name}</label>
               {rule.value === "true" || rule.value === "false" ? <select id={`world-rule-${rule.name}`} className="worlds-rule-input" value={ruleValues[rule.name] ?? rule.value} onChange={(event) => setRuleValues((current) => ({ ...current, [rule.name]: event.currentTarget.value }))} disabled={!running || selectedWorld !== activeWorldName || !!busy}><option value="true">true</option><option value="false">false</option></select> : <input id={`world-rule-${rule.name}`} className="worlds-rule-input" value={ruleValues[rule.name] ?? rule.value} onChange={(event) => setRuleValues((current) => ({ ...current, [rule.name]: event.currentTarget.value }))} disabled={!running || selectedWorld !== activeWorldName || !!busy} />}
               <button className="button button-quiet" type="button" disabled={!running || selectedWorld !== activeWorldName || !!busy || ruleValues[rule.name] === rule.value || !validRuleValue(ruleValues[rule.name] ?? "")} onClick={() => void applyRule(rule.name)}>{busy === rule.name ? "Sending…" : "Apply"}</button>
             </div>)}
-            {settings.gamerules.length === 0 && <p className="state-message">No saved gamerules were found in this world.</p>}
+            {settings.gamerules.length === 0 && <p className="state-message">No gamerules were found in the saved world data.</p>}
             {settings.gamerules.length > 0 && !settings.gamerules.some((rule) => rule.name.toLowerCase().includes(ruleSearch.trim().toLowerCase())) && <p className="state-message">No matching gamerules.</p>}
           </section>
         </>}
@@ -290,6 +305,16 @@ export function WorldsPanel({ profileId, remote, canEdit, running }: WorldsPanel
           </div>
         </div>
       )}
+      <section className="worlds-backups" aria-label="World backups">
+        <div><h3>Backed up worlds</h3><p>ZIP backups are in Scerite app data. Preserved folders are on the server and can be recovered from their shown path.</p></div>
+        {backupsError && <p className="files-error" role="alert">Could not list backups: {backupsError}</p>}
+        {backupsLoading ? <p className="state-message">Finding backups…</p> : backups.length === 0 ? <p className="state-message">No backups yet. Stop a server and choose Back up on a world.</p> : (
+          <div className="worlds-backup-list">{backups.map((backup) => <div className="worlds-backup" key={backup.path}>
+            <Archive size={16} aria-hidden="true" />
+            <div><strong>{backup.name}</strong><small>{backup.kind === "zip" ? "ZIP backup" : "Preserved world folder"}{backup.modified ? ` · ${new Date(backup.modified * 1000).toLocaleString()}` : ""}</small><code>{backup.path}</code></div>
+          </div>)}</div>
+        )}
+      </section>
     </section>
   );
 }

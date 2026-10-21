@@ -38,7 +38,7 @@ use crate::java_runtime::JavaPackage;
 use crate::server_logs::{self, ServerLogSnapshot};
 use crate::server_players::{self, PlayerData, PlayerRosterFiles};
 use crate::server_port;
-use crate::world_management::{self, WorldSettings};
+use crate::world_management::{self, WorldBackup, WorldSettings};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_FILE_BYTES: u64 = 1024 * 1024;
@@ -2661,8 +2661,60 @@ pub async fn read_remote_world_settings(
         }
         let bytes = sftp.read_prefix(Path::new(&level), world_management::MAX_LEVEL_BYTES as usize + 1)?;
         if bytes.len() as u64 > world_management::MAX_LEVEL_BYTES { return Err("level.dat is too large to inspect.".into()); }
-        world_management::decode_settings(&bytes)
+        let mut settings = world_management::decode_settings(&bytes)?;
+        let separate = format!("{world}/data/minecraft/game_rules.dat");
+        let separate_metadata = match sftp.lstat_optional(Path::new(&separate)) {
+            Ok(metadata) => Some(metadata),
+            Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile => None,
+            Err(error) => return Err(format!("Could not inspect game_rules.dat: {error}")),
+        };
+        if let Some(metadata) = separate_metadata {
+            if metadata.file_type() == FileType::File {
+                if metadata.size.is_some_and(|size| size > world_management::MAX_LEVEL_BYTES) {
+                    return Err("game_rules.dat is too large to inspect.".into());
+                }
+                let bytes = sftp.read_prefix(Path::new(&separate), world_management::MAX_LEVEL_BYTES as usize + 1)?;
+                settings.gamerules = world_management::decode_separate_rules(&bytes)?;
+            }
+        }
+        Ok(settings)
     }).await
+}
+
+#[tauri::command]
+pub async fn list_remote_world_backups(
+    app: AppHandle, profile_id: Uuid,
+    profiles: State<'_, ServerProfileStore>, remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<Vec<WorldBackup>, String> {
+    let mut backups = world_management::app_world_backups(&app, profile_id)?;
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    let mut preserved = run_remote(profile, environment, Arc::clone(remote_sessions.inner()), move |session, profile| {
+        let sftp = session.sftp().map_err(|error| format!("Could not open SFTP: {error}"))?;
+        let root = remote_root_with_sftp(&sftp, configured_remote_root(profile)?)?;
+        let folder = format!("{root}/.scerite-world-backups");
+        let metadata = match sftp.lstat_optional(Path::new(&folder)) {
+            Ok(metadata) => metadata,
+            Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile => return Ok(Vec::new()),
+            Err(error) => return Err(format!("Could not inspect preserved worlds: {error}")),
+        };
+        if metadata.file_type() != FileType::Dir { return Err("The preserved world path is not a folder.".into()); }
+        let folder = canonical_inside(&sftp, &root, &folder)?;
+        let entries = sftp.read_dir(Path::new(&folder)).map_err(|error| format!("Could not list preserved worlds: {error}"))?;
+        if entries.len() > MAX_DIRECTORY_ENTRIES { return Err("Too many preserved worlds to list.".into()); }
+        let mut result = Vec::new();
+        for (filename, metadata) in entries {
+            if metadata.file_type() != FileType::Dir { continue; }
+            let Some(name) = world_management::preserved_backup_name(&filename) else { continue; };
+            let path = format!("{folder}/{filename}");
+            if !sftp.lstat(Path::new(&format!("{path}/level.dat")))
+                .is_ok_and(|level| level.file_type() == FileType::File) { continue; }
+            result.push(WorldBackup { name, path, kind: "preserved".into(), modified: metadata.mtime.map(u64::from) });
+        }
+        Ok(result)
+    }).await?;
+    backups.append(&mut preserved);
+    backups.sort_by(|a, b| b.modified.cmp(&a.modified));
+    Ok(backups)
 }
 
 #[tauri::command]

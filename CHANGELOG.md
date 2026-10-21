@@ -6,7 +6,11 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 ### Added
 
-- The Worlds tab now shows each world's saved seed and gamerules. You can change gamerules on a running server, back up or download a stopped world as a ZIP, upload a replacement ZIP, and generate the active world again with new settings while preserving the previous world.
+- The Worlds tab shows saved seeds and gamerules, including the newer Minecraft gamerule formats. You can change gamerules on a running server, back up or download a stopped world as a ZIP, upload a replacement ZIP, and generate the active world again with new settings while preserving the previous world. Backups and preserved world folders are listed with their locations.
+
+### Fixed
+
+- Long world settings and file lists can now scroll within the Worlds tab.
 
 ## [0.4.1] - 2026-10-20
 

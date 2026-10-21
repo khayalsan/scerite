@@ -1824,12 +1824,26 @@
 
 .worlds-panel {
   display: grid;
+  align-content: start;
   gap: 16px;
   margin: 0 0 16px 53px;
   padding: 18px;
   border: 1px solid var(--app-line);
   border-radius: 9px;
   background: var(--app-ground);
+}
+
+.server-detail-shell .server-tab-panel[aria-label="Server worlds"]:not([hidden]) {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.server-detail-shell .worlds-panel {
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
 }
 
 .worlds-header,
@@ -1866,6 +1880,17 @@
 .world-card strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
 .world-card small { color: var(--app-muted); font-size: 11px; }
 .world-card:focus-visible { outline: 3px solid color-mix(in srgb, var(--app-accent) 32%, transparent); outline-offset: 2px; }
+
+.worlds-backups { display: grid; gap: 10px; padding-top: 18px; border-top: 1px solid var(--app-line); }
+.worlds-backups h3 { margin: 0 0 4px; font-size: 15px; }
+.worlds-backups p { margin: 0; color: var(--app-muted); font-size: 12px; }
+.worlds-backup-list { display: grid; gap: 8px; }
+.worlds-backup { display: flex; align-items: start; gap: 10px; min-width: 0; padding: 10px 12px; border: 1px solid var(--app-line); border-radius: 8px; background: var(--app-paper); }
+.worlds-backup > svg { flex: 0 0 auto; margin-top: 2px; color: var(--app-accent); }
+.worlds-backup > div { display: grid; min-width: 0; gap: 3px; }
+.worlds-backup strong { font-size: 13px; }
+.worlds-backup small { color: var(--app-muted); font-size: 11px; }
+.worlds-backup code { overflow-wrap: anywhere; color: var(--app-muted); font-size: 11px; }
 
 .worlds-settings { display: grid; gap: 18px; min-width: 0; padding-top: 18px; border-top: 1px solid var(--app-line); }
 .worlds-settings-heading, .worlds-settings-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
