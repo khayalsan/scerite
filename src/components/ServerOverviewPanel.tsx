@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { ServerEnvironment, ServerProfile } from "../lib/serverProfiles";
 import { serverFiles } from "../lib/serverFiles";
+import { serverSessions } from "../lib/serverSessions";
 
 type Usage = { playersOnline: number | null; maxPlayers: number | null; cpuPercent: number | null; memoryBytes: number | null };
 
@@ -10,11 +11,51 @@ function memoryLabel(bytes: number | null | undefined): string {
   return `${(bytes / 1024 / 1024).toFixed(0)} MB`;
 }
 
+function tpsFromLines(lines: string[]): number | null {
+  for (const line of lines) {
+    const plain = line.replace(/\x1b\[[0-9;]*m/g, "").replace(/§[0-9a-fk-or]/gi, "");
+    const match = /\bTPS from last[^:]*:\s*\*?([0-9]+(?:\.[0-9]+)?)/i.exec(plain);
+    if (match) return Number(match[1]);
+  }
+  return null;
+}
+
+function newRemoteLines(before: string[], after: string[]): string[] {
+  before = [...before];
+  after = [...after];
+  while (before.length && before[before.length - 1].trim() === "") before.pop();
+  while (after.length && after[after.length - 1].trim() === "") after.pop();
+  if (before.length === after.length && before.every((line, index) => line === after[index])) return [];
+  for (let overlap = Math.min(before.length, after.length); overlap > 0; overlap--) {
+    if (before.slice(-overlap).every((line, index) => line === after[index])) return after.slice(overlap);
+  }
+  return before.length === 0 ? after : [];
+}
+
+async function readTps(profileId: string, remote: boolean): Promise<number | null> {
+  const beforeRemote = remote ? (await serverSessions.remoteConsole(profileId)).lines : [];
+  const afterSequence = remote ? 0 : (await serverSessions.console(profileId, 0)).nextSequence;
+  await (remote ? serverSessions.sendRemoteInput(profileId, "tps") : serverSessions.sendInput(profileId, "tps"));
+  for (const delay of [500, 800, 1000]) {
+    await new Promise((resolve) => window.setTimeout(resolve, delay));
+    const lines = remote
+      ? newRemoteLines(beforeRemote, (await serverSessions.remoteConsole(profileId)).lines)
+      : (await serverSessions.console(profileId, afterSequence)).lines.map((line) => line.text);
+    const tps = tpsFromLines(lines);
+    if (tps !== null) return tps;
+  }
+  return null;
+}
+
 export function ServerOverviewPanel({ profile, environment, state }: { profile: ServerProfile; environment?: ServerEnvironment; state: "online" | "offline" | "checking" }) {
   const remote = profile.target.kind === "remote";
+  const installedSoftware = profile.installedSoftware?.toLowerCase() ?? "";
+  const supportsTps = ["paper", "purpur", "spigot", "bukkit", "folia"].includes(installedSoftware) || installedSoftware.startsWith("arclight-");
   const [port, setPort] = useState<number | null>(null);
   const [usage, setUsage] = useState<Usage | null>(null);
   const [detectedVersion, setDetectedVersion] = useState<string | null>(null);
+  const [tps, setTps] = useState<number | null>(null);
+  const [tpsLoading, setTpsLoading] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -55,6 +96,26 @@ export function ServerOverviewPanel({ profile, environment, state }: { profile: 
     return () => { active = false; if (timer !== undefined) window.clearTimeout(timer); };
   }, [profile.id, port, state]);
 
+  useEffect(() => {
+    setTps(null);
+    if (state !== "online" || !supportsTps) { setTpsLoading(false); return; }
+    let active = true;
+    let timer: number | undefined;
+    const refresh = async () => {
+      if (active) setTpsLoading(true);
+      try {
+        const next = await readTps(profile.id, remote);
+        if (active) setTps(next);
+      } catch {
+        if (active) setTps(null);
+      } finally {
+        if (active) { setTpsLoading(false); timer = window.setTimeout(() => void refresh(), 30000); }
+      }
+    };
+    void refresh();
+    return () => { active = false; if (timer !== undefined) window.clearTimeout(timer); };
+  }, [profile.id, remote, state, supportsTps]);
+
   const host = remote ? environment?.host ?? "Unknown host" : "localhost";
   const address = `${host.includes(":") && !host.startsWith("[") ? `[${host}]` : host}:${port ?? "…"}`;
   const software = profile.installedSoftware ? profile.installedSoftware[0].toUpperCase() + profile.installedSoftware.slice(1) : "Unknown";
@@ -70,6 +131,7 @@ export function ServerOverviewPanel({ profile, environment, state }: { profile: 
       <div><dt>Version</dt><dd>{profile.installedVersion ?? detectedVersion ?? "Unknown"}</dd></div>
       <div><dt>CPU</dt><dd>{state === "online" && usage?.cpuPercent != null ? `${usage.cpuPercent.toFixed(1)}%` : state === "offline" ? "0%" : "Unavailable"}</dd></div>
       <div><dt>RAM</dt><dd>{state === "offline" ? "0 MB" : memoryLabel(usage?.memoryBytes)}</dd></div>
+      <div><dt>TPS (1m)</dt><dd title={supportsTps ? "Average ticks per second over the last minute; refreshed every 30 seconds." : "TPS requires a Paper-compatible server with a tps console command."}>{state === "online" ? tps == null ? tpsLoading ? "Checking…" : "Unavailable" : tps.toFixed(1) : "—"}</dd></div>
     </dl>
   </section>;
 }

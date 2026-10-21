@@ -31,6 +31,7 @@ type ProfileDraft = {
   directory: string;
   executable: string;
   arguments: string;
+  ramMb: string;
   environmentId: string;
   manualDirectory: boolean;
 };
@@ -74,6 +75,7 @@ const emptyDraft: ProfileDraft = {
   directory: "",
   executable: "",
   arguments: "",
+  ramMb: "",
   environmentId: "",
   manualDirectory: false,
 };
@@ -117,6 +119,22 @@ function parseLaunchArguments(value: string): string[] {
   return launchArguments;
 }
 
+function isJavaExecutable(executable: string): boolean {
+  return /(?:^|[\\/])java(?:\.exe)?$/i.test(executable.trim());
+}
+
+function maximumRam(arguments_: string[]): string {
+  const values = arguments_.flatMap((argument) => {
+    const match = /^-Xmx(\d+)([mMgG])$/.exec(argument);
+    return match ? [Number(match[1]) * (match[2].toLowerCase() === "g" ? 1024 : 1)] : [];
+  });
+  return values.length ? String(values[values.length - 1]) : "";
+}
+
+function withoutMaximumRam(arguments_: string[]): string[] {
+  return arguments_.filter((argument) => !/^-Xmx\d+[mMgG]$/.test(argument));
+}
+
 function serverFolderName(name: string): string {
   return Array.from(name.trim())
     .map((character) => /[\p{L}\p{N}]/u.test(character) ? character.toLowerCase() : "-")
@@ -127,6 +145,10 @@ function serverFolderName(name: string): string {
 
 function targetFor(draft: ProfileDraft, previous?: ServerProfile): ServerTarget {
   const launchArguments = parseLaunchArguments(draft.arguments);
+  if (isJavaExecutable(draft.executable)) {
+    const withoutRam = withoutMaximumRam(launchArguments);
+    launchArguments.splice(0, launchArguments.length, ...(draft.ramMb ? [`-Xmx${draft.ramMb}M`] : []), ...withoutRam);
+  }
   const managedJava = previous?.target.kind === draft.kind &&
     (draft.kind === "local" || previous.target.kind === "remote" && previous.target.environmentId === draft.environmentId)
     ? previous.target.launch.managedJava : undefined;
@@ -156,6 +178,8 @@ function targetFor(draft: ProfileDraft, previous?: ServerProfile): ServerTarget 
 }
 
 function draftFor(profile: ServerProfile): ProfileDraft {
+  const arguments_ = profile.target.launch.arguments;
+  const javaLaunch = isJavaExecutable(profile.target.launch.executable);
   if (profile.target.kind === "remote") {
     return {
       ...emptyDraft,
@@ -165,7 +189,8 @@ function draftFor(profile: ServerProfile): ProfileDraft {
       directory: profile.target.directory,
       manualDirectory: true,
       executable: profile.target.launch.executable,
-      arguments: profile.target.launch.arguments.join("\n"),
+      arguments: (javaLaunch ? withoutMaximumRam(arguments_) : arguments_).join("\n"),
+      ramMb: javaLaunch ? maximumRam(arguments_) : "",
     };
   }
 
@@ -174,7 +199,8 @@ function draftFor(profile: ServerProfile): ProfileDraft {
     name: profile.name,
     directory: profile.target.directory,
     executable: profile.target.launch.executable,
-    arguments: profile.target.launch.arguments.join("\n"),
+    arguments: (javaLaunch ? withoutMaximumRam(arguments_) : arguments_).join("\n"),
+    ramMb: javaLaunch ? maximumRam(arguments_) : "",
   };
 }
 
@@ -748,6 +774,24 @@ function App() {
   async function saveProfile(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setFormError(null);
+    if (isJavaExecutable(draft.executable) && parseLaunchArguments(draft.arguments).some((argument) => argument.startsWith("-Xmx"))) {
+      setFormError("Set maximum RAM in the field below and remove -Xmx from launch arguments.");
+      return;
+    }
+    if (isJavaExecutable(draft.executable) && draft.ramMb &&
+        (!/^\d+$/.test(draft.ramMb) || Number(draft.ramMb) < 256 || Number(draft.ramMb) > 1048576)) {
+      setFormError("Choose a maximum RAM amount between 256 and 1048576 MB.");
+      return;
+    }
+    const initialHeaps = parseLaunchArguments(draft.arguments).flatMap((argument) => {
+      const match = /^-Xms(\d+)([mMgG])$/.exec(argument);
+      return match ? [Number(match[1]) * (match[2].toLowerCase() === "g" ? 1024 : 1)] : [];
+    });
+    const initialHeap = initialHeaps[initialHeaps.length - 1];
+    if (isJavaExecutable(draft.executable) && draft.ramMb && initialHeap && Number(draft.ramMb) < initialHeap) {
+      setFormError("Maximum RAM must be at least the -Xms amount in launch arguments.");
+      return;
+    }
     if (draft.kind === "remote" && !draft.environmentId) {
       setFormError("Choose a remote environment.");
       return;
@@ -1022,6 +1066,20 @@ function App() {
                   </label>
                 </>
               )}
+              <label className="field field-wide">
+                <span>Maximum RAM (MB)</span>
+                <input
+                  type="number"
+                  min="256"
+                  max="1048576"
+                  step="1"
+                  value={draft.ramMb}
+                  onChange={(event) => setDraft({ ...draft, ramMb: event.currentTarget.value })}
+                  placeholder="Use Java default"
+                  disabled={!isJavaExecutable(draft.executable)}
+                />
+                <small>Sets Java's maximum heap (-Xmx) on the next start. Leave blank to use Java's default. Custom launch scripts manage their own memory.</small>
+              </label>
             </div>
 
             <div className="form-actions">
