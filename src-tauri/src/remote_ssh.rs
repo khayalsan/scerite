@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     env,
+    fs::File,
     path::{Path, PathBuf},
     io::SeekFrom,
     sync::{Arc, Mutex},
@@ -21,7 +22,8 @@ use russh_sftp::{
     protocol::{FileAttributes, FileType, OpenFlags, Packet, StatusCode},
 };
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, State};
+use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 use tokio::{
     io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
     runtime::{Builder, Runtime},
@@ -36,6 +38,7 @@ use crate::java_runtime::JavaPackage;
 use crate::server_logs::{self, ServerLogSnapshot};
 use crate::server_players::{self, PlayerData, PlayerRosterFiles};
 use crate::server_port;
+use crate::world_management::{self, WorldSettings};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_FILE_BYTES: u64 = 1024 * 1024;
@@ -1502,6 +1505,44 @@ impl RemoteConnection {
 }
 
 impl RemoteSftp {
+    fn copy_file_to_writer<W: std::io::Write>(&self, path: &Path, writer: &mut W) -> Result<(), String> {
+        let path = path.to_string_lossy().to_string();
+        self.runtime.block_on(async {
+            let mut file = self.inner.open(path).await.map_err(|error| error.to_string())?;
+            let mut buffer = [0_u8; 65536];
+            loop {
+                let count = file.read(&mut buffer).await.map_err(|error| error.to_string())?;
+                if count == 0 { break; }
+                writer.write_all(&buffer[..count]).map_err(|error| error.to_string())?;
+            }
+            file.close().await.map_err(|error| error.to_string())
+        })
+    }
+
+    fn write_file_from_reader<R: std::io::Read>(&self, path: &Path, reader: &mut R) -> Result<(), String> {
+        let path = path.to_string_lossy().to_string();
+        self.runtime.block_on(async {
+            let mut attrs = FileAttributes::empty();
+            attrs.set_regular(true);
+            attrs.permissions = Some(0o100600);
+            let mut file = self.inner.open_with_flags_and_attributes(
+                path, OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::EXCLUDE, attrs,
+            ).await.map_err(|error| error.to_string())?;
+            let mut buffer = [0_u8; 65536];
+            loop {
+                let count = reader.read(&mut buffer).map_err(|error| error.to_string())?;
+                if count == 0 { break; }
+                file.write_all(&buffer[..count]).await.map_err(|error| error.to_string())?;
+            }
+            file.close().await.map_err(|error| error.to_string())
+        })
+    }
+
+    fn mkdir(&self, path: &Path) -> Result<(), String> {
+        self.runtime.block_on(self.inner.create_dir(path.to_string_lossy().to_string()))
+            .map_err(|error| error.to_string())
+    }
+
     fn upload_file_exclusive(&self, path: &Path, source: &Path) -> Result<(), String> {
         let path = path.to_string_lossy().to_string();
         self.runtime.block_on(async {
@@ -2507,4 +2548,271 @@ fn reject_remote_symlink_path(
 
 fn remote_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
+}
+
+fn checked_remote_world(sftp: &RemoteSftp, root: &str, name: &str) -> Result<String, String> {
+    if !world_management::valid_world_name(name) {
+        return Err("Choose a valid world folder.".into());
+    }
+    let world = resolve_remote_relative(root, name, false)?;
+    reject_remote_symlink_path(sftp, root, &world)?;
+    let world = canonical_inside(sftp, root, &world)?;
+    if sftp.lstat(Path::new(&world))?.file_type() != FileType::Dir
+        || sftp.lstat(Path::new(&format!("{world}/level.dat")))?.file_type() != FileType::File
+    {
+        return Err("The selected folder is not a world.".into());
+    }
+    Ok(world)
+}
+
+fn require_remote_world_stopped(session: &RemoteConnection, profile: &ServerProfile, root: &str) -> Result<(), String> {
+    match remote_is_running(session, profile)? {
+        Some(false) => {}
+        Some(true) => return Err("Stop the server before changing or copying a world.".into()),
+        None => return Err("tmux is required to confirm the remote server is stopped.".into()),
+    }
+    if remote_directory_has_java_process(session, root)? {
+        return Err("A Java process is using this server folder. Stop it before changing or copying a world.".into());
+    }
+    Ok(())
+}
+
+fn remote_preserved_world(sftp: &RemoteSftp, root: &str, name: &str) -> Result<String, String> {
+    let backups = format!("{root}/.scerite-world-backups");
+    match sftp.lstat_optional(Path::new(&backups)) {
+        Ok(metadata) if metadata.file_type() != FileType::Dir => return Err("The world backup path is not a folder.".into()),
+        Ok(_) => reject_remote_symlink_path(sftp, root, &backups)?,
+        Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile => sftp.mkdir(Path::new(&backups))?,
+        Err(error) => return Err(format!("Could not inspect the world backup folder: {error}")),
+    }
+    let backups = canonical_inside(sftp, root, &backups)?;
+    Ok(format!("{backups}/{name}-{}", Uuid::new_v4()))
+}
+
+fn restore_remote_worlds(sftp: &RemoteSftp, moved: &[(String, String)]) -> String {
+    let unresolved: Vec<_> = moved.iter().rev().filter_map(|(original, backup)| {
+        sftp.rename(Path::new(backup), Path::new(original)).err().map(|_| backup.clone())
+    }).collect();
+    if unresolved.is_empty() { String::new() }
+    else { format!(" Recovery needs attention: preserved worlds remain at {}.", unresolved.join(", ")) }
+}
+
+fn zip_remote_directory(
+    sftp: &RemoteSftp, zip: &mut ZipWriter<File>, directory: &str,
+    relative: &str, count: &mut usize, depth: usize,
+) -> Result<(), String> {
+    if depth > 64 { return Err("The world folder nesting is too deep to archive.".into()); }
+    let entries = sftp.read_dir(Path::new(directory)).map_err(|error| format!("Could not list world files: {error}"))?;
+    if entries.len() > MAX_DIRECTORY_ENTRIES { return Err("A world folder has too many entries to archive.".into()); }
+    for (name, metadata) in entries {
+        if matches!(name.as_str(), "." | "..") { continue; }
+        if name.is_empty() || name.contains(['/', '\\', ':']) || name.chars().any(char::is_control) {
+            return Err("The world has an unsafe filename.".into());
+        }
+        *count += 1;
+        if *count > 200_000 { return Err("The world has too many files to archive.".into()); }
+        let child = format!("{directory}/{name}");
+        let zip_path = format!("{relative}/{name}");
+        match metadata.file_type() {
+            FileType::Dir => {
+                zip.add_directory(format!("{zip_path}/"), SimpleFileOptions::default()).map_err(|error| error.to_string())?;
+                zip_remote_directory(sftp, zip, &child, &zip_path, count, depth + 1)?;
+            }
+            FileType::File => {
+                zip.start_file(zip_path, SimpleFileOptions::default().compression_method(CompressionMethod::Deflated))
+                    .map_err(|error| error.to_string())?;
+                sftp.copy_file_to_writer(Path::new(&child), zip)
+                    .map_err(|error| format!("Could not archive a remote world file: {error}"))?;
+            }
+            _ => return Err("The world contains a symbolic link or unsupported file.".into()),
+        }
+    }
+    Ok(())
+}
+
+fn export_remote_world(sftp: &RemoteSftp, world: &str, name: &str, destination: &Path) -> Result<(), String> {
+    let temporary = destination.with_extension(format!("{}.part", Uuid::new_v4()));
+    let result = (|| {
+        let output = File::create_new(&temporary).map_err(|error| format!("Could not create ZIP: {error}"))?;
+        let mut zip = ZipWriter::new(output);
+        zip.add_directory(format!("{name}/"), SimpleFileOptions::default()).map_err(|error| error.to_string())?;
+        zip_remote_directory(sftp, &mut zip, world, name, &mut 0, 0)?;
+        zip.finish().map_err(|error| format!("Could not finish ZIP: {error}"))?;
+        std::fs::rename(&temporary, destination).map_err(|error| format!("Could not save ZIP: {error}"))
+    })();
+    if result.is_err() { let _ = std::fs::remove_file(&temporary); }
+    result
+}
+
+#[tauri::command]
+pub async fn read_remote_world_settings(
+    profile_id: Uuid, world_name: String,
+    profiles: State<'_, ServerProfileStore>, remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<WorldSettings, String> {
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    run_remote(profile, environment, Arc::clone(remote_sessions.inner()), move |session, profile| {
+        let sftp = session.sftp().map_err(|error| format!("Could not open SFTP: {error}"))?;
+        let root = remote_root_with_sftp(&sftp, configured_remote_root(profile)?)?;
+        let world = checked_remote_world(&sftp, &root, &world_name)?;
+        let level = format!("{world}/level.dat");
+        let metadata = sftp.lstat(Path::new(&level))?;
+        if metadata.size.is_some_and(|size| size > world_management::MAX_LEVEL_BYTES) {
+            return Err("level.dat is too large to inspect.".into());
+        }
+        let bytes = sftp.read_prefix(Path::new(&level), world_management::MAX_LEVEL_BYTES as usize + 1)?;
+        if bytes.len() as u64 > world_management::MAX_LEVEL_BYTES { return Err("level.dat is too large to inspect.".into()); }
+        world_management::decode_settings(&bytes)
+    }).await
+}
+
+#[tauri::command]
+pub async fn backup_remote_world(
+    app: AppHandle, profile_id: Uuid, world_name: String,
+    profiles: State<'_, ServerProfileStore>, remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<String, String> {
+    let destination = world_management::backup_destination(&app, profile_id, &world_name)?;
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    run_remote(profile, environment, Arc::clone(remote_sessions.inner()), move |session, profile| {
+        let sftp = session.sftp().map_err(|error| format!("Could not open SFTP: {error}"))?;
+        let root = remote_root_with_sftp(&sftp, configured_remote_root(profile)?)?;
+        require_remote_world_stopped(session, profile, &root)?;
+        let world = checked_remote_world(&sftp, &root, &world_name)?;
+        export_remote_world(&sftp, &world, &world_name, &destination)?;
+        Ok(destination.to_string_lossy().into_owned())
+    }).await
+}
+
+#[tauri::command]
+pub async fn download_remote_world(
+    profile_id: Uuid, world_name: String, destination: String,
+    profiles: State<'_, ServerProfileStore>, remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<(), String> {
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    run_remote(profile, environment, Arc::clone(remote_sessions.inner()), move |session, profile| {
+        let sftp = session.sftp().map_err(|error| format!("Could not open SFTP: {error}"))?;
+        let root = remote_root_with_sftp(&sftp, configured_remote_root(profile)?)?;
+        require_remote_world_stopped(session, profile, &root)?;
+        let world = checked_remote_world(&sftp, &root, &world_name)?;
+        export_remote_world(&sftp, &world, &world_name, Path::new(&destination))
+    }).await
+}
+
+#[tauri::command]
+pub async fn upload_remote_world(
+    profile_id: Uuid, world_name: String, source: String,
+    profiles: State<'_, ServerProfileStore>, remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<String, String> {
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    run_remote(profile, environment, Arc::clone(remote_sessions.inner()), move |session, profile| {
+        let (mut archive, entries) = world_management::open_archive(Path::new(&source))?;
+        let sftp = session.sftp().map_err(|error| format!("Could not open SFTP: {error}"))?;
+        let root = remote_root_with_sftp(&sftp, configured_remote_root(profile)?)?;
+        require_remote_world_stopped(session, profile, &root)?;
+        let world = checked_remote_world(&sftp, &root, &world_name)?;
+        let staging = format!("{root}/.scerite-world-upload-{}", Uuid::new_v4());
+        sftp.mkdir(Path::new(&staging)).map_err(|error| format!("Could not create upload folder: {error}"))?;
+        let result = (|| {
+            let mut directories = std::collections::HashSet::new();
+            for entry in entries {
+                let relative = remote_path(&entry.relative);
+                let mut parent = staging.clone();
+                let parts: Vec<_> = relative.split('/').collect();
+                for part in &parts[..parts.len() - if entry.directory { 0 } else { 1 }] {
+                    parent.push('/'); parent.push_str(part);
+                    if directories.insert(parent.clone()) { sftp.mkdir(Path::new(&parent))?; }
+                }
+                if !entry.directory {
+                    let destination = format!("{staging}/{relative}");
+                    sftp.write_file_from_reader(Path::new(&destination),
+                        &mut archive.by_index(entry.index).map_err(|error| error.to_string())?)?;
+                }
+            }
+            if sftp.lstat(Path::new(&format!("{staging}/level.dat")))?.file_type() != FileType::File {
+                return Err("The ZIP does not contain level.dat.".into());
+            }
+            let preserved = remote_preserved_world(&sftp, &root, &world_name)?;
+            sftp.rename(Path::new(&world), Path::new(&preserved))
+                .map_err(|error| format!("Could not preserve the current world: {error}"))?;
+            if let Err(error) = sftp.rename(Path::new(&staging), Path::new(&world)) {
+                let recovery = sftp.rename(Path::new(&preserved), Path::new(&world)).err()
+                    .map(|_| format!(" The previous world remains at {preserved}."))
+                    .unwrap_or_default();
+                return Err(format!("Could not install the uploaded world: {error}.{recovery}"));
+            }
+            Ok(preserved)
+        })();
+        if result.is_err() {
+            // This path is generated under the verified server root and never contains user input.
+            let _ = execute(session, &format!("rm -rf -- {}", shell_quote(&staging)));
+        }
+        result
+    }).await
+}
+
+#[tauri::command]
+pub async fn regenerate_remote_world(
+    profile_id: Uuid, world_name: String, seed: String, level_type: String, generate_structures: bool,
+    profiles: State<'_, ServerProfileStore>, remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<String, String> {
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    run_remote(profile, environment, Arc::clone(remote_sessions.inner()), move |session, profile| {
+        world_management::generation_values(&world_name, &seed, &level_type)?;
+        let sftp = session.sftp().map_err(|error| format!("Could not open SFTP: {error}"))?;
+        let root = remote_root_with_sftp(&sftp, configured_remote_root(profile)?)?;
+        require_remote_world_stopped(session, profile, &root)?;
+        let world = checked_remote_world(&sftp, &root, &world_name)?;
+        let mut worlds = vec![(world_name.clone(), world)];
+        for suffix in ["_nether", "_the_end"] {
+            let name = format!("{world_name}{suffix}");
+            let path = resolve_remote_relative(&root, &name, false)?;
+            match sftp.lstat_optional(Path::new(&path)) {
+                Ok(metadata) if metadata.file_type() == FileType::Dir => {
+                    reject_remote_symlink_path(&sftp, &root, &path)?;
+                    worlds.push((name, canonical_inside(&sftp, &root, &path)?));
+                }
+                Ok(_) => return Err(format!("The companion world path {name} is not a regular folder.")),
+                Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile => {}
+                Err(error) => return Err(format!("Could not inspect {name}: {error}")),
+            }
+        }
+        let properties_path = format!("{root}/server.properties");
+        if sftp.lstat(Path::new(&properties_path))?.file_type() != FileType::File {
+            return Err("server.properties is missing or is not a regular file.".into());
+        }
+        reject_remote_symlink_path(&sftp, &root, &properties_path)?;
+        let properties_path = canonical_inside(&sftp, &root, &properties_path)?;
+        let content = sftp.read_file(Path::new(&properties_path))?;
+        if content.len() as u64 > MAX_FILE_BYTES {
+            return Err("server.properties is too large to edit here.".into());
+        }
+        let content = std::str::from_utf8(&content).map_err(|error| error.to_string())?;
+        if server_players::world_name(Some(content.as_bytes()))? != world_name {
+            return Err("Only the active world can be generated again.".into());
+        }
+        let updated = world_management::updated_properties(content, &world_name, &seed, &level_type, generate_structures)?;
+        let mut moved = Vec::new();
+        for (name, path) in worlds {
+            let preserved = match remote_preserved_world(&sftp, &root, &name) {
+                Ok(path) => path,
+                Err(error) => {
+                    let recovery = restore_remote_worlds(&sftp, &moved);
+                    return Err(format!("{error}{recovery}"));
+                }
+            };
+            if let Err(error) = sftp.rename(Path::new(&path), Path::new(&preserved)) {
+                let recovery = restore_remote_worlds(&sftp, &moved);
+                return Err(format!("Could not preserve {name}: {error}.{recovery}"));
+            }
+            moved.push((path, preserved));
+        }
+        let temporary = format!("{root}/.scerite-properties-{}.tmp", Uuid::new_v4());
+        let saved = sftp.write_file_exclusive(Path::new(&temporary), updated.as_bytes())
+            .and_then(|_| sftp.posix_rename(Path::new(&temporary), Path::new(&properties_path)));
+        if let Err(error) = saved {
+            let _ = sftp.unlink(Path::new(&temporary));
+            let recovery = restore_remote_worlds(&sftp, &moved);
+            return Err(format!("Could not save world generation settings: {error}.{recovery}"));
+        }
+        Ok(moved[0].1.clone())
+    }).await
 }

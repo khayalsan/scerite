@@ -1867,6 +1867,30 @@
 .world-card small { color: var(--app-muted); font-size: 11px; }
 .world-card:focus-visible { outline: 3px solid color-mix(in srgb, var(--app-accent) 32%, transparent); outline-offset: 2px; }
 
+.worlds-settings { display: grid; gap: 18px; min-width: 0; padding-top: 18px; border-top: 1px solid var(--app-line); }
+.worlds-settings-heading, .worlds-settings-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.worlds-settings-heading h3 { margin: 0; font-size: 17px; }
+.worlds-settings-heading span, .worlds-seed span { color: var(--app-muted); font-size: 12px; }
+.worlds-settings-actions .button { display: inline-flex; align-items: center; gap: 7px; }
+.worlds-seed { display: grid; gap: 5px; }
+.worlds-seed strong { overflow-wrap: anywhere; font-size: 14px; font-weight: 600; }
+.worlds-generate, .worlds-gamerules { display: grid; gap: 14px; padding-top: 18px; border-top: 1px solid var(--app-line); }
+.worlds-generate h4, .worlds-gamerules h4 { margin: 0 0 4px; font-size: 15px; }
+.worlds-generate p, .worlds-gamerules p { margin: 0; color: var(--app-muted); font-size: 12px; }
+.worlds-generation-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.worlds-generation-fields label { display: grid; gap: 6px; color: var(--app-ink); font-size: 12px; font-weight: 600; }
+.worlds-generation-fields input:not([type="checkbox"]), .worlds-rule-input { width: 100%; min-width: 0; padding: 9px 11px; border: 1px solid var(--app-line); border-radius: 7px; color: var(--app-ink); background: var(--app-paper); font: inherit; }
+.worlds-generation-fields .worlds-checkbox { display: flex; align-items: center; gap: 7px; font-weight: 400; }
+.worlds-generate > .button { justify-self: start; display: inline-flex; align-items: center; gap: 7px; }
+.worlds-gamerule { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(100px, 170px) auto; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--app-line); }
+.worlds-gamerule label { min-width: 0; overflow-wrap: anywhere; font-size: 12px; }
+.worlds-gamerule .button { justify-self: end; }
+@media (max-width: 680px) {
+  .worlds-generation-fields { grid-template-columns: 1fr; }
+  .worlds-gamerule { grid-template-columns: minmax(0, 1fr) auto; }
+  .worlds-gamerule label { grid-column: 1 / -1; }
+}
+
 .worlds-browser { min-width: 0; }
 .worlds-browser-heading { margin-bottom: 8px; color: var(--app-ink); font-size: 12px; }
 .worlds-browser-heading strong { overflow-wrap: anywhere; }

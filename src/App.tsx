@@ -1451,7 +1451,7 @@ function App() {
                           )}
                         </section>
                         <section className="server-tab-panel" hidden={activeServerTab !== "worlds"} aria-label="Server worlds">
-                          {activeServerTab === "worlds" && <WorldsPanel key={profile.id} profileId={profile.id} remote={!isLocal} />}
+                          {activeServerTab === "worlds" && <WorldsPanel key={profile.id} profileId={profile.id} remote={!isLocal} running={serverRunning} canEdit={isLocal ? state === "stopped" : remoteState === "stopped" && !!remoteStatus?.tmuxAvailable} />}
                         </section>
                         {packageSupport?.mods && <section className="server-tab-panel" hidden={activeServerTab !== "mods"} aria-label="Server mods">
                           {activeServerTab === "mods" && <PackagesPanel key={`${profile.id}-mods`} kind="mod" software={profile.installedSoftware} installedVersion={profile.installedVersion} profileId={profile.id} remote={!isLocal} canInstall={isLocal ? state === "stopped" : remoteState === "stopped"} />}
