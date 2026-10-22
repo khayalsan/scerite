@@ -268,7 +268,7 @@ export function PlayerMapPanel({ profileId, remote, running }: { profileId: stri
 
   return <div className="player-map-panel">
     <header className="player-map-header">
-      <div><div className="player-map-title"><h2>Player map</h2><span className="player-map-progress">In Progress</span></div><p>Drag to move, scroll to zoom. The grid follows chunk boundaries; offline markers show the last saved location.</p></div>
+      <div className="player-map-title"><h2>Player map</h2><span className="player-map-progress">In Progress</span></div>
       <button className="button button-quiet" type="button" onClick={() => setRevision((value) => value + 1)} disabled={refreshing}><RefreshCw size={15} aria-hidden="true" /> {refreshing ? "Refreshing…" : "Refresh"}</button>
     </header>
     {warning && <p className="notice notice-error" role="status">{warning}</p>}
