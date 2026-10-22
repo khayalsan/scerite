@@ -38,6 +38,7 @@ use crate::java_runtime::JavaPackage;
 use crate::server_logs::{self, ServerLogSnapshot};
 use crate::server_players::{self, PlayerData, PlayerRosterFiles};
 use crate::server_port;
+use crate::terrain::{self, TerrainRequest, TerrainTile};
 use crate::server_files::validate_server_icon;
 use crate::world_management::{self, WorldBackup, WorldSettings};
 
@@ -824,6 +825,56 @@ pub async fn read_remote_player_locations(
             locations.push(server_players::decode_player_location(uuid, player_file));
         }
         Ok(locations)
+    }).await
+}
+
+#[tauri::command]
+pub async fn read_remote_terrain_tiles(
+    profile_id: Uuid, dimension: String, resolution: u8, requests: Vec<TerrainRequest>,
+    profiles: State<'_, ServerProfileStore>, remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<Vec<TerrainTile>, String> {
+    terrain::validate_request(&dimension, resolution, &requests)?;
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    run_remote(profile, environment, Arc::clone(remote_sessions.inner()), move |session, profile| {
+        let sftp = session.sftp().map_err(|error| format!("Could not open SFTP: {error}"))?;
+        let root = remote_root_with_sftp(&sftp, configured_remote_root(profile)?)?;
+        let properties = optional_remote_player_file(&sftp, &root, "server.properties")?;
+        let world = server_players::world_name(properties.as_deref())?;
+        let mut groups = HashMap::<(i32, i32), Vec<(usize, TerrainRequest)>>::new();
+        for (index, request) in requests.iter().enumerate() {
+            groups.entry((request.x.div_euclid(32), request.z.div_euclid(32)))
+                .or_default().push((index, request.clone()));
+        }
+        let mut results = (0..requests.len()).map(|_| None).collect::<Vec<Option<TerrainTile>>>();
+        for ((rx, rz), group) in groups {
+            let mut region_file = None;
+            let mut path_failed = false;
+            for relative in terrain::region_path_candidates(&world, &dimension, rx, rz)? {
+                let path = resolve_remote_relative(&root, &relative, false)?;
+                let metadata = match sftp.lstat_optional(Path::new(&path)) {
+                    Ok(metadata) => metadata,
+                    Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile => continue,
+                    Err(_) => { path_failed = true; break; }
+                };
+                if metadata.file_type() != FileType::File { path_failed = true; break; }
+                if reject_remote_symlink_path(&sftp, &root, &path).is_err() { path_failed = true; break; }
+                match canonical_inside(&sftp, &root, &path) {
+                    Ok(canonical) => { region_file = Some(canonical); break; }
+                    Err(_) => { path_failed = true; break; }
+                }
+            }
+            let tiles = if path_failed {
+                group.iter().map(|(_, request)| terrain::failed(request, resolution)).collect()
+            } else if let Some(path) = region_file {
+                let region_requests = group.iter().map(|(_, request)| request.clone()).collect::<Vec<_>>();
+                sftp.read_terrain_region(Path::new(&path), &region_requests, resolution)
+                    .unwrap_or_else(|_| group.iter().map(|(_, request)| terrain::failed(request, resolution)).collect())
+            } else {
+                group.iter().map(|(_, request)| terrain::missing(request, resolution)).collect()
+            };
+            for ((index, _), tile) in group.into_iter().zip(tiles) { results[index] = Some(tile); }
+        }
+        Ok(results.into_iter().flatten().collect())
     }).await
 }
 
@@ -1739,6 +1790,41 @@ impl RemoteSftp {
     }
     fn read_file(&self, path: &Path) -> Result<Vec<u8>, String> {
         self.read_prefix(path, MAX_FILE_BYTES as usize + 1)
+    }
+    fn read_terrain_region(&self, path: &Path, requests: &[TerrainRequest], resolution: u8) -> Result<Vec<TerrainTile>, String> {
+        let path = path.to_string_lossy().to_string();
+        self.runtime.block_on(async {
+            let mut file = self.inner.open(path).await.map_err(|error| error.to_string())?;
+            let result = async {
+                let mut header = [0_u8; terrain::REGION_HEADER_BYTES];
+                file.read_exact(&mut header).await.map_err(|error| error.to_string())?;
+                let mut tiles = Vec::with_capacity(requests.len());
+                for request in requests {
+                    let tile = async {
+                        let Some(entry) = terrain::region_entry(&header, terrain::region_index(request.x, request.z))? else {
+                            return Ok::<TerrainTile, String>(terrain::missing(request, resolution));
+                        };
+                        if request.known_timestamp == Some(entry.timestamp) {
+                            return Ok(terrain::unchanged(request, resolution, entry.timestamp));
+                        }
+                        file.seek(SeekFrom::Start(entry.offset)).await.map_err(|error| error.to_string())?;
+                        let mut length = [0_u8; 4];
+                        file.read_exact(&mut length).await.map_err(|error| error.to_string())?;
+                        let length = u32::from_be_bytes(length) as usize;
+                        if length == 0 || length > terrain::MAX_CHUNK_BYTES || length + 4 > entry.sectors as usize * 4096 {
+                            return Err("The chunk length is invalid.".into());
+                        }
+                        let mut data = vec![0_u8; length];
+                        file.read_exact(&mut data).await.map_err(|error| error.to_string())?;
+                        Ok(terrain::decode_region_payload(request, resolution, entry.timestamp, &data))
+                    }.await.unwrap_or_else(|_| terrain::failed(request, resolution));
+                    tiles.push(tile);
+                }
+                Ok::<Vec<TerrainTile>, String>(tiles)
+            }.await;
+            let _ = file.close().await;
+            result
+        })
     }
     fn read_prefix(&self, path: &Path, limit: usize) -> Result<Vec<u8>, String> {
         let path = path.to_string_lossy().to_string();

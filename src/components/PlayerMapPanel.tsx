@@ -5,6 +5,8 @@ import { loadPlayers } from "../lib/serverPlayers";
 import type { PlayerRecord } from "../lib/serverPlayers";
 import { readLivePlayerLocations, readSavedPlayerLocations } from "../lib/playerLocations";
 import type { LivePlayerLocation } from "../lib/playerLocations";
+import { readTerrainTiles, TerrainTileCache, terrainResolution } from "../lib/terrainTiles";
+import type { TerrainRequest, TileResolution } from "../lib/terrainTiles";
 
 type SavedLocation = { position: [number, number, number]; dimension: string | null };
 type MapPoint = {
@@ -18,10 +20,15 @@ type MapPoint = {
 };
 type MapView = { dimension: string; centerX: number; centerZ: number; unitsPerPixel: number };
 type MapDrag = { pointerId: number; startX: number; startY: number; view: MapView };
+type TerrainWork = { dimension: string; resolution: TileResolution; requests: TerrainRequest[]; generation: number; force: boolean };
 
 const unknownDimension = "unknown";
 const minimumZoom = 0.05;
 const maximumZoom = 1_000_000;
+const terrainPollMs = 45_000;
+const terrainBatchSize = 16;
+const terrainViewLimit = 512;
+const terrainReadBudgetBytes = 32 * 1024 * 1024;
 
 function gridStep(unitsPerPixel: number) {
   const target = unitsPerPixel * 96;
@@ -32,6 +39,38 @@ function gridCoordinates(center: number, size: number, unitsPerPixel: number, st
   const first = Math.ceil((center - size * unitsPerPixel / 2) / step) * step;
   const count = Math.ceil(size * unitsPerPixel / step) + 1;
   return Array.from({ length: count }, (_, index) => first + index * step);
+}
+
+function visibleChunks(view: MapView, width: number, height: number, limit: number, priority: [number, number][]): [number, number][] {
+  const minX = Math.max(-2_000_000, Math.floor((view.centerX - width * view.unitsPerPixel / 2) / 16));
+  const maxX = Math.min(2_000_000, Math.floor((view.centerX + width * view.unitsPerPixel / 2) / 16));
+  const minZ = Math.max(-2_000_000, Math.floor((view.centerZ - height * view.unitsPerPixel / 2) / 16));
+  const maxZ = Math.min(2_000_000, Math.floor((view.centerZ + height * view.unitsPerPixel / 2) / 16));
+  const centerX = Math.max(minX, Math.min(maxX, Math.floor(view.centerX / 16)));
+  const centerZ = Math.max(minZ, Math.min(maxZ, Math.floor(view.centerZ / 16)));
+  const chunks: [number, number][] = [];
+  const seen = new Set<string>();
+  for (const [x, z] of priority) {
+    const key = `${x}|${z}`;
+    if (x >= minX && x <= maxX && z >= minZ && z <= maxZ && !seen.has(key) && chunks.length < limit) {
+      chunks.push([x, z]);
+      seen.add(key);
+    }
+  }
+  const radius = Math.min(64, Math.max(maxX - centerX, centerX - minX, maxZ - centerZ, centerZ - minZ));
+  for (let ring = 0; ring <= radius && chunks.length < limit; ring++) {
+    for (let z = centerZ - ring; z <= centerZ + ring && chunks.length < limit; z++) {
+      for (let x = centerX - ring; x <= centerX + ring && chunks.length < limit; x++) {
+        if (Math.max(Math.abs(x - centerX), Math.abs(z - centerZ)) !== ring) continue;
+        const key = `${x}|${z}`;
+        if (x >= minX && x <= maxX && z >= minZ && z <= maxZ && !seen.has(key)) {
+          chunks.push([x, z]);
+          seen.add(key);
+        }
+      }
+    }
+  }
+  return chunks;
 }
 
 function dimensionLabel(value: string) {
@@ -58,9 +97,27 @@ export function PlayerMapPanel({ profileId, remote, running }: { profileId: stri
   const [view, setView] = useState<MapView | null>(null);
   const [gridSize, setGridSize] = useState({ width: 600, height: 420 });
   const [dragging, setDragging] = useState(false);
+  const [terrainEpoch, setTerrainEpoch] = useState(0);
+  const [terrainTick, setTerrainTick] = useState(0);
+  const [terrainRefresh, setTerrainRefresh] = useState(0);
+  const [terrainWarning, setTerrainWarning] = useState<string | null>(null);
   const gridRef = useRef<HTMLDivElement>(null);
+  const terrainCanvasRef = useRef<HTMLCanvasElement>(null);
+  const terrainCacheRef = useRef<TerrainTileCache | null>(null);
+  const terrainQueueRef = useRef<TerrainWork | null>(null);
+  const terrainBusyRef = useRef(false);
+  const terrainGenerationRef = useRef(0);
+  const terrainMountedRef = useRef(false);
+  const lastTerrainRefreshRef = useRef(0);
   const dragRef = useRef<MapDrag | null>(null);
   const viewRef = useRef<MapView | null>(null);
+  if (!terrainCacheRef.current) terrainCacheRef.current = new TerrainTileCache();
+
+  useEffect(() => {
+    terrainMountedRef.current = true;
+    const timer = window.setInterval(() => setTerrainTick((tick) => tick + 1), terrainPollMs);
+    return () => { terrainMountedRef.current = false; terrainQueueRef.current = null; terrainGenerationRef.current++; window.clearInterval(timer); };
+  }, []);
 
   useEffect(() => {
     const element = gridRef.current;
@@ -225,6 +282,91 @@ export function PlayerMapPanel({ profileId, remote, running }: { profileId: stri
   const screenY = (z: number) => height / 2 + (z - currentView.centerZ) / currentView.unitsPerPixel;
   const markers = visible.filter((point) => Math.abs(screenX(point.position[0]) - width / 2) < width / 2 + 65 &&
     Math.abs(screenY(point.position[2]) - height / 2) < height / 2 + 65);
+  const priorityChunks = visible.map((point) => [Math.floor(point.position[0] / 16), Math.floor(point.position[2] / 16)] as [number, number]);
+  const priorityKey = priorityChunks.map(([x, z]) => `${x}|${z}`).join(",");
+  const visibleChunkCount = (Math.ceil((width * currentView.unitsPerPixel) / 16) + 1) * (Math.ceil((height * currentView.unitsPerPixel) / 16) + 1);
+
+  useEffect(() => {
+    const canvas = terrainCanvasRef.current;
+    const context = canvas?.getContext("2d");
+    if (!canvas || !context) return;
+    const scale = Math.min(window.devicePixelRatio || 1, 2, Math.sqrt(2_000_000 / (width * height)));
+    canvas.width = Math.ceil(width * scale);
+    canvas.height = Math.ceil(height * scale);
+    context.setTransform(scale, 0, 0, scale, 0, 0);
+    context.clearRect(0, 0, width, height);
+    context.imageSmoothingEnabled = false;
+    const resolution = terrainResolution(currentView.unitsPerPixel);
+    for (const [x, z] of terrainCacheRef.current!.coordinates(activeDimension)) {
+      const left = width / 2 + (x * 16 - currentView.centerX) / currentView.unitsPerPixel;
+      const top = height / 2 + (z * 16 - currentView.centerZ) / currentView.unitsPerPixel;
+      const size = 16 / currentView.unitsPerPixel;
+      if (left + size < 0 || top + size < 0 || left > width || top > height) continue;
+      const tile = terrainCacheRef.current!.tile(activeDimension, x, z, resolution);
+      if (tile?.canvas) context.drawImage(tile.canvas, left, top, size, size);
+    }
+  }, [activeDimension, currentView.centerX, currentView.centerZ, currentView.unitsPerPixel, width, height, terrainEpoch]);
+
+  async function drainTerrain() {
+    if (terrainBusyRef.current) return;
+    terrainBusyRef.current = true;
+    try {
+      while (terrainMountedRef.current && terrainQueueRef.current) {
+        const work = terrainQueueRef.current;
+        terrainQueueRef.current = null;
+        let hadError = false;
+        let bytesRead = 0;
+        let limited = false;
+        for (let offset = 0; offset < work.requests.length && terrainMountedRef.current && work.generation === terrainGenerationRef.current; offset += terrainBatchSize) {
+          try {
+            const results = await readTerrainTiles(remote, profileId, work.dimension, work.resolution, work.requests.slice(offset, offset + terrainBatchSize));
+            if (!terrainMountedRef.current) break;
+            for (const result of results) {
+              bytesRead += result.readBytes;
+              if (result.status === "error") hadError = true;
+              terrainCacheRef.current!.apply(work.dimension, result, work.force);
+            }
+            setTerrainEpoch((epoch) => epoch + 1);
+            if (bytesRead >= terrainReadBudgetBytes) { limited = true; break; }
+            await new Promise((resolve) => window.setTimeout(resolve, 75));
+          } catch {
+            hadError = true;
+            break;
+          }
+        }
+        if (terrainMountedRef.current && !terrainQueueRef.current && work.generation === terrainGenerationRef.current) {
+          setTerrainWarning(limited ? "Terrain read limit reached. Zoom in to load more detail." : hadError ? "Some terrain could not be read. Cached tiles remain visible; try Refresh." : null);
+        }
+      }
+    } finally {
+      terrainBusyRef.current = false;
+      if (terrainMountedRef.current && terrainQueueRef.current) void drainTerrain();
+    }
+  }
+
+  useEffect(() => {
+    if (activeDimension === unknownDimension) {
+      terrainQueueRef.current = null;
+      terrainGenerationRef.current++;
+      setTerrainWarning(null);
+      return;
+    }
+    if (dragging) { terrainQueueRef.current = null; terrainGenerationRef.current++; return; }
+    const timer = window.setTimeout(() => {
+      if (!terrainMountedRef.current) return;
+      const force = terrainRefresh !== lastTerrainRefreshRef.current;
+      lastTerrainRefreshRef.current = terrainRefresh;
+      const resolution = terrainResolution(currentView.unitsPerPixel);
+      const now = Date.now();
+      const requests = visibleChunks(currentView, width, height, terrainViewLimit, priorityChunks)
+        .filter(([x, z]) => terrainCacheRef.current!.shouldRead(activeDimension, x, z, resolution, now, force))
+        .map(([x, z]) => ({ x, z, knownTimestamp: force ? null : terrainCacheRef.current!.knownTimestamp(activeDimension, x, z, resolution) }));
+      const generation = ++terrainGenerationRef.current;
+      terrainQueueRef.current = requests.length ? { dimension: activeDimension, resolution, requests, generation, force } : null;
+      if (requests.length) void drainTerrain();
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [activeDimension, currentView.centerX, currentView.centerZ, currentView.unitsPerPixel, width, height, dragging, terrainTick, terrainRefresh, priorityKey, profileId, remote]);
 
   function zoom(factor: number) {
     setView({ ...currentView, unitsPerPixel: Math.max(minimumZoom, Math.min(maximumZoom, currentView.unitsPerPixel * factor)) });
@@ -269,10 +411,11 @@ export function PlayerMapPanel({ profileId, remote, running }: { profileId: stri
   return <div className="player-map-panel">
     <header className="player-map-header">
       <div className="player-map-title"><h2>Player map</h2><span className="player-map-progress">In Progress</span></div>
-      <button className="button button-quiet" type="button" onClick={() => setRevision((value) => value + 1)} disabled={refreshing}><RefreshCw size={15} aria-hidden="true" /> {refreshing ? "Refreshing…" : "Refresh"}</button>
+      <button className="button button-quiet" type="button" onClick={() => { setRevision((value) => value + 1); setTerrainRefresh((value) => value + 1); }} disabled={refreshing}><RefreshCw size={15} aria-hidden="true" /> {refreshing ? "Refreshing…" : "Refresh"}</button>
     </header>
     {warning && <p className="notice notice-error" role="status">{warning}</p>}
     {savedWarning && <p className="notice notice-error" role="status">{savedWarning}</p>}
+    {terrainWarning && <p className="notice notice-error" role="status">{terrainWarning}</p>}
     <div className="player-map-dimensions" aria-label="Dimension">
       {(dimensions.length ? dimensions : ["minecraft:overworld"]).map((item) => <button key={item} type="button" className={item === activeDimension ? "player-map-dimension active" : "player-map-dimension"} onClick={() => { setDimension(item); setSelectedKey(null); }}>{dimensionLabel(item)} <span>{points.filter((point) => point.dimension === item).length}</span></button>)}
     </div>
@@ -280,6 +423,7 @@ export function PlayerMapPanel({ profileId, remote, running }: { profileId: stri
       <div ref={gridRef} className={`player-map-grid${dragging ? " player-map-grid-dragging" : ""}`} role="group" tabIndex={0}
         aria-label={`Player coordinate grid for ${dimensionLabel(activeDimension)}. Drag or use arrow keys to move; scroll or use the zoom buttons to zoom.`}
         onPointerDown={beginDrag} onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={endDrag} onKeyDown={moveWithKeyboard}>
+        <canvas ref={terrainCanvasRef} className="player-map-terrain" aria-hidden="true" />
         {xLines.map((x) => <span key={`x-${x}`} className={`player-map-line player-map-line-x${x === 0 ? " player-map-line-origin" : ""}`} style={{ left: screenX(x) }}><span>{Math.round(x).toLocaleString()}</span></span>)}
         {zLines.map((z) => <span key={`z-${z}`} className={`player-map-line player-map-line-z${z === 0 ? " player-map-line-origin" : ""}`} style={{ top: screenY(z) }}><span>{Math.round(z).toLocaleString()}</span></span>)}
         <span className="player-map-north">North · −Z</span><span className="player-map-east">East · +X</span>
@@ -289,6 +433,7 @@ export function PlayerMapPanel({ profileId, remote, running }: { profileId: stri
           <button type="button" aria-label="Fit all players" title="Fit all players" onClick={() => setView(null)}><Maximize2 size={15} aria-hidden="true" /></button>
         </div>
         <span className="player-map-scale">{(step / 16).toLocaleString()} {(step / 16) === 1 ? "chunk" : "chunks"} / grid · {step.toLocaleString()} blocks</span>
+        {visibleChunkCount > terrainViewLimit && <span className="player-map-coverage">Terrain loads near players and the map center. Zoom in for more.</span>}
         {markers.map((point) => <button key={point.key} type="button" className={`player-map-marker${point.online ? "" : " player-map-marker-offline"}${selected?.key === point.key ? " player-map-marker-selected" : ""}`}
           style={{ left: screenX(point.position[0]), top: screenY(point.position[2]) }}
           aria-label={`${point.name}, ${point.online ? "online" : "offline"}, ${point.live ? "live" : "last saved"} position ${coords(point.position)}`}
