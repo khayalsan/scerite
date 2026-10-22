@@ -16,6 +16,7 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 ### Changed
 
+- Saved terrain on the Map tab now uses brighter Minecraft-style colors, hillside shading, and water depth shading.
 - Console suggestions now appear above the fixed command field. Console and Logs output use distinct colors for timestamps, warnings, errors, and chat, with a chat-only switch in both tabs.
 - The server multiplayer icon picker now has a separate Choose image button and shows the selected filename.
 - App settings now open from the bottom-left sidebar button, with shortcuts to saved servers in the sidebar. The Servers page uses the available width, and the theme control blends into its setting row.
@@ -23,6 +24,7 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 ### Fixed
 
+- The Server tab now recognizes wrapped TPS console responses and remote console redraws. It also checks whether a non-Paper server provides a TPS command before deciding that no reading is available.
 - Long world settings and file lists can now scroll within the Worlds tab.
 
 ## [0.4.1] - 2026-10-20

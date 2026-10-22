@@ -254,10 +254,21 @@ fn decode_pixels(data: &[u8], resolution: u8) -> Result<Option<Vec<u8>>, String>
             let z = (tz * 16 + 8) / resolution;
             if let Some((block, height)) = surface_block(&sections, x, z) {
                 let color = block_color(block);
-                let shade = (0.78 + ((height + 64).clamp(0, 448) as f32 / 448.0) * 0.22).min(1.0);
+                let north_height = if z > 0 {
+                    surface_block(&sections, x, z - 1).map(|(_, y)| y).unwrap_or(height)
+                } else {
+                    height
+                };
+                let slope = (height - north_height).clamp(-3, 3);
+                let shade = if block.contains("water") {
+                    let depth = water_depth(&sections, x, z, height);
+                    (1.05 - depth as f32 * 0.055).clamp(0.55, 1.05)
+                } else {
+                    (0.94 + slope as f32 * 0.10).clamp(0.64, 1.18)
+                };
                 let at = (tz * resolution + tx) * 4;
                 for channel in 0..3 {
-                    rgba[at + channel] = (color[channel] as f32 * shade) as u8;
+                    rgba[at + channel] = (color[channel] as f32 * shade).min(255.0) as u8;
                 }
                 rgba[at + 3] = 255;
             }
@@ -340,6 +351,17 @@ fn surface_block<'a>(sections: &'a [Section<'a>], x: usize, z: usize) -> Option<
     None
 }
 
+fn water_depth(sections: &[Section<'_>], x: usize, z: usize, surface_y: i32) -> usize {
+    let mut depth = 0;
+    for y in (surface_y - 11..surface_y).rev() {
+        let Some(section) = sections.iter().find(|section| section.y == y.div_euclid(16)) else { break };
+        if !block_at(section, x, y.rem_euclid(16) as usize, z)
+            .is_some_and(|block| block.contains("water")) { break }
+        depth += 1;
+    }
+    depth
+}
+
 fn block_at<'a>(section: &'a Section<'_>, x: usize, y: usize, z: usize) -> Option<&'a str> {
     if section.palette.len() == 1 {
         return Some(section.palette[0]);
@@ -369,36 +391,36 @@ fn block_at<'a>(section: &'a Section<'_>, x: usize, y: usize, z: usize) -> Optio
 fn block_color(block: &str) -> [u8; 3] {
     let name = block.rsplit(':').next().unwrap_or(block);
     if name.contains("water") {
-        [54, 104, 161]
+        [24, 99, 198]
     } else if name.contains("lava") {
-        [230, 101, 39]
+        [241, 104, 35]
     } else if name.contains("snow") || name.contains("quartz") {
-        [230, 233, 223]
+        [244, 244, 237]
     } else if name.contains("ice") {
-        [151, 191, 211]
+        [159, 211, 227]
     } else if name.contains("sand") || name.contains("sandstone") {
-        [210, 193, 137]
+        [237, 218, 153]
+    } else if name.contains("leaves") || name.contains("leaf") || name.contains("vine") {
+        [65, 139, 52]
     } else if name.contains("grass")
         || name.contains("moss")
         || name.contains("fern")
-        || name.contains("leaf")
-        || name.contains("leaves")
     {
-        [101, 153, 82]
+        [123, 176, 71]
     } else if name.contains("log") || name.contains("wood") || name.contains("plank") {
-        [132, 106, 70]
+        [156, 121, 75]
     } else if name.contains("dirt") || name.contains("mud") || name.contains("podzol") {
-        [119, 93, 69]
+        [143, 106, 75]
     } else if name.contains("netherrack") || name.contains("crimson") {
-        [120, 61, 61]
+        [150, 66, 68]
     } else if name.contains("warped") {
-        [55, 113, 111]
+        [54, 145, 141]
     } else if name.contains("end_stone") {
-        [205, 207, 143]
+        [224, 223, 164]
     } else if name.contains("deepslate") || name.contains("basalt") {
-        [79, 83, 88]
+        [87, 90, 96]
     } else if name.contains("stone") || name.contains("ore") || name.contains("tuff") {
-        [133, 137, 132]
+        [146, 148, 145]
     } else {
         let hash = name.bytes().fold(0_u32, |value, byte| {
             value.wrapping_mul(31).wrapping_add(byte as u32)

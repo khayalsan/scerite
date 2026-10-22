@@ -13,12 +13,11 @@ function memoryLabel(bytes: number | null | undefined): string {
 }
 
 function tpsFromLines(lines: string[]): number | null {
-  for (const line of lines) {
-    const plain = line.replace(/\x1b\[[0-9;]*m/g, "").replace(/§[0-9a-fk-or]/gi, "");
-    const match = /\bTPS from last[^:]*:\s*\*?([0-9]+(?:\.[0-9]+)?)/i.exec(plain);
-    if (match) return Number(match[1]);
-  }
-  return null;
+  // tmux may wrap a long formatted response across multiple pane lines.
+  const plain = lines.join(" ").replace(/\x1b\[[0-9;]*[a-z]/gi, "").replace(/§[0-9a-fk-or]/gi, "");
+  const matches = [...plain.matchAll(/\b(?:TPS\s+from\s+last[^:]*|(?:current\s+)?TPS)\s*[:=]\s*\*?([0-9]+(?:\.[0-9]+)?)/gi)];
+  const value = matches[matches.length - 1]?.[1];
+  return value === undefined ? null : Math.min(20, Number(value));
 }
 
 function newRemoteLines(before: string[], after: string[]): string[] {
@@ -30,6 +29,11 @@ function newRemoteLines(before: string[], after: string[]): string[] {
   for (let overlap = Math.min(before.length, after.length); overlap > 0; overlap--) {
     if (before.slice(-overlap).every((line, index) => line === after[index])) return after.slice(overlap);
   }
+  // A tmux pane can redraw its last line instead of appending to it.
+  for (let index = before.length - 1; index >= Math.max(0, before.length - 20); index--) {
+    const anchor = after.lastIndexOf(before[index]);
+    if (anchor >= 0) return after.slice(anchor + 1);
+  }
   return before.length === 0 ? after : [];
 }
 
@@ -37,7 +41,7 @@ async function readTps(profileId: string, remote: boolean): Promise<number | nul
   const beforeRemote = remote ? (await serverSessions.remoteConsole(profileId)).lines : [];
   const afterSequence = remote ? 0 : (await serverSessions.console(profileId, 0)).nextSequence;
   await (remote ? serverSessions.sendRemoteInput(profileId, "tps") : serverSessions.sendInput(profileId, "tps"));
-  for (const delay of [500, 800, 1000]) {
+  for (const delay of [500, 800, 1200, 1500]) {
     await new Promise((resolve) => window.setTimeout(resolve, delay));
     const lines = remote
       ? newRemoteLines(beforeRemote, (await serverSessions.remoteConsole(profileId)).lines)
@@ -99,18 +103,23 @@ export function ServerOverviewPanel({ profile, environment, state }: { profile: 
 
   useEffect(() => {
     setTps(null);
-    if (state !== "online" || !supportsTps) { setTpsLoading(false); return; }
+    if (state !== "online") { setTpsLoading(false); return; }
     let active = true;
     let timer: number | undefined;
     const refresh = async () => {
       if (active) setTpsLoading(true);
+      let received = false;
       try {
         const next = await readTps(profile.id, remote);
+        received = next !== null;
         if (active) setTps(next);
       } catch {
         if (active) setTps(null);
       } finally {
-        if (active) { setTpsLoading(false); timer = window.setTimeout(() => void refresh(), 30000); }
+        if (active) {
+          setTpsLoading(false);
+          if (supportsTps || received) timer = window.setTimeout(() => void refresh(), 30000);
+        }
       }
     };
     void refresh();
@@ -132,7 +141,7 @@ export function ServerOverviewPanel({ profile, environment, state }: { profile: 
       <div><dt>Version</dt><dd>{profile.installedVersion ?? detectedVersion ?? "Unknown"}</dd></div>
       <div><dt>CPU</dt><dd>{state === "online" && usage?.cpuPercent != null ? `${usage.cpuPercent.toFixed(1)}%` : state === "offline" ? "0%" : "Unavailable"}</dd></div>
       <div><dt>RAM</dt><dd>{state === "offline" ? "0 MB" : memoryLabel(usage?.memoryBytes)}</dd></div>
-      <div><dt>TPS (1m)</dt><dd title={supportsTps ? "Average ticks per second over the last minute; refreshed every 30 seconds." : "TPS requires a Paper-compatible server with a tps console command."}>{state === "online" ? tps == null ? tpsLoading ? "Checking…" : "Unavailable" : tps.toFixed(1) : "—"}</dd></div>
+      <div><dt>TPS (1m)</dt><dd title={tps !== null ? "Average ticks per second over the last minute; refreshed every 30 seconds." : "Scerite reads TPS from this server's console command when available."}>{state === "online" ? tps == null ? tpsLoading ? "Checking…" : supportsTps ? "Unavailable" : "No TPS response" : tps.toFixed(1) : "—"}</dd></div>
     </dl>
     <ServerIconControl key={profile.id} profileId={profile.id} remote={remote} running={state !== "offline"} />
   </section>;

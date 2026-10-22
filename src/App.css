@@ -986,11 +986,11 @@
 .player-map-terrain { position:absolute; z-index:0; inset:0; width:100%; height:100%; pointer-events:none; image-rendering:pixelated; }
 .player-map-grid-dragging { cursor:grabbing; }
 .player-map-line { position:absolute; z-index:1; color:var(--app-muted); pointer-events:none; font-size:10px; font-variant-numeric:tabular-nums; }
-.player-map-line-x { top:0; bottom:0; border-left:1px solid var(--app-line); }
+.player-map-line-x { top:0; bottom:0; border-left:1px solid color-mix(in srgb, var(--app-line) 42%, transparent); }
 .player-map-line-x span { position:absolute; top:5px; left:4px; }
-.player-map-line-z { left:0; right:0; border-top:1px solid var(--app-line); }
+.player-map-line-z { left:0; right:0; border-top:1px solid color-mix(in srgb, var(--app-line) 42%, transparent); }
 .player-map-line-z span { position:absolute; top:3px; left:5px; }
-.player-map-line-origin { border-color:var(--app-accent); }
+.player-map-line-origin { border-color:color-mix(in srgb, var(--app-accent) 72%, transparent); }
 .player-map-north, .player-map-east { position:absolute; z-index:1; padding:3px 6px; border-radius:5px; color:var(--app-muted); background:var(--app-paper); font-size:11px; pointer-events:none; }
 .player-map-north { top:10px; left:50%; transform:translateX(-50%); }
 .player-map-east { top:50%; right:10px; transform:translateY(-50%); }
