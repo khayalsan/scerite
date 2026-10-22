@@ -970,6 +970,9 @@
 
 .logs-panel { display: flex; min-height: 0; flex: 1 1 auto; flex-direction: column; gap: 16px; padding: 18px; }
 .logs-header { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
+.logs-header-actions { display: flex; align-items: center; gap: 14px; }
+.logs-chat-toggle { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; white-space: nowrap; }
+.logs-chat-toggle .property-switch { transform: scale(.82); transform-origin: right center; }
 .logs-header h2 { margin: 0 0 4px; font-size: 20px; }
 .logs-header p { margin: 0; color: var(--app-muted); font-size: 13px; }
 .logs-layout { display: grid; min-height: 0; flex: 1 1 auto; grid-template-columns: minmax(155px, 210px) minmax(0, 1fr); gap: 12px; }
@@ -981,7 +984,7 @@
 .logs-reader-heading { display: flex; justify-content: space-between; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--app-line); }
 .logs-reader-heading span { color: var(--app-muted); font-size: 12px; }
 .logs-reader pre { min-height: 0; flex: 1 1 auto; margin: 0; padding: 14px; overflow: auto; font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
-@media (max-width: 640px) { .logs-layout { grid-template-columns: 1fr; grid-template-rows: minmax(80px, 140px) minmax(0, 1fr); } }
+@media (max-width: 640px) { .logs-header { flex-wrap: wrap; } .logs-layout { grid-template-columns: 1fr; grid-template-rows: minmax(80px, 140px) minmax(0, 1fr); } }
 
 .server-detail-shell .server-tab-empty {
   width: 100%;

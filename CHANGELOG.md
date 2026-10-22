@@ -15,7 +15,7 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 ### Changed
 
-- Console suggestions now appear above the fixed command field. Console output uses distinct colors for timestamps, warnings, errors, and chat, with a chat-only switch.
+- Console suggestions now appear above the fixed command field. Console and Logs output use distinct colors for timestamps, warnings, errors, and chat, with a chat-only switch in both tabs.
 - The server multiplayer icon picker now has a separate Choose image button and shows the selected filename.
 - App settings now open from the bottom-left sidebar button, with shortcuts to saved servers in the sidebar. The Servers page uses the available width, and the theme control blends into its setting row.
 - The Players tab now shows previously found players right away while it refreshes the full list and their access status.

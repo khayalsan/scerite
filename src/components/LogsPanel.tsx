@@ -3,6 +3,7 @@ import { serverFiles } from "../lib/serverFiles";
 import { serverLogs } from "../lib/serverLogs";
 import type { ServerLogSnapshot } from "../lib/serverLogs";
 import { SearchField } from "./SearchField";
+import { ConsoleLogLine, isChatConsoleLine, plainConsoleLine } from "./ConsoleLogLine";
 
 interface LogsPanelProps {
   profileId: string;
@@ -19,6 +20,7 @@ export function LogsPanel({ profileId, remote, running }: LogsPanelProps) {
   const [selected, setSelected] = useState<string | null>(null);
   const [snapshot, setSnapshot] = useState<ServerLogSnapshot | null>(null);
   const [search, setSearch] = useState("");
+  const [chatOnly, setChatOnly] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [revision, setRevision] = useState(0);
@@ -60,13 +62,17 @@ export function LogsPanel({ profileId, remote, running }: LogsPanelProps) {
   }, [profileId, remote, running, selected, revision]);
 
   const normalizedSearch = search.trim().toLowerCase();
-  const matchingLines = normalizedSearch && snapshot ? snapshot.text.split(/\r?\n/).filter((line) => line.toLowerCase().includes(normalizedSearch)) : [];
-  const visibleText = snapshot ? normalizedSearch ? matchingLines.join("\n") : snapshot.text : "Loading log…";
+  const visibleLines = snapshot ? snapshot.text.split(/\r?\n/)
+    .filter((line) => !chatOnly || isChatConsoleLine(line))
+    .filter((line) => !normalizedSearch || plainConsoleLine(line).toLowerCase().includes(normalizedSearch)) : [];
 
   return <div className="logs-panel">
     <header className="logs-header">
       <div><h2>Server logs</h2><p>Read the latest output or open an older log.</p></div>
-      <button className="button button-quiet" type="button" onClick={() => setRevision((value) => value + 1)}>Refresh</button>
+      <div className="logs-header-actions">
+        <label className="logs-chat-toggle">Chat only <span className="property-switch"><input type="checkbox" role="switch" checked={chatOnly} onChange={(event) => setChatOnly(event.currentTarget.checked)} /><span aria-hidden="true" /></span></label>
+        <button className="button button-quiet" type="button" onClick={() => setRevision((value) => value + 1)}>Refresh</button>
+      </div>
     </header>
     <SearchField id="logs-search" label="Search selected log" placeholder="Find matching log lines" value={search} onChange={setSearch} />
     {error && <p className="notice notice-error" role="alert">{error}</p>}
@@ -76,8 +82,8 @@ export function LogsPanel({ profileId, remote, running }: LogsPanelProps) {
           {names.map((name) => <button key={name} type="button" className={selected === name ? "logs-item logs-item-active" : "logs-item"} onClick={() => { setError(null); setSelected(name); }} aria-current={selected === name ? "true" : undefined}>{name}</button>)}
         </nav>
         <section className="logs-reader" aria-label={selected ? `${selected} contents` : "Log contents"}>
-          <div className="logs-reader-heading"><strong>{selected}</strong><span>{normalizedSearch && snapshot ? `${matchingLines.length} matching lines${snapshot.truncated ? " · last 256 KB" : ""}` : snapshot?.truncated ? "Showing the last 256 KB" : ""}</span></div>
-          <pre>{visibleText || (normalizedSearch ? "No matching lines in this log." : "")}</pre>
+          <div className="logs-reader-heading"><strong>{selected}</strong><span>{normalizedSearch && snapshot ? `${visibleLines.length} matching lines${snapshot.truncated ? " · last 256 KB" : ""}` : snapshot?.truncated ? "Showing the last 256 KB" : ""}</span></div>
+          <pre>{snapshot ? visibleLines.length ? visibleLines.map((line, index) => <ConsoleLogLine key={index} line={line} trailingNewline={index < visibleLines.length - 1} />) : chatOnly ? "No chat messages found in this log." : normalizedSearch ? "No matching lines in this log." : "" : "Loading log…"}</pre>
         </section>
       </div>}
   </div>;
