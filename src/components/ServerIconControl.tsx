@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 function errorText(error: unknown) {
@@ -27,7 +27,9 @@ async function iconFromFile(file: File): Promise<{ preview: string; bytes: numbe
 }
 
 export function ServerIconControl({ profileId, remote, running }: { profileId: string; remote: boolean; running: boolean }) {
+  const fileInput = useRef<HTMLInputElement>(null);
   const [preview, setPreview] = useState<string | null>(null);
+  const [fileName, setFileName] = useState<string | null>(null);
   const [bytes, setBytes] = useState<number[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -37,11 +39,13 @@ export function ServerIconControl({ profileId, remote, running }: { profileId: s
     setError(null);
     setMessage(null);
     setPreview(null);
+    setFileName(null);
     setBytes(null);
     if (!file) return;
     try {
       const icon = await iconFromFile(file);
       setPreview(icon.preview);
+      setFileName(file.name);
       setBytes(icon.bytes);
     } catch (reason) {
       setError(`Could not open this image: ${errorText(reason)}`);
@@ -70,7 +74,12 @@ export function ServerIconControl({ profileId, remote, running }: { profileId: s
     </div>
     <div className="server-icon-actions">
       {preview && <img src={preview} alt="Selected server icon preview" width="64" height="64" />}
-      <input type="file" accept="image/*" aria-label="Choose server icon image" onChange={(event) => void choose(event.currentTarget.files?.[0])} disabled={busy} />
+      <input ref={fileInput} type="file" accept="image/*" hidden onChange={(event) => {
+        void choose(event.currentTarget.files?.[0]);
+        event.currentTarget.value = "";
+      }} disabled={busy} />
+      <button className="button button-secondary" type="button" onClick={() => fileInput.current?.click()} disabled={busy}>Choose image</button>
+      {fileName && <span className="server-icon-file-name" title={fileName}>{fileName}</span>}
       <button className="button button-primary" type="button" onClick={() => void upload()} disabled={!bytes || busy || running}>{busy ? "Uploading…" : "Save icon"}</button>
     </div>
     {running && <small>Stop the server before changing its icon.</small>}

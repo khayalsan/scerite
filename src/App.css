@@ -1015,7 +1015,7 @@
 .server-icon-control p { margin: 0; color: var(--app-muted); font-size: 13px; }
 .server-icon-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 16px; }
 .server-icon-actions img { flex: none; width: 64px; height: 64px; border-radius: 6px; image-rendering: pixelated; }
-.server-icon-actions input { max-width: 100%; min-width: 0; }
+.server-icon-file-name { max-width: min(100%, 240px); overflow: hidden; color: var(--app-muted); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .server-icon-control small { display: block; margin-top: 10px; color: var(--app-muted); }
 .server-icon-control .form-error { margin-top: 10px; color: var(--danger, #ff8097); }
 .server-icon-control [role="status"] { margin-top: 10px; color: var(--success, #74c69d); }
