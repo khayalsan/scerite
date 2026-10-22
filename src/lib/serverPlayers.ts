@@ -10,6 +10,7 @@ export interface PlayerData {
   health: number | null;
   hunger: number | null;
   position: [number, number, number] | null;
+  dimension: string | null;
   statistics: PlayerStatistic[];
   dataWarning: string | null;
   statsWarning: string | null;

@@ -29,9 +29,23 @@ pub struct PlayerData {
     pub health: Option<f64>,
     pub hunger: Option<i64>,
     pub position: Option<[f64; 3]>,
+    pub dimension: Option<String>,
     pub statistics: Vec<PlayerStatistic>,
     pub data_warning: Option<String>,
     pub stats_warning: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlayerLocation {
+    pub uuid: Uuid,
+    pub position: Option<[f64; 3]>,
+    pub dimension: Option<String>,
+}
+
+pub(crate) fn decode_player_location(uuid: Uuid, bytes: Option<Vec<u8>>) -> PlayerLocation {
+    let data = decode_player_data(bytes, None);
+    PlayerLocation { uuid, position: data.position, dimension: data.dimension }
 }
 
 #[derive(Serialize)]
@@ -138,6 +152,10 @@ pub(crate) fn decode_player_data(
                         .zip(values[1].as_f64())
                         .zip(values[2].as_f64())
                         .map(|((x, y), z)| [x, y, z]),
+                    _ => None,
+                };
+                data.dimension = match root.get("Dimension") {
+                    Some(Value::String(value)) => Some(value.clone()),
                     _ => None,
                 };
             }
@@ -304,4 +322,26 @@ pub fn read_local_player_data(
         }
     }
     Ok(decode_player_data(player_file, stats_file))
+}
+
+#[tauri::command]
+pub fn read_local_player_locations(
+    profile_id: Uuid,
+    uuids: Vec<Uuid>,
+    profiles: State<'_, ServerProfileStore>,
+) -> Result<Vec<PlayerLocation>, String> {
+    if uuids.len() > 1000 { return Err("Too many player locations were requested.".into()); }
+    let root = local_server_root(profile_id, &profiles)?;
+    let properties = optional_local_file(&root, "server.properties")?;
+    let world = world_name(properties.as_deref())?;
+    let mut locations = Vec::with_capacity(uuids.len());
+    for uuid in uuids {
+        let mut player_file = None;
+        for path in player_data_paths(&world, uuid) {
+            player_file = optional_local_file(&root, &path)?;
+            if player_file.is_some() { break; }
+        }
+        locations.push(decode_player_location(uuid, player_file));
+    }
+    Ok(locations)
 }

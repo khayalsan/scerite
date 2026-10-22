@@ -800,6 +800,33 @@ pub async fn read_remote_player_data(
     }).await
 }
 
+#[tauri::command]
+pub async fn read_remote_player_locations(
+    profile_id: Uuid,
+    uuids: Vec<Uuid>,
+    profiles: State<'_, ServerProfileStore>,
+    remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<Vec<server_players::PlayerLocation>, String> {
+    if uuids.len() > 1000 { return Err("Too many player locations were requested.".into()); }
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    run_remote(profile, environment, Arc::clone(remote_sessions.inner()), move |session, profile| {
+        let sftp = session.sftp().map_err(|error| format!("Could not open SFTP: {error}"))?;
+        let root = remote_root_with_sftp(&sftp, configured_remote_root(profile)?)?;
+        let properties = optional_remote_player_file(&sftp, &root, "server.properties")?;
+        let world = server_players::world_name(properties.as_deref())?;
+        let mut locations = Vec::with_capacity(uuids.len());
+        for uuid in uuids {
+            let mut player_file = None;
+            for path in server_players::player_data_paths(&world, uuid) {
+                player_file = optional_remote_player_file(&sftp, &root, &path)?;
+                if player_file.is_some() { break; }
+            }
+            locations.push(server_players::decode_player_location(uuid, player_file));
+        }
+        Ok(locations)
+    }).await
+}
+
 pub(crate) async fn remote_package_names(
     profile: ServerProfile,
     environment: ServerEnvironment,
