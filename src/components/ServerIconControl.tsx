@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { ImagePlus } from "lucide-react";
 
 function errorText(error: unknown) {
   return error instanceof Error ? error.message : String(error);
@@ -78,7 +79,7 @@ export function ServerIconControl({ profileId, remote, running }: { profileId: s
         void choose(event.currentTarget.files?.[0]);
         event.currentTarget.value = "";
       }} disabled={busy} />
-      <button className="button button-secondary" type="button" onClick={() => fileInput.current?.click()} disabled={busy}>Choose image</button>
+      <button className="button button-secondary" type="button" onClick={() => fileInput.current?.click()} disabled={busy}><ImagePlus size={15} aria-hidden="true" /> Choose image</button>
       {fileName && <span className="server-icon-file-name" title={fileName}>{fileName}</span>}
       <button className="button button-primary" type="button" onClick={() => void upload()} disabled={!bytes || busy || running}>{busy ? "Uploading…" : "Save icon"}</button>
     </div>
