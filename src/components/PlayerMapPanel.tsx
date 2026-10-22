@@ -25,8 +25,7 @@ const maximumZoom = 1_000_000;
 
 function gridStep(unitsPerPixel: number) {
   const target = unitsPerPixel * 96;
-  const power = 10 ** Math.floor(Math.log10(target));
-  return [1, 2, 5, 10].map((factor) => factor * power).find((step) => step >= target) ?? 10 * power;
+  return 16 * 2 ** Math.max(0, Math.ceil(Math.log2(target / 16)));
 }
 
 function gridCoordinates(center: number, size: number, unitsPerPixel: number, step: number) {
@@ -269,7 +268,7 @@ export function PlayerMapPanel({ profileId, remote, running }: { profileId: stri
 
   return <div className="player-map-panel">
     <header className="player-map-header">
-      <div><div className="player-map-title"><h2>Player map</h2><span className="player-map-progress">In Progress</span></div><p>Drag to move, scroll to zoom. Offline markers show the last saved location.</p></div>
+      <div><div className="player-map-title"><h2>Player map</h2><span className="player-map-progress">In Progress</span></div><p>Drag to move, scroll to zoom. The grid follows chunk boundaries; offline markers show the last saved location.</p></div>
       <button className="button button-quiet" type="button" onClick={() => setRevision((value) => value + 1)} disabled={refreshing}><RefreshCw size={15} aria-hidden="true" /> {refreshing ? "Refreshing…" : "Refresh"}</button>
     </header>
     {warning && <p className="notice notice-error" role="status">{warning}</p>}
@@ -289,7 +288,7 @@ export function PlayerMapPanel({ profileId, remote, running }: { profileId: stri
           <button type="button" aria-label="Zoom out" title="Zoom out" onClick={() => zoom(1.25)}><Minus size={16} aria-hidden="true" /></button>
           <button type="button" aria-label="Fit all players" title="Fit all players" onClick={() => setView(null)}><Maximize2 size={15} aria-hidden="true" /></button>
         </div>
-        <span className="player-map-scale">{step.toLocaleString()} blocks / grid</span>
+        <span className="player-map-scale">{(step / 16).toLocaleString()} {(step / 16) === 1 ? "chunk" : "chunks"} / grid · {step.toLocaleString()} blocks</span>
         {markers.map((point) => <button key={point.key} type="button" className={`player-map-marker${point.online ? "" : " player-map-marker-offline"}${selected?.key === point.key ? " player-map-marker-selected" : ""}`}
           style={{ left: screenX(point.position[0]), top: screenY(point.position[2]) }}
           aria-label={`${point.name}, ${point.online ? "online" : "offline"}, ${point.live ? "live" : "last saved"} position ${coords(point.position)}`}
