@@ -1675,6 +1675,29 @@
   overflow-wrap: anywhere;
 }
 
+.console-command-entry { flex: none; }
+
+.console-command-suggestions {
+  max-height: min(220px, 35vh);
+  overflow-y: auto;
+  padding: 5px;
+  border-top: 1px solid var(--terminal-border);
+  background: var(--terminal-background);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.console-command-suggestion {
+  padding: 7px 10px;
+  border-radius: 6px;
+  color: var(--terminal-foreground);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.console-command-suggestion:hover,
+.console-command-suggestion-active { background: color-mix(in srgb, var(--terminal-accent) 22%, var(--terminal-background)); }
+.console-command-suggestions small { display: block; padding: 6px 10px 3px; color: var(--terminal-muted); font-size: 11px; }
+
 .console-input-row {
   display: flex;
   align-items: center;
