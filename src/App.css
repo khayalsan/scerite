@@ -1624,8 +1624,9 @@
   min-height: 42px;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 12px;
-  padding: 0 11px;
+  padding: 6px 11px;
   border-bottom: 1px solid #303936;
   color: #d4e2dc;
   font-size: 12px;
@@ -1635,6 +1636,10 @@
   min-height: 29px;
   padding: 0 8px;
 }
+
+.console-toolbar-actions { display: flex; align-items: center; gap: 14px; }
+.console-chat-toggle { display: inline-flex; align-items: center; gap: 8px; color: var(--terminal-foreground); cursor: pointer; white-space: nowrap; }
+.console-chat-toggle .property-switch { transform: scale(.82); transform-origin: right center; }
 
 .console-search { display: flex; align-items: end; gap: 12px; padding: 9px 11px; border-bottom: 1px solid var(--terminal-border); }
 .console-search .section-search { flex: 1; }
@@ -1675,14 +1680,26 @@
   overflow-wrap: anywhere;
 }
 
-.console-command-entry { flex: none; }
+.console-line-time { color: var(--app-accent); }
+.console-line-level { font-weight: 700; }
+.console-line-warning { color: var(--status-warning); }
+.console-line-error { color: var(--destructive); }
+.console-line-chat { color: var(--terminal-accent); }
+
+.console-command-entry { position: relative; flex: none; }
 
 .console-command-suggestions {
+  position: absolute;
+  right: 0;
+  bottom: 100%;
+  left: 0;
+  z-index: 3;
   max-height: min(220px, 35vh);
   overflow-y: auto;
   padding: 5px;
   border-top: 1px solid var(--terminal-border);
   background: var(--terminal-background);
+  box-shadow: 0 -10px 24px #0003;
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
 }
 

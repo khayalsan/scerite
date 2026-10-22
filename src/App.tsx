@@ -19,6 +19,7 @@ import { LogsPanel } from "./components/LogsPanel";
 import { SearchField } from "./components/SearchField";
 import { PlayersPanel } from "./components/PlayersPanel";
 import { ConsoleCommandInput } from "./components/ConsoleCommandInput";
+import { ConsoleLogLine, isChatConsoleLine, plainConsoleLine } from "./components/ConsoleLogLine";
 import { serverFiles } from "./lib/serverFiles";
 import { packageSupportForSoftware, packageSupportFromFiles } from "./lib/serverSoftware";
 import type { PackageSupport } from "./lib/serverSoftware";
@@ -242,6 +243,7 @@ function App() {
   const [installProfileId, setInstallProfileId] = useState<string | null>(null);
   const [consoleOutput, setConsoleOutput] = useState("");
   const [consoleSearch, setConsoleSearch] = useState("");
+  const [consoleChatOnly, setConsoleChatOnly] = useState(false);
   const consoleCursor = useRef(0);
   const consoleOutputRef = useRef<HTMLDivElement>(null);
   const remoteStatusRouteRef = useRef<string | null>(null);
@@ -647,11 +649,11 @@ function App() {
 
   useEffect(() => {
     if (consoleOutputRef.current && !consoleSearch.trim()) consoleOutputRef.current.scrollTop = consoleOutputRef.current.scrollHeight;
-  }, [consoleOutput, consoleSearch]);
+  }, [consoleOutput, consoleSearch, consoleChatOnly]);
 
   useEffect(() => {
     if (consoleOutputRef.current && consoleSearch.trim()) consoleOutputRef.current.scrollTop = 0;
-  }, [consoleSearch]);
+  }, [consoleSearch, consoleChatOnly]);
 
   useEffect(() => { setConsoleSearch(""); }, [consoleProfileId]);
 
@@ -1111,7 +1113,10 @@ function App() {
   }
 
   const normalizedConsoleSearch = consoleSearch.trim().toLowerCase();
-  const matchingConsoleLines = normalizedConsoleSearch ? consoleOutput.split(/\r?\n/).filter((line) => line.toLowerCase().includes(normalizedConsoleSearch)) : [];
+  const visibleConsoleLines = (consoleOutput || "Console output will appear here.")
+    .split(/\r?\n/)
+    .filter((line) => !consoleChatOnly || isChatConsoleLine(line))
+    .filter((line) => !normalizedConsoleSearch || plainConsoleLine(line).toLowerCase().includes(normalizedConsoleSearch));
 
   return (
     <main className={`app-shell${selectedProfile ? " server-detail-shell" : ""}`}>
@@ -1500,11 +1505,14 @@ function App() {
                             <section className="console-panel" aria-label={`${profile.name} console`}>
                               <div className="console-toolbar">
                                 <strong>Live console</strong>
-                                <button className="button button-quiet" type="button" onClick={() => toggleConsole(profile)}>Disconnect</button>
+                                <div className="console-toolbar-actions">
+                                  <label className="console-chat-toggle">Chat only <span className="property-switch"><input type="checkbox" role="switch" checked={consoleChatOnly} onChange={(event) => setConsoleChatOnly(event.currentTarget.checked)} /><span aria-hidden="true" /></span></label>
+                                  <button className="button button-quiet" type="button" onClick={() => toggleConsole(profile)}>Disconnect</button>
+                                </div>
                               </div>
-                              <div className="console-search"><SearchField id="console-search" label="Search console output" placeholder="Find matching lines" value={consoleSearch} onChange={setConsoleSearch} />{normalizedConsoleSearch && <small>{matchingConsoleLines.length} matching lines</small>}</div>
+                              <div className="console-search"><SearchField id="console-search" label="Search console output" placeholder="Find matching lines" value={consoleSearch} onChange={setConsoleSearch} />{normalizedConsoleSearch && <small>{visibleConsoleLines.length} matching lines</small>}</div>
                               <div className="console-output" ref={consoleOutputRef} role="log" aria-live="polite">
-                                <pre>{normalizedConsoleSearch ? matchingConsoleLines.join("\n") || "No matching console lines." : consoleOutput || "Console output will appear here."}</pre>
+                                <pre>{visibleConsoleLines.length ? visibleConsoleLines.map((line, index) => <ConsoleLogLine key={index} line={line} trailingNewline={index < visibleConsoleLines.length - 1} />) : consoleChatOnly ? "No chat messages found." : "No matching console lines."}</pre>
                               </div>
                               <ConsoleCommandInput key={profile.id} disabled={!serverRunning || isBusy} onSend={sendConsoleInput} />
                             </section>
