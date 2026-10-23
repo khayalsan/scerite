@@ -11,6 +11,7 @@ mod server_sessions;
 mod vanilla_install;
 mod software_install;
 mod modrinth;
+mod modpacks;
 mod server_overview;
 mod server_port;
 mod world_management;
@@ -55,6 +56,8 @@ pub fn run() {
             modrinth::remove_modrinth_plugin,
             modrinth::preview_modrinth_mod_removal,
             modrinth::remove_modrinth_mod,
+            modpacks::preview_modrinth_modpack,
+            modpacks::install_modrinth_modpack,
             vanilla_install::use_managed_java,
             commands::get_local_install_root,
             commands::get_auto_accept_eula,

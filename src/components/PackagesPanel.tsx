@@ -12,8 +12,9 @@ import type { InstalledPackage } from "../lib/serverProfiles";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { SearchField } from "./SearchField";
 
-type Project = { id: string; title: string; description: string; author: string; iconUrl: string | null; downloads: number };
+type Project = { id: string; title: string; description: string; author: string; iconUrl: string | null; downloads: number; badges?: ("required" | "optional" | "server")[] };
 type Version = { id: string; name: string; versionNumber: string; requiredDependencies: number };
+type PackPreview = { archiveHash: string; requiredFiles: number; optionalFiles: number; overrideFiles: number; downloadBytes: number; loaderVersion: string };
 type PlanEntry = { projectId: string; versionId: string; title: string; versionNumber: string; filename: string; requiredBy: string[]; alreadyInstalled: boolean; direct: boolean };
 type RemovalPreview = { dependents: { projectId: string; title: string }[]; cleanup: { projectId: string; title: string }[] };
 
@@ -74,6 +75,10 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software, i
   const [versionRetry, setVersionRetry] = useState(0);
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState("relevance");
+  const [catalogKind, setCatalogKind] = useState<"mod" | "modpack">("mod");
+  const [badgeFilter, setBadgeFilter] = useState("all");
+  const [packPreview, setPackPreview] = useState<PackPreview | null>(null);
+  const [includeOptional, setIncludeOptional] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
   const [hasSearched, setHasSearched] = useState(false);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
@@ -151,10 +156,25 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software, i
     setPlan([]);
     planRequest.current += 1;
     searchRequest.current += 1;
+    setPackPreview(null);
   }
 
-  async function search(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  function changeCatalog(next: "mod" | "modpack") {
+    setCatalogKind(next);
+    setProjects([]);
+    setHasSearched(false);
+    setSelectedProject(null);
+    setVersions([]);
+    setSelectedVersionId("");
+    setPlan([]);
+    setPackPreview(null);
+    searchRequest.current += 1;
+    versionRequest.current += 1;
+    planRequest.current += 1;
+  }
+
+  async function search(event?: FormEvent<HTMLFormElement>, nextBadge = badgeFilter) {
+    event?.preventDefault();
     if (!gameVersion) return;
     setSearching(true);
     setError(null);
@@ -168,7 +188,7 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software, i
     setPlan([]);
     const request = ++searchRequest.current;
     try {
-      const found = await invoke<Project[]>("search_modrinth", { query, kind, gameVersion, loader, index: sort });
+      const found = await invoke<Project[]>("search_modrinth", { query, kind: kind === "mod" ? catalogKind : kind, gameVersion, loader, index: sort, badgeFilter: kind === "mod" && catalogKind === "mod" ? nextBadge : "all" });
       if (request === searchRequest.current) { setProjects(found); setHasSearched(true); }
     } catch (cause) { if (request === searchRequest.current) setError(errorText(cause)); }
     finally { if (request === searchRequest.current) setSearching(false); }
@@ -184,7 +204,7 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software, i
     setLoadingVersions(true);
     setError(null);
     try {
-      const found = await invoke<Version[]>("list_modrinth_versions", { projectId: project.id, kind, gameVersion, loader });
+      const found = await invoke<Version[]>("list_modrinth_versions", { projectId: project.id, kind: kind === "mod" ? catalogKind : kind, gameVersion, loader });
       if (request === versionRequest.current) {
         setVersions(found);
         setSelectedVersionId(found[0]?.id ?? "");
@@ -203,6 +223,19 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software, i
       setMessage(result);
       await refreshInstalled();
       setPlan([]);
+    } catch (cause) { setError(errorText(cause)); await refreshInstalled(); }
+    finally { setBusy(false); }
+  }
+
+  async function installPack() {
+    if (!selectedProject || !selectedVersionId || !packPreview) return;
+    setBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await invoke<string>("install_modrinth_modpack", { profileId, projectId: selectedProject.id, versionId: selectedVersionId, gameVersion, loader, expectedArchiveHash: packPreview.archiveHash, includeOptional });
+      setMessage(result);
+      await refreshInstalled();
     } catch (cause) { setError(errorText(cause)); await refreshInstalled(); }
     finally { setBusy(false); }
   }
@@ -272,14 +305,20 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software, i
     if (!selectedProject || !selectedVersionId || !gameVersion) return;
     const request = ++planRequest.current;
     setPlan([]);
+    setPackPreview(null);
     setLoadingPlan(true);
     setError(null);
-    void invoke<PlanEntry[]>("preview_modrinth_install", { profileId, kind, gameVersion, loader, projectId: selectedProject.id, versionId: selectedVersionId })
+    if (kind === "mod" && catalogKind === "modpack") {
+      void invoke<PackPreview>("preview_modrinth_modpack", { gameVersion, loader, projectId: selectedProject.id, versionId: selectedVersionId })
+        .then((preview) => { if (request === planRequest.current) setPackPreview(preview); })
+        .catch((cause) => { if (request === planRequest.current) setError(errorText(cause)); })
+        .finally(() => { if (request === planRequest.current) setLoadingPlan(false); });
+    } else void invoke<PlanEntry[]>("preview_modrinth_install", { profileId, kind, gameVersion, loader, projectId: selectedProject.id, versionId: selectedVersionId })
       .then((items) => { if (request === planRequest.current) setPlan(items); })
       .catch((cause) => { if (request === planRequest.current) setError(errorText(cause)); })
       .finally(() => { if (request === planRequest.current) setLoadingPlan(false); });
     return () => { planRequest.current += 1; };
-  }, [profileId, kind, gameVersion, loader, selectedProject?.id, selectedVersionId]);
+  }, [profileId, kind, catalogKind, gameVersion, loader, selectedProject?.id, selectedVersionId]);
 
   return <section className="packages-panel" aria-label={kind === "mod" ? "Mods" : "Plugins"}>
     <header className="packages-header">
@@ -287,9 +326,10 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software, i
     </header>
     <div className="packages-layout">
       <div className="packages-catalog">
+        {kind === "mod" && <div className="packages-mode" role="group" aria-label="Browse type"><button type="button" aria-pressed={catalogKind === "mod"} onClick={() => changeCatalog("mod")}>Mods</button><button type="button" aria-pressed={catalogKind === "modpack"} onClick={() => changeCatalog("modpack")}>Modpacks</button></div>}
         <form className="packages-search-form" onSubmit={(event) => void search(event)}>
           <label htmlFor="package-query">Search Modrinth</label>
-          <div className="packages-query"><input id="package-query" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={kind === "mod" ? "Search mods or browse popular" : "Search plugins or browse popular"} maxLength={100} disabled={busy} /><button className="button button-primary" type="submit" disabled={searching || busy || !gameVersion}><Search size={15} aria-hidden="true" /> {searching ? "Searching…" : query ? "Search" : "Browse"}</button></div>
+          <div className="packages-query"><input id="package-query" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={kind === "plugin" ? "Search plugins or browse popular" : catalogKind === "modpack" ? "Search modpacks or browse popular" : "Search mods or browse popular"} maxLength={100} disabled={busy} /><button className="button button-primary" type="submit" disabled={searching || busy || !gameVersion}><Search size={15} aria-hidden="true" /> {searching ? "Searching…" : query ? "Search" : "Browse"}</button></div>
           <div className="packages-search-options">
             <div className="packages-sort"><label htmlFor="package-sort">Sort results</label><Select value={sort} onValueChange={(value) => setSort(value ?? "relevance")} disabled={busy}><SelectTrigger id="package-sort"><SelectValue>{(value) => ({ relevance: "Relevance", downloads: "Most downloaded", updated: "Recently updated" })[value as "relevance" | "downloads" | "updated"] ?? "Relevance"}</SelectValue></SelectTrigger><SelectContent><SelectItem value="relevance">Relevance</SelectItem><SelectItem value="downloads">Most downloaded</SelectItem><SelectItem value="updated">Recently updated</SelectItem></SelectContent></Select></div>
             <dl className="packages-compatibility">
@@ -298,6 +338,7 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software, i
             </dl>
             {!fixedLoader && <div className="packages-loader-select"><label htmlFor="package-loader">Server loader</label><Select value={loader} onValueChange={(value) => changeCompatibility(value ?? availableLoaders[0].id)} disabled={busy}><SelectTrigger id="package-loader"><SelectValue>{(value) => loaders[kind].find((item) => item.id === value)?.label ?? "Choose loader"}</SelectValue></SelectTrigger><SelectContent>{availableLoaders.map((item) => <SelectItem key={item.id} value={item.id}>{item.label}</SelectItem>)}</SelectContent></Select></div>}
           </div>
+          {kind === "mod" && catalogKind === "mod" && <div className="packages-filters" role="group" aria-label="Player installation requirement">{["all", "required", "optional", "server"].map((badge) => <button key={badge} type="button" className="packages-filter" aria-pressed={badgeFilter === badge} disabled={searching || busy || !gameVersion} onClick={() => { setBadgeFilter(badge); void search(undefined, badge); }}>{badge === "all" ? "All" : badge[0].toUpperCase() + badge.slice(1)}</button>)}</div>}
           {versionError && <p className="files-error" role="alert">{versionError} <button type="button" className="button button-quiet" onClick={() => setVersionRetry((value) => value + 1)}>Retry</button></p>}
         </form>
         {error && <p className="files-error" role="alert">{error}</p>}
@@ -305,7 +346,7 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software, i
         {(projects.length > 0 || selectedProject) && <div className="packages-browser">
           <div className="packages-results" aria-label="Search results">{projects.map((project) => <button key={project.id} type="button" className={`packages-result${selectedProject?.id === project.id ? " packages-result-selected" : ""}`} onClick={() => void chooseProject(project)} disabled={busy}>
             <span className="packages-result-icon">{project.iconUrl ? <img src={project.iconUrl} alt="" loading="lazy" /> : <Package size={20} aria-hidden="true" />}</span>
-            <span className="packages-result-copy"><strong>{project.title}</strong><span>{project.description}</span><small>by {project.author} · {Intl.NumberFormat(undefined, { notation: "compact" }).format(project.downloads)} downloads</small>{installedPackages.some((item) => item.kind === kind && item.projectId === project.id && installed.some((file) => file.name === item.filename)) && <em>Installed</em>}</span>
+            <span className="packages-result-copy"><strong>{project.title}</strong><span>{project.description}</span><small>by {project.author} · {Intl.NumberFormat(undefined, { notation: "compact" }).format(project.downloads)} downloads</small>{kind === "mod" && catalogKind === "mod" && project.badges?.length ? <span className="packages-badges">{project.badges.map((badge) => <em key={badge} className="packages-tag">{badge[0].toUpperCase() + badge.slice(1)}</em>)}</span> : null}{installedPackages.some((item) => item.kind === kind && item.projectId === project.id && installed.some((file) => file.name === item.filename)) && <em>Installed</em>}</span>
           </button>)}</div>
           <div className="packages-version">
             {selectedProject ? <>
@@ -318,6 +359,11 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software, i
                   <SelectContent>{versions.map((version) => <SelectItem key={version.id} value={version.id}>{version.name || version.versionNumber}</SelectItem>)}</SelectContent>
                 </Select>
                 {selectedVersion && <p>{selectedVersion.versionNumber}</p>}
+                {catalogKind === "modpack" && kind === "mod" ? <>
+                  <div className="packages-plan" aria-live="polite"><h4>Review modpack</h4>{loadingPlan ? <p>Reading pack manifest…</p> : packPreview ? <><p>{packPreview.requiredFiles} server files · {packPreview.optionalFiles} optional files · {packPreview.overrideFiles} override files</p><p>Up to {formatSize(packPreview.downloadBytes)} of downloads · {loader} loader {packPreview.loaderVersion}</p><p>Existing server files, including worlds, mods, and settings, will be preserved. Conflicting paths are skipped.</p><label className="packages-option"><input type="checkbox" checked={includeOptional} onChange={(event) => setIncludeOptional(event.target.checked)} /> Include optional server files</label></> : null}</div>
+                  <button className="button button-primary" type="button" onClick={() => void installPack()} disabled={!canInstall || busy || loadingPlan || !packPreview}><Download size={15} aria-hidden="true" /> {busy ? "Installing pack…" : "Install modpack"}</button>
+                  {!canInstall && <p className="files-error">Stop the server and confirm its status before installing.</p>}
+                </> : <>
                 {updating && <p>The new JAR is verified before the previous version is removed. If cleanup fails, both JARs may remain; review the installed list before starting the server.</p>}
                 <div className="packages-plan" aria-live="polite">
                   <h4>Review download</h4>
@@ -328,11 +374,12 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software, i
                 </div>
                 <button className="button button-primary" type="button" onClick={() => void install()} disabled={!canInstall || busy || loadingPlan || plan.length === 0}><Download size={15} aria-hidden="true" /> {busy ? "Installing…" : updating ? `Confirm ${kind} update` : `Confirm and install ${plan.filter((item) => !item.alreadyInstalled).length}`}</button>
                 {!canInstall && <p className="files-error">Stop the server and confirm its status before installing.</p>}
+                </>}
               </>}
-            </> : <p className="state-message">Select a result to see releases and required dependencies.</p>}
+            </> : <p className="state-message">Select a result to see compatible releases.</p>}
           </div>
         </div>}
-        {hasSearched && projects.length === 0 && <p className="state-message">No matching {kind === "mod" ? "mods" : "plugins"} found for this server. Try another search or sort order.</p>}
+        {hasSearched && projects.length === 0 && <p className="state-message">No matching {kind === "plugin" ? "plugins" : catalogKind === "modpack" ? "modpacks" : "mods"} found for this server. Try another search or sort order.</p>}
       </div>
       <aside className="packages-installed" aria-label={`Installed ${folder}`}>
         <div className="packages-installed-heading"><div><h3>Installed {folder}</h3><p>JAR files in this server’s {folder}/ folder</p></div><button type="button" className="button button-quiet" onClick={() => void refreshInstalled()} disabled={loadingInstalled}><RefreshCw size={14} aria-hidden="true" /> Refresh</button></div>

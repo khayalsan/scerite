@@ -1140,6 +1140,53 @@ where
     .map_err(|error| format!("Remote operation failed to finish: {error}"))?
 }
 
+pub(crate) async fn install_remote_modpack_files(
+    profile: ServerProfile,
+    environment: ServerEnvironment,
+    sessions: Arc<RemoteSessionManager>,
+    files: Vec<(String, Vec<u8>)>,
+) -> Result<(usize, Vec<String>), String> {
+    run_remote(profile, environment, sessions, move |session, profile| {
+        match remote_is_running(session, profile)? {
+            Some(false) => {},
+            Some(true) => return Err("Stop the server before installing a modpack.".into()),
+            None => return Err("tmux is required to confirm the remote server is stopped.".into()),
+        }
+        let sftp = session.sftp().map_err(|error| format!("Could not open SFTP: {error}"))?;
+        let root = remote_root_with_sftp(&sftp, configured_remote_root(profile)?)?;
+        if remote_directory_has_java_process(session, &root)? {
+            return Err("A Java process is using this server folder. Stop it before installing a modpack.".into());
+        }
+        let mut installed = 0;
+        let mut skipped = Vec::new();
+        'files: for (name, bytes) in files {
+            let destination = resolve_remote_relative(&root, &name, false)?;
+            let mut parent = root.clone();
+            for segment in name.split('/').take(name.split('/').count() - 1) {
+                parent = format!("{parent}/{segment}");
+                match sftp.lstat_optional(Path::new(&parent)) {
+                    Ok(meta) if meta.file_type() == FileType::Dir => {},
+                    Ok(_) => { skipped.push(name); continue 'files; },
+                    Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile => {
+                        sftp.mkdir(Path::new(&parent)).map_err(|error| format!("Could not create pack folder: {error}. {installed} files were already added."))?;
+                    }
+                    Err(error) => return Err(format!("Could not inspect pack path: {error}")),
+                }
+            }
+            match sftp.lstat_optional(Path::new(&destination)) {
+                Ok(_) => { skipped.push(name); continue; },
+                Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile => {},
+                Err(error) => return Err(format!("Could not inspect pack destination: {error}")),
+            }
+            if let Err(error) = sftp.write_file_from_reader(Path::new(&destination), &mut std::io::Cursor::new(bytes)) {
+                return Err(format!("Could not install {name}: {error}. {installed} files were already added."));
+            }
+            installed += 1;
+        }
+        Ok((installed, skipped))
+    }).await
+}
+
 fn require_remote_profile(
     profiles: &ServerProfileStore,
     profile_id: Uuid,
@@ -1690,15 +1737,22 @@ impl RemoteSftp {
             attrs.set_regular(true);
             attrs.permissions = Some(0o100600);
             let mut file = self.inner.open_with_flags_and_attributes(
-                path, OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::EXCLUDE, attrs,
+                path.clone(), OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::EXCLUDE, attrs,
             ).await.map_err(|error| error.to_string())?;
-            let mut buffer = [0_u8; 65536];
-            loop {
-                let count = reader.read(&mut buffer).map_err(|error| error.to_string())?;
-                if count == 0 { break; }
-                file.write_all(&buffer[..count]).await.map_err(|error| error.to_string())?;
+            let transfer = async {
+                let mut buffer = [0_u8; 65536];
+                loop {
+                    let count = reader.read(&mut buffer).map_err(|error| error.to_string())?;
+                    if count == 0 { break; }
+                    file.write_all(&buffer[..count]).await.map_err(|error| error.to_string())?;
+                }
+                Ok::<_, String>(())
+            }.await;
+            let close = file.close().await.map_err(|error| error.to_string());
+            if transfer.is_err() || close.is_err() {
+                let _ = self.inner.remove_file(path).await;
             }
-            file.close().await.map_err(|error| error.to_string())
+            transfer.and(close)
         })
     }
 

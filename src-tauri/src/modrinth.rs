@@ -31,6 +31,7 @@ pub struct CatalogProject {
     author: String,
     icon_url: Option<String>,
     downloads: u64,
+    badges: Vec<&'static str>,
 }
 
 #[derive(Serialize)]
@@ -76,6 +77,19 @@ fn package_folder(kind: &str) -> Result<&'static str, String> {
     }
 }
 
+fn catalog_kind(kind: &str) -> bool {
+    matches!(kind, "mod" | "plugin" | "modpack")
+}
+
+fn environment_badge(environment: &str) -> Option<&'static str> {
+    match environment {
+        "client_and_server" => Some("required"),
+        "server_only_client_optional" | "client_or_server" | "client_or_server_prefers_both" => Some("optional"),
+        "server_only" | "dedicated_server_only" => Some("server"),
+        _ => None,
+    }
+}
+
 fn valid_loader(kind: &str, loader: &str) -> bool {
     match kind {
         "mod" => matches!(loader, "fabric" | "quilt" | "forge" | "neoforge"),
@@ -117,10 +131,14 @@ pub async fn search_modrinth(
     game_version: String,
     loader: String,
     index: String,
+    badge_filter: Option<String>,
 ) -> Result<Vec<CatalogProject>, String> {
-    package_folder(&kind)?;
-    if !valid_loader(&kind, &loader) || !safe_version(&game_version) {
+    if !catalog_kind(&kind) || !valid_loader(if kind == "modpack" { "mod" } else { &kind }, &loader) || !safe_version(&game_version) {
         return Err("Choose a valid Minecraft version and loader.".into());
+    }
+    let badge_filter = badge_filter.as_deref().unwrap_or("all");
+    if !matches!(badge_filter, "all" | "required" | "optional" | "server") || (kind != "mod" && badge_filter != "all") {
+        return Err("Choose a valid mod badge filter.".into());
     }
     let query = query.trim();
     if query.len() > 100 {
@@ -134,15 +152,14 @@ pub async fn search_modrinth(
         vec![format!("categories:{loader}")],
         vec![format!("versions:{game_version}")],
     ];
-    if kind == "mod" {
-        facets.push([
-            "environment:server_only",
-            "environment:server_only_client_optional",
-            "environment:client_and_server",
-            "environment:client_or_server",
-            "environment:client_or_server_prefers_both",
-            "environment:dedicated_server_only",
-        ].map(str::to_owned).to_vec());
+    if kind == "mod" || kind == "modpack" {
+        let environments: &[&str] = match badge_filter {
+            "required" => &["client_and_server"],
+            "optional" => &["server_only_client_optional", "client_or_server", "client_or_server_prefers_both"],
+            "server" => &["server_only", "dedicated_server_only"],
+            _ => &["server_only", "server_only_client_optional", "client_and_server", "client_or_server", "client_or_server_prefers_both", "dedicated_server_only"],
+        };
+        facets.push(environments.iter().map(|value| format!("environment:{value}")).collect());
     }
     let mut url = api_url("search")?;
     url.query_pairs_mut()
@@ -169,6 +186,10 @@ pub async fn search_modrinth(
                 author: hit["author"].as_str().unwrap_or_default().to_owned(),
                 icon_url: hit["icon_url"].as_str().filter(|url| url.starts_with("https://cdn.modrinth.com/")).map(str::to_owned),
                 downloads: hit["downloads"].as_u64().unwrap_or(0),
+                badges: ["required", "optional", "server"].into_iter().filter(|badge| {
+                    hit["environment"].as_array().is_some_and(|values| values.iter()
+                        .any(|value| value.as_str().and_then(environment_badge) == Some(*badge)))
+                }).collect(),
             })
         })
         .collect())
@@ -200,8 +221,7 @@ pub async fn list_modrinth_versions(
     game_version: String,
     loader: String,
 ) -> Result<Vec<CatalogVersion>, String> {
-    package_folder(&kind)?;
-    if !valid_loader(&kind, &loader) {
+    if !catalog_kind(&kind) || !valid_loader(if kind == "modpack" { "mod" } else { &kind }, &loader) {
         return Err("Choose a compatible loader.".into());
     }
     let data = get_json(
