@@ -365,7 +365,7 @@ export function PlayerMapPanel({ profileId, remote, running }: { profileId: stri
             for (const result of results) {
               bytesRead += result.readBytes;
               if (result.status === "error") hadError = true;
-              terrainCacheRef.current!.apply(work.dimension, result, work.force);
+              terrainCacheRef.current!.apply(work.dimension, result);
             }
             setTerrainEpoch((epoch) => epoch + 1);
             if (remote && results.some((tile) => tile.status === "tile")) {

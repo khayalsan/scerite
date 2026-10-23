@@ -27,6 +27,7 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 ### Fixed
 
+- Zooming back into a map keeps previously loaded high-detail terrain instead of briefly showing lower-detail tiles while those chunks reload.
 - Long world settings and file lists can now scroll within the Worlds tab.
 
 ## [0.4.1] - 2026-10-20

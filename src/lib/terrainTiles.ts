@@ -33,19 +33,22 @@ export const readTerrainTiles = (remote: boolean, profileId: string, dimension: 
   invoke<TerrainResult[]>(remote ? "read_remote_terrain_tiles" : "read_local_terrain_tiles", { profileId, dimension, resolution, requests });
 
 export class TerrainTileCache {
-  private entries = new Map<string, CachedTile>();
+  private entries = new Map<TileResolution, Map<string, CachedTile>>([
+    [1, new Map()], [4, new Map()], [16, new Map()],
+  ]);
   private errors = new Map<string, number>();
 
-  constructor(private readonly limit = 512) {}
+  constructor(private readonly limitPerResolution = 512) {}
 
   private touch(tileKey: string, tile: CachedTile) {
-    this.entries.delete(tileKey);
-    this.entries.set(tileKey, tile);
-    while (this.entries.size > this.limit) this.entries.delete(this.entries.keys().next().value!);
+    const entries = this.entries.get(tile.resolution)!;
+    entries.delete(tileKey);
+    entries.set(tileKey, tile);
+    while (entries.size > this.limitPerResolution) entries.delete(entries.keys().next().value!);
   }
 
   private exact(dimension: string, x: number, z: number, resolution: TileResolution) {
-    return this.entries.get(key(dimension, x, z, resolution));
+    return this.entries.get(resolution)!.get(key(dimension, x, z, resolution));
   }
 
   private derive(dimension: string, x: number, z: number, resolution: TileResolution) {
@@ -78,9 +81,11 @@ export class TerrainTileCache {
 
   coordinates(dimension: string) {
     const found = new Map<string, [number, number]>();
-    for (const tileKey of this.entries.keys()) {
-      const parts = tileKey.split("|");
-      if (parts[0] === dimension) found.set(`${parts[1]}|${parts[2]}`, [Number(parts[1]), Number(parts[2])]);
+    for (const entries of this.entries.values()) {
+      for (const tileKey of entries.keys()) {
+        const parts = tileKey.split("|");
+        if (parts[0] === dimension) found.set(`${parts[1]}|${parts[2]}`, [Number(parts[1]), Number(parts[2])]);
+      }
     }
     return found.values();
   }
@@ -96,17 +101,17 @@ export class TerrainTileCache {
     return this.exact(dimension, x, z, resolution)?.timestamp ?? null;
   }
 
-  apply(dimension: string, result: TerrainResult, force = false) {
+  apply(dimension: string, result: TerrainResult) {
     const tileKey = key(dimension, result.x, result.z, result.resolution);
     const now = Date.now();
     if (result.status === "error") {
       this.errors.set(tileKey, now);
-      while (this.errors.size > this.limit) this.errors.delete(this.errors.keys().next().value!);
+      while (this.errors.size > this.limitPerResolution) this.errors.delete(this.errors.keys().next().value!);
       return false;
     }
     this.errors.delete(tileKey);
     if (result.status === "unchanged") {
-      const tile = this.entries.get(tileKey);
+      const tile = this.entries.get(result.resolution)!.get(tileKey);
       if (tile) this.touch(tileKey, { ...tile, checkedAt: now });
       return false;
     }
@@ -132,8 +137,8 @@ export class TerrainTileCache {
     context.putImageData(new ImageData(new Uint8ClampedArray(result.rgba), result.resolution, result.resolution), 0, 0);
     for (const resolution of [1, 4, 16] as TileResolution[]) {
       const existing = this.exact(dimension, result.x, result.z, resolution);
-      if (resolution !== result.resolution && existing && (force || existing.timestamp !== result.timestamp)) {
-        this.entries.delete(key(dimension, result.x, result.z, resolution));
+      if (resolution !== result.resolution && existing && existing.timestamp !== result.timestamp) {
+        this.touch(key(dimension, result.x, result.z, resolution), { ...existing, checkedAt: 0 });
       }
     }
     this.touch(tileKey, { timestamp: result.timestamp, resolution: result.resolution, canvas, checkedAt: now });
