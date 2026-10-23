@@ -1019,7 +1019,7 @@ function App() {
                       <SelectContent>
                         {environments.map((environment) => (
                           <SelectItem key={environment.id} value={environment.id}>
-                            {environment.name} · {environment.username}@{environment.host}:{environment.port}
+                            {environment.name}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -1162,7 +1162,7 @@ function App() {
               <p>{selectedProfile.target.kind === "local"
                 ? selectedProfile.target.directory
                 : environment
-                  ? `${environment.name} · ${environment.username}@${environment.host}:${environment.port}`
+                  ? environment.name
                   : "Remote environment unavailable"}</p>
             </div>
             <section className="server-status-card" aria-label="Server status">
@@ -1374,7 +1374,6 @@ function App() {
                   <article className={`environment-card${isSelected ? " environment-card-selected" : ""}`} key={environment.id}>
                     <button className="environment-card-main" type="button" onClick={() => setEnvironmentFilterId(isSelected ? null : environment.id)}>
                       <span className="environment-card-title">{environment.name}</span>
-                      <span className="environment-card-address">{environment.username}@{environment.host}:{environment.port}</span>
                       <span className="environment-card-address">{environment.rootDirectory || "Set a Minecraft root to install versions"}</span>
                       <span className="environment-card-count">{serverCount} {serverCount === 1 ? "server" : "servers"}</span>
                     </button>
