@@ -1,7 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { serverFiles } from "../lib/serverFiles";
 import { serverLogs } from "../lib/serverLogs";
 import type { ServerLogSnapshot } from "../lib/serverLogs";
+import { displayCache } from "../lib/displayCache";
+import type { CachedLogs } from "../lib/displayCache";
 import { SearchField } from "./SearchField";
 import { ConsoleLogLine, isChatConsoleLine, plainConsoleLine } from "./ConsoleLogLine";
 
@@ -24,11 +26,33 @@ export function LogsPanel({ profileId, remote, running }: LogsPanelProps) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [revision, setRevision] = useState(0);
+  const [showingCached, setShowingCached] = useState(false);
+  const cachedLogsRef = useRef<CachedLogs>({ names: [], latest: null });
+
+  function saveCache(next: Partial<CachedLogs>) {
+    cachedLogsRef.current = { ...cachedLogsRef.current, ...next };
+    void displayCache.writeLogs(profileId, cachedLogsRef.current).catch(() => {});
+  }
 
   useEffect(() => {
     let active = true;
     setLoading(true);
-    void serverFiles.list(remote, profileId, "logs").then((entries) => {
+    void (async () => {
+      if (remote) {
+        try {
+          const cached = await displayCache.readLogs(profileId);
+          if (active && cached && Array.isArray(cached.names) && cached.names.length <= 1000
+            && cached.names.every((name) => typeof name === "string" && /^[A-Za-z0-9._-]{1,128}\.log(?:\.gz)?$/.test(name) && !name.includes(".."))) {
+            cachedLogsRef.current = { names: cached.names, latest: cached.latest && typeof cached.latest.text === "string"
+              && typeof cached.latest.truncated === "boolean" ? cached.latest : null };
+            setNames(cached.names);
+            setSelected((current) => current && cached.names.includes(current) ? current : cached.names[0] ?? null);
+            if (cached.names.length) setLoading(false);
+          }
+        } catch { /* Remote logs remain available when the local cache cannot be read. */ }
+      }
+      return serverFiles.list(remote, profileId, "logs");
+    })().then((entries) => {
       if (!active) return;
       const found = entries.filter((entry) => !entry.directory && /^[A-Za-z0-9._-]{1,128}\.log(?:\.gz)?$/.test(entry.name) && !entry.name.includes(".."))
         .map((entry) => entry.name)
@@ -36,8 +60,9 @@ export function LogsPanel({ profileId, remote, running }: LogsPanelProps) {
       setNames(found);
       setSelected((current) => current && found.includes(current) ? current : found[0] ?? null);
       setError(null);
+      if (remote) saveCache({ names: found });
     }).catch((reason: unknown) => {
-      if (active) { setNames([]); setError(`Could not list server logs: ${errorText(reason)}`); }
+      if (active) setError(`Could not list server logs: ${errorText(reason)}`);
     }).finally(() => {
       if (active) setLoading(false);
     });
@@ -50,12 +75,15 @@ export function LogsPanel({ profileId, remote, running }: LogsPanelProps) {
     const read = async () => {
       try {
         const result = await serverLogs.read(remote, profileId, selected);
-        if (active) { setSnapshot(result); setError(null); }
+        if (active) { setSnapshot(result); setShowingCached(false); setError(null); }
+        if (remote && selected === "latest.log") saveCache({ latest: result });
       } catch (reason) {
         if (active) setError(`Could not open ${selected}: ${errorText(reason)}`);
       }
     };
-    setSnapshot(null);
+    const cached = remote && selected === "latest.log" ? cachedLogsRef.current.latest : null;
+    setSnapshot(cached);
+    setShowingCached(!!cached);
     void read();
     const timer = selected === "latest.log" && running ? window.setInterval(() => void read(), 5000) : undefined;
     return () => { active = false; if (timer !== undefined) window.clearInterval(timer); };
@@ -82,7 +110,7 @@ export function LogsPanel({ profileId, remote, running }: LogsPanelProps) {
           {names.map((name) => <button key={name} type="button" className={selected === name ? "logs-item logs-item-active" : "logs-item"} onClick={() => { setError(null); setSelected(name); }} aria-current={selected === name ? "true" : undefined}>{name}</button>)}
         </nav>
         <section className="logs-reader" aria-label={selected ? `${selected} contents` : "Log contents"}>
-          <div className="logs-reader-heading"><strong>{selected}</strong><span>{normalizedSearch && snapshot ? `${visibleLines.length} matching lines${snapshot.truncated ? " · last 256 KB" : ""}` : snapshot?.truncated ? "Showing the last 256 KB" : ""}</span></div>
+          <div className="logs-reader-heading"><strong>{selected}</strong><span>{showingCached ? "Cached · updating…" : normalizedSearch && snapshot ? `${visibleLines.length} matching lines${snapshot.truncated ? " · last 256 KB" : ""}` : snapshot?.truncated ? "Showing the last 256 KB" : ""}</span></div>
           <pre>{snapshot ? visibleLines.length ? visibleLines.map((line, index) => <ConsoleLogLine key={index} line={line} trailingNewline={index < visibleLines.length - 1} />) : chatOnly ? "No chat messages found in this log." : normalizedSearch ? "No matching lines in this log." : "" : "Loading log…"}</pre>
         </section>
       </div>}

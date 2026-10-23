@@ -16,6 +16,7 @@ import { ServerInstallPanel } from "./components/ServerInstallPanel";
 import { PackagesPanel } from "./components/PackagesPanel";
 import { ServerOverviewPanel } from "./components/ServerOverviewPanel";
 import { ServerListIcon } from "./components/ServerListIcon";
+import { DisplayCacheSettings } from "./components/DisplayCacheSettings";
 import { LogsPanel } from "./components/LogsPanel";
 import { SearchField } from "./components/SearchField";
 import { PlayersPanel } from "./components/PlayersPanel";
@@ -1355,6 +1356,8 @@ function App() {
             {localRootError && <p className="form-error" role="alert">{localRootError}</p>}
           </section>
         )}
+
+        {isAppSettings && <DisplayCacheSettings />}
 
         {!selectedProfileId && !isAppSettings && environments.length > 0 && (
           <section className="environment-section" aria-label="Remote environments">
