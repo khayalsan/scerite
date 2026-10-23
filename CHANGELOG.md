@@ -17,6 +17,7 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 ### Changed
 
+- Cached map tiles now load together from the local device before the remote map refresh begins, so returning to a map no longer waits for the remote batch pacing to reveal cached terrain.
 - Saved servers now show their Minecraft multiplayer icons in the Servers list when available.
 - Saved terrain on the Map tab now uses brighter Minecraft-style colors, hillside shading, and water depth shading.
 - Console suggestions now appear above the fixed command field. Console and Logs output use distinct colors for timestamps, warnings, errors, and chat, with a chat-only switch in both tabs.

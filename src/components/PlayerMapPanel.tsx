@@ -344,20 +344,20 @@ export function PlayerMapPanel({ profileId, remote, running }: { profileId: stri
         let hadError = false;
         let bytesRead = 0;
         let limited = false;
+        if (remote && !work.force) {
+          const uncached = work.requests.filter((request) => request.knownTimestamp === null);
+          if (uncached.length) {
+            try {
+              const cached = await displayCache.readTiles(profileId, work.dimension, work.resolution, uncached);
+              if (!terrainMountedRef.current || work.generation !== terrainGenerationRef.current) continue;
+              for (const tile of cached) terrainCacheRef.current!.apply(work.dimension, tile);
+              if (cached.length) setTerrainEpoch((epoch) => epoch + 1);
+            } catch { /* A damaged or missing local cache must not prevent the remote read. */ }
+          }
+        }
         for (let offset = 0; offset < work.requests.length && terrainMountedRef.current && work.generation === terrainGenerationRef.current; offset += terrainBatchSize) {
           try {
             const batch = work.requests.slice(offset, offset + terrainBatchSize);
-            if (remote) {
-              try {
-                const uncached = batch.filter((request) => request.knownTimestamp === null);
-                if (uncached.length) {
-                  const cached = await displayCache.readTiles(profileId, work.dimension, work.resolution, uncached);
-                  if (!terrainMountedRef.current || work.generation !== terrainGenerationRef.current) break;
-                  for (const tile of cached) terrainCacheRef.current!.apply(work.dimension, tile);
-                  if (cached.length) setTerrainEpoch((epoch) => epoch + 1);
-                }
-              } catch { /* A damaged or missing local cache must not prevent the remote read. */ }
-            }
             const fresh = batch.map((request) => ({ ...request,
               knownTimestamp: work.force ? null : terrainCacheRef.current!.knownTimestamp(work.dimension, request.x, request.z, work.resolution) }));
             const results = await readTerrainTiles(remote, profileId, work.dimension, work.resolution, fresh);

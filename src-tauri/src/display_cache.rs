@@ -131,7 +131,7 @@ fn trim(root: &Path) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn read_cached_terrain_tiles(
+pub async fn read_cached_terrain_tiles(
     app: AppHandle,
     profile_id: Uuid,
     dimension: String,
@@ -139,44 +139,51 @@ pub fn read_cached_terrain_tiles(
     requests: Vec<terrain::TerrainRequest>,
     profiles: State<'_, ServerProfileStore>,
 ) -> Result<Vec<CachedTile>, String> {
-    terrain::validate_request(&dimension, resolution, &requests)?;
+    terrain::validate_request(&dimension, resolution, &[])?;
+    if requests.len() > 512 {
+        return Err("Too many cached map tiles were requested at once.".into());
+    }
     let profile = profile_dir(&app, profile_id, &profiles)?;
-    let mut levels = [resolution, 4, 16]
-        .into_iter()
-        .filter(|level| *level >= resolution)
-        .collect::<Vec<_>>();
-    levels.dedup();
-    let directories = levels
-        .iter()
-        .map(|level| tile_dir(&profile, &dimension, *level))
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(requests
-        .into_iter()
-        .filter_map(|request| {
-            for (level, dir) in levels.iter().zip(&directories) {
-                let expected = *level as usize * *level as usize * 4;
-                let Some(bytes) =
-                    read_bytes(&tile_path(dir, request.x, request.z), (expected + 4) as u64)
-                else {
-                    continue;
-                };
-                if bytes.len() != expected + 4 {
-                    continue;
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut levels = [resolution, 4, 16]
+            .into_iter()
+            .filter(|level| *level >= resolution)
+            .collect::<Vec<_>>();
+        levels.dedup();
+        let directories = levels
+            .iter()
+            .map(|level| tile_dir(&profile, &dimension, *level))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(requests
+            .into_iter()
+            .filter_map(|request| {
+                for (level, dir) in levels.iter().zip(&directories) {
+                    let expected = *level as usize * *level as usize * 4;
+                    let Some(bytes) =
+                        read_bytes(&tile_path(dir, request.x, request.z), (expected + 4) as u64)
+                    else {
+                        continue;
+                    };
+                    if bytes.len() != expected + 4 {
+                        continue;
+                    }
+                    let timestamp = u32::from_le_bytes(bytes[..4].try_into().ok()?);
+                    return Some(CachedTile {
+                        x: request.x,
+                        z: request.z,
+                        timestamp: (timestamp != u32::MAX).then_some(timestamp),
+                        status: "tile",
+                        resolution: *level,
+                        rgba: bytes[4..].to_vec(),
+                        read_bytes: 0,
+                    });
                 }
-                let timestamp = u32::from_le_bytes(bytes[..4].try_into().ok()?);
-                return Some(CachedTile {
-                    x: request.x,
-                    z: request.z,
-                    timestamp: (timestamp != u32::MAX).then_some(timestamp),
-                    status: "tile",
-                    resolution: *level,
-                    rgba: bytes[4..].to_vec(),
-                    read_bytes: 0,
-                });
-            }
-            None
-        })
-        .collect())
+                None
+            })
+            .collect())
+    })
+    .await
+    .map_err(|error| format!("Could not read cached map tiles: {error}"))?
 }
 
 #[tauri::command]
