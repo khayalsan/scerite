@@ -17,6 +17,7 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 ### Changed
 
+- Map terrain now uses deeper Minecraft-style foliage greens and stronger height shading, bringing forest colors closer to an in-game map. Previously cached terrain tiles are regenerated with the new palette.
 - Cached map tiles now load together from the local device before the remote map refresh begins, so returning to a map no longer waits for the remote batch pacing to reveal cached terrain.
 - Saved servers now show their Minecraft multiplayer icons in the Servers list when available.
 - Saved terrain on the Map tab now uses brighter Minecraft-style colors, hillside shading, and water depth shading.

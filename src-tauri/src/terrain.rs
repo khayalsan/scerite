@@ -264,7 +264,13 @@ fn decode_pixels(data: &[u8], resolution: u8) -> Result<Option<Vec<u8>>, String>
                     let depth = water_depth(&sections, x, z, height);
                     (1.05 - depth as f32 * 0.055).clamp(0.55, 1.05)
                 } else {
-                    (0.94 + slope as f32 * 0.10).clamp(0.64, 1.18)
+                    match slope {
+                        2.. => 1.0,
+                        1 => 0.95,
+                        0 => 0.86,
+                        -1 => 0.71,
+                        _ => 0.65,
+                    }
                 };
                 let at = (tz * resolution + tx) * 4;
                 for channel in 0..3 {
@@ -401,12 +407,12 @@ fn block_color(block: &str) -> [u8; 3] {
     } else if name.contains("sand") || name.contains("sandstone") {
         [237, 218, 153]
     } else if name.contains("leaves") || name.contains("leaf") || name.contains("vine") {
-        [65, 139, 52]
+        [0, 124, 0]
     } else if name.contains("grass")
         || name.contains("moss")
         || name.contains("fern")
     {
-        [123, 176, 71]
+        [127, 178, 56]
     } else if name.contains("log") || name.contains("wood") || name.contains("plank") {
         [156, 121, 75]
     } else if name.contains("dirt") || name.contains("mud") || name.contains("podzol") {

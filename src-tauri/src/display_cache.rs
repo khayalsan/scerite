@@ -71,7 +71,7 @@ fn tile_dir(profile: &Path, dimension: &str, resolution: u8) -> Result<PathBuf, 
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
     Ok(profile
-        .join("terrain")
+        .join("terrain-v2")
         .join(encoded)
         .join(resolution.to_string()))
 }
