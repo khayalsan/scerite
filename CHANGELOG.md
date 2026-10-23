@@ -12,7 +12,6 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 - The Worlds tab shows saved seeds and gamerules, including the newer Minecraft gamerule formats. You can change gamerules on a running server, back up or download a stopped world as a ZIP, upload a replacement ZIP, and generate the active world again with new settings while preserving the previous world. Backups and preserved world folders can be restored individually or by choosing the latest backup for a world.
 - Each server can automatically back up its active world when Scerite observes it stop. You can choose how many automatic backups to keep (default 3); older automatic ZIPs are removed after a new one is saved. Manual ZIPs remain until you delete them.
 - Server settings now let you choose how much RAM Java can use when starting a server.
-- The Server tab shows recent TPS for Paper-compatible servers when their console reports it.
 
 ### Changed
 
@@ -24,8 +23,6 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 ### Fixed
 
-- The Server tab keeps a moving console cursor while reading TPS, so remote pane updates do not hide a valid response.
-- The Server tab now recognizes wrapped TPS console responses and remote console redraws. It also checks whether a non-Paper server provides a TPS command before deciding that no reading is available.
 - Long world settings and file lists can now scroll within the Worlds tab.
 
 ## [0.4.1] - 2026-10-20
