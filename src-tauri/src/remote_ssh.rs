@@ -1090,6 +1090,34 @@ pub async fn upload_remote_server_icon(
     }).await
 }
 
+#[tauri::command]
+pub async fn read_remote_server_icon(
+    profile_id: Uuid,
+    profiles: State<'_, ServerProfileStore>,
+    remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<Option<Vec<u8>>, String> {
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    run_remote(profile, environment, Arc::clone(remote_sessions.inner()), move |session, profile| {
+        let sftp = session.sftp().map_err(|error| format!("Could not open SFTP: {error}"))?;
+        let root = remote_root_with_sftp(&sftp, configured_remote_root(profile)?)?;
+        let path = format!("{root}/server-icon.png");
+        let metadata = match sftp.lstat_optional(Path::new(&path)) {
+            Ok(metadata) => metadata,
+            Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile => return Ok(None),
+            Err(error) => return Err(format!("Could not inspect the remote server icon: {error}")),
+        };
+        if metadata.file_type() != FileType::File || metadata.size.unwrap_or(MAX_FILE_BYTES + 1) > MAX_FILE_BYTES {
+            return Ok(None);
+        }
+        let bytes = sftp.read_file(Path::new(&path))
+            .map_err(|error| format!("Could not read the remote server icon: {error}"))?;
+        if validate_server_icon(&bytes).is_err() {
+            return Ok(None);
+        }
+        Ok(Some(bytes))
+    }).await
+}
+
 async fn run_remote<T, F>(
     profile: ServerProfile,
     environment: ServerEnvironment,

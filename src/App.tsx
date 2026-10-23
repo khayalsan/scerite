@@ -3,7 +3,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type { FormEvent } from "react";
-import { ArrowLeft, Download, FileKey, FolderOpen, Globe2, HardDrive, MapPinned, Network, Package, Palette, Plus, Puzzle, ScrollText, Server, Settings, SlidersHorizontal, Terminal, Users, X } from "lucide-react";
+import { ArrowLeft, Download, FileKey, FolderOpen, Globe2, MapPinned, Package, Palette, Plus, Puzzle, ScrollText, Server, Settings, SlidersHorizontal, Terminal, Users, X } from "lucide-react";
 import { appSettings, localInstallRoot, serverEnvironments, serverProfiles } from "./lib/serverProfiles";
 import type { ServerEnvironment, ServerProfile, ServerTarget } from "./lib/serverProfiles";
 import { serverSessions } from "./lib/serverSessions";
@@ -15,6 +15,7 @@ import { ServerPropertiesPanel } from "./components/ServerPropertiesPanel";
 import { ServerInstallPanel } from "./components/ServerInstallPanel";
 import { PackagesPanel } from "./components/PackagesPanel";
 import { ServerOverviewPanel } from "./components/ServerOverviewPanel";
+import { ServerListIcon } from "./components/ServerListIcon";
 import { LogsPanel } from "./components/LogsPanel";
 import { SearchField } from "./components/SearchField";
 import { PlayersPanel } from "./components/PlayersPanel";
@@ -1482,9 +1483,7 @@ function App() {
                 <article className={`server-row${selectedProfileId === profile.id ? " server-row-detail" : ""}`} key={profile.id} hidden={!!selectedProfileId && selectedProfileId !== profile.id}>
                   {!isDetailPage && (
                     <Link className="server-row-open" to={`/servers/${profile.id}`} onClick={() => setActiveServerTab("server")} aria-label={`Open ${profile.name}`}>
-                      <span className={isLocal ? "server-icon server-icon-local" : "server-icon server-icon-remote"} aria-hidden="true">
-                        {isLocal ? <HardDrive size={18} /> : <Network size={18} />}
-                      </span>
+                      <ServerListIcon profileId={profile.id} remote={!isLocal} />
                       <span className="server-main">
                         <span className="server-name-line">
                           <h3>{profile.name}</h3>
