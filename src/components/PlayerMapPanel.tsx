@@ -248,8 +248,7 @@ export function PlayerMapPanel({ profileId, remote, running }: { profileId: stri
           && (location.dimension === null || typeof location.dimension === "string"))));
         if (snapshot.view && Number.isFinite(snapshot.view.centerX) && Number.isFinite(snapshot.view.centerZ)
           && Number.isFinite(snapshot.view.unitsPerPixel) && snapshot.view.unitsPerPixel >= minimumZoom
-          && snapshot.view.unitsPerPixel <= maximumZoom && typeof snapshot.view.dimension === "string") {
-          setDimension(snapshot.view.dimension);
+          && snapshot.view.unitsPerPixel <= maximumZoom && snapshot.view.dimension === "minecraft:overworld") {
           setView(snapshot.view);
         }
       }).catch(() => {}).finally(() => { if (active) { setCacheReady(true); void refresh(); } });
@@ -284,7 +283,7 @@ export function PlayerMapPanel({ profileId, remote, running }: { profileId: stri
       position: location.position, dimension: location.dimension ?? unknownDimension, online: true, live: true });
   }
   const dimensionOrder = ["minecraft:overworld", "minecraft:the_nether", "minecraft:the_end"];
-  const dimensions = [...new Set(points.map((point) => point.dimension))].sort((left, right) =>
+  const dimensions = [...new Set(["minecraft:overworld", ...points.map((point) => point.dimension)])].sort((left, right) =>
     (dimensionOrder.indexOf(left) < 0 ? left === unknownDimension ? 4 : 3 : dimensionOrder.indexOf(left)) -
     (dimensionOrder.indexOf(right) < 0 ? right === unknownDimension ? 4 : 3 : dimensionOrder.indexOf(right)));
   const activeDimension = dimensions.includes(dimension) ? dimension : dimensions[0] ?? dimension;
@@ -461,7 +460,7 @@ export function PlayerMapPanel({ profileId, remote, running }: { profileId: stri
     {savedWarning && <p className="notice notice-error" role="status">{savedWarning}</p>}
     {terrainWarning && <p className="notice notice-error" role="status">{terrainWarning}</p>}
     <div className="player-map-dimensions" aria-label="Dimension">
-      {(dimensions.length ? dimensions : ["minecraft:overworld"]).map((item) => <button key={item} type="button" className={item === activeDimension ? "player-map-dimension active" : "player-map-dimension"} onClick={() => { setDimension(item); setSelectedKey(null); }}>{dimensionLabel(item)} <span>{points.filter((point) => point.dimension === item).length}</span></button>)}
+      {dimensions.map((item) => <button key={item} type="button" className={item === activeDimension ? "player-map-dimension active" : "player-map-dimension"} onClick={() => { setDimension(item); setSelectedKey(null); }}>{dimensionLabel(item)} <span>{points.filter((point) => point.dimension === item).length}</span></button>)}
     </div>
     <div className="player-map-layout">
       <div ref={gridRef} className={`player-map-grid${dragging ? " player-map-grid-dragging" : ""}`} role="group" tabIndex={0}

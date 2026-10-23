@@ -28,6 +28,7 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 ### Fixed
 
+- The Map tab now opens on Overworld and keeps it available even when no players are there. A cached Nether view no longer selects Nether when the tab opens.
 - Zooming back into a map keeps previously loaded high-detail terrain instead of briefly showing lower-detail tiles while those chunks reload.
 - Long world settings and file lists can now scroll within the Worlds tab.
 
