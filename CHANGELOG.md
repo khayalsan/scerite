@@ -6,6 +6,7 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 ### Added
 
+- A Map tab plots online players on an interactive, chunk-aligned X/Z grid over lightweight tiles from saved terrain. Terrain detail changes with zoom and refreshes after saves or on demand; ungenerated areas remain blank. Drag, scroll, or use the map controls to move and zoom. Offline players appear at their last saved position with greyed-out heads, grouped by dimension.
 - The server console suggests common commands and recently sent commands while typing. Use the arrow keys to choose a suggestion and Tab to complete it.
 - The Server tab lets you upload an image for the server's Minecraft multiplayer icon; Scerite crops it to a 64×64 PNG.
 - The Worlds tab shows saved seeds and gamerules, including the newer Minecraft gamerule formats. You can change gamerules on a running server, back up or download a stopped world as a ZIP, upload a replacement ZIP, and generate the active world again with new settings while preserving the previous world. Backups and preserved world folders can be restored individually or by choosing the latest backup for a world.
@@ -15,6 +16,7 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 ### Changed
 
+- Saved terrain on the Map tab now uses brighter Minecraft-style colors, hillside shading, and water depth shading.
 - Console suggestions now appear above the fixed command field. Console and Logs output use distinct colors for timestamps, warnings, errors, and chat, with a chat-only switch in both tabs.
 - The server multiplayer icon picker now has a separate Choose image button and shows the selected filename.
 - App settings now open from the bottom-left sidebar button, with shortcuts to saved servers in the sidebar. The Servers page uses the available width, and the theme control blends into its setting row.
@@ -22,6 +24,7 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 ### Fixed
 
+- The Server tab now recognizes wrapped TPS console responses and remote console redraws. It also checks whether a non-Paper server provides a TPS command before deciding that no reading is available.
 - Long world settings and file lists can now scroll within the Worlds tab.
 
 ## [0.4.1] - 2026-10-20

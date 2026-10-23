@@ -14,6 +14,7 @@ mod modrinth;
 mod server_overview;
 mod server_port;
 mod world_management;
+mod terrain;
 
 use server_profiles::{ServerProfileStore, commands};
 use server_sessions::{LocalSessionManager, commands as session_commands};
@@ -90,6 +91,8 @@ pub fn run() {
             server_files::read_local_server_log_start,
             server_logs::read_local_server_log,
             server_players::read_local_player_data,
+            server_players::read_local_player_locations,
+            terrain::read_local_terrain_tiles,
             server_players::read_local_player_roster,
             server_players::read_local_player_usercache,
             server_files::write_local_server_file,
@@ -115,6 +118,8 @@ pub fn run() {
             remote_ssh::read_remote_server_log_start,
             remote_ssh::read_remote_server_log,
             remote_ssh::read_remote_player_data,
+            remote_ssh::read_remote_player_locations,
+            remote_ssh::read_remote_terrain_tiles,
             remote_ssh::read_remote_player_roster,
             remote_ssh::read_remote_player_usercache,
             player_identity_cache::read_player_identity_cache,
