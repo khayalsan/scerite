@@ -20,6 +20,11 @@ const emptyLists: AccessLists = { whitelist: [], operators: [], bannedNames: [],
 
 function errorText(error: unknown) { return error instanceof Error ? error.message : String(error); }
 function label(value: string) { return value.replace(/^minecraft:/, "").replace(/_/g, " "); }
+const statisticCategoryOrder = ["minecraft:custom", "minecraft:dropped", "minecraft:killed", "minecraft:picked_up", "minecraft:used"];
+function categoryLabel(category: string) {
+  const name = label(category);
+  return name.charAt(0).toUpperCase() + name.slice(1);
+}
 function stat(stats: PlayerStatistic[], category: string, key: string) {
   return stats.find((entry) => entry.category === category && entry.key === key)?.value;
 }
@@ -38,6 +43,8 @@ export function PlayersPanel({ profileId, remote, running }: PlayersPanelProps) 
   const [entryInput, setEntryInput] = useState("");
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
+  const [rosterRefreshing, setRosterRefreshing] = useState(true);
+  const [rosterUnavailable, setRosterUnavailable] = useState(false);
   const [onlineLoading, setOnlineLoading] = useState(false);
   const [onlineUnavailable, setOnlineUnavailable] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -49,16 +56,18 @@ export function PlayersPanel({ profileId, remote, running }: PlayersPanelProps) 
   useEffect(() => {
     let active = true;
     setLoading(true);
+    setRosterRefreshing(true);
+    setRosterUnavailable(false);
     setOnlineLoading(false);
     setOnlineUnavailable(false);
     setWarning(null);
-    void loadPlayers(remote, profileId, running, (roster, accessLists) => {
-      if (active) { setPlayers(roster); setLists(accessLists); setLoading(false); setOnlineLoading(running); }
+    void loadPlayers(remote, profileId, running, (roster, accessLists, ready) => {
+      if (active) { setPlayers(roster); setLists(accessLists); setLoading(false); setRosterRefreshing(!ready); setOnlineLoading(running); }
     }).then((result) => {
       if (active) { setPlayers(result.players); setLists(result.lists); setWarning(result.warning); setOnlineUnavailable(result.onlineUnavailable); }
     }).catch((reason: unknown) => {
-      if (active) setWarning(`Could not read the player list: ${errorText(reason)}`);
-    }).finally(() => { if (active) { setLoading(false); setOnlineLoading(false); } });
+      if (active) { setRosterUnavailable(true); setOnlineUnavailable(true); setWarning(`Could not refresh the player list: ${errorText(reason)}`); }
+    }).finally(() => { if (active) { setLoading(false); setRosterRefreshing(false); setOnlineLoading(false); } });
     return () => { active = false; };
   }, [profileId, remote, running, revision]);
 
@@ -109,8 +118,14 @@ export function PlayersPanel({ profileId, remote, running }: PlayersPanelProps) 
     void send(`${setting[action]} ${entry}`, action === "add" && (view === "bannedNames" || view === "bannedIps"));
   }
 
-  const actionDisabled = !running || busy;
+  const actionDisabled = !running || busy || rosterRefreshing || rosterUnavailable;
   const summary = detail?.statistics ?? [];
+  const statisticGroups = [...new Set(summary.map((item) => item.category))].sort((left, right) => {
+    const leftIndex = statisticCategoryOrder.indexOf(left);
+    const rightIndex = statisticCategoryOrder.indexOf(right);
+    return (leftIndex < 0 ? statisticCategoryOrder.length : leftIndex) - (rightIndex < 0 ? statisticCategoryOrder.length : rightIndex)
+      || left.localeCompare(right);
+  });
   const management = view === "players" ? null : listSettings[view];
   const entries = view === "players" ? [] : lists[view];
   const normalizedSearch = search.trim().toLowerCase();
@@ -120,14 +135,14 @@ export function PlayersPanel({ profileId, remote, running }: PlayersPanelProps) 
   return <div className="players-panel">
     <header className="players-header">
       <div><h2>Players</h2><p>Known players from server files. Online status is checked with the server's list command when this page loads or refreshes.</p></div>
-      <button className="button button-quiet" type="button" onClick={() => setRevision((value) => value + 1)} disabled={loading || onlineLoading}><RefreshCw size={14} aria-hidden="true" /> Refresh</button>
+      <button className="button button-quiet" type="button" onClick={() => setRevision((value) => value + 1)} disabled={loading || rosterRefreshing || onlineLoading}><RefreshCw size={14} aria-hidden="true" /> Refresh</button>
     </header>
     {warning && <p className="notice notice-error" role="status">{warning}</p>}
     {message && <p className="notice" role="status">{message}</p>}
     {management ? <>
       <button className="button button-quiet players-back" type="button" onClick={() => { setView("players"); setSearch(""); setMessage(null); }}><ArrowLeft size={16} /> All players</button>
       <section className="player-management" aria-label={management.title}>
-        <div className="player-roster-heading"><h3>{management.title}</h3><span>{entries.length} entries</span></div>
+        <div className="player-roster-heading"><h3>{management.title}</h3><span>{rosterRefreshing ? "Refreshing…" : rosterUnavailable ? "Unavailable" : `${entries.length} entries`}</span></div>
         <form className="player-management-add" onSubmit={(event) => { event.preventDefault(); changeEntry("add", entryInput); }}>
           <label htmlFor="player-management-entry">{management.byIp ? "IP address" : "Player name"}</label>
           <div><input id="player-management-entry" value={entryInput} onChange={(event) => setEntryInput(event.currentTarget.value)} placeholder={management.byIp ? "IP address" : "Player name"} maxLength={management.byIp ? 39 : 16} />
@@ -135,7 +150,7 @@ export function PlayersPanel({ profileId, remote, running }: PlayersPanelProps) 
         </form>
         {!running && <p className="players-caption">Start the server to add or remove entries.</p>}
         <SearchField id={`players-${view}-search`} label={`Search ${management.title.toLowerCase()}`} placeholder={management.byIp ? "IP address or reason" : "Player name or reason"} value={search} onChange={setSearch} />
-        {loading ? <p className="state-message">Loading {management.title.toLowerCase()}…</p> : visibleEntries.length ?
+        {rosterRefreshing || rosterUnavailable ? <p className="state-message">{rosterUnavailable ? "Could not refresh this list." : `Refreshing ${management.title.toLowerCase()}…`}</p> : visibleEntries.length ?
           <div className="player-access-list">{visibleEntries.map((entry, index) => <div key={`${entry.value}-${index}`}>
             <span><strong>{entry.value}</strong>{entry.reason && <small>{entry.reason}</small>}</span>
             <button className="button button-quiet" type="button" disabled={actionDisabled || !(management.byIp ? validIpAddress(entry.value) : validPlayerName(entry.value))} onClick={() => changeEntry("remove", entry.value)}>Remove</button>
@@ -146,7 +161,7 @@ export function PlayersPanel({ profileId, remote, running }: PlayersPanelProps) 
       <section className="player-detail" aria-label={`${selected.name ?? selected.uuid} details`}>
         <div className="player-identity">
           {selected.name || selected.uuid ? <img className="player-head" src={`https://mc-heads.net/avatar/${encodeURIComponent(selected.name ?? selected.uuid ?? "")}/80`} alt="" onError={(event) => { event.currentTarget.style.display = "none"; }} /> : <UserRound size={48} aria-hidden="true" />}
-          <div><h3>{selected.name ?? "Unknown player"}</h3><span className="player-uuid">{selected.uuid ?? "UUID unavailable"}</span><div className="player-badges"><span>{onlineLoading ? "Checking online status…" : onlineUnavailable ? "Online status unavailable" : selected.online ? "Online (last checked)" : "Offline / not listed"}</span><span>{selected.whitelisted ? "Whitelisted" : "Not whitelisted"}</span><span>{selected.operator ? "Operator" : "Not operator"}</span><span>{selected.banned ? "Banned" : "Not banned"}</span></div></div>
+          <div><h3>{selected.name ?? "Unknown player"}</h3><span className="player-uuid">{selected.uuid ?? "UUID unavailable"}</span><div className="player-badges"><span>{onlineLoading ? "Checking online status…" : onlineUnavailable ? "Online status unavailable" : selected.online ? "Online (last checked)" : "Offline / not listed"}</span>{rosterRefreshing || rosterUnavailable ? <span>{rosterUnavailable ? "Access status unavailable" : "Checking access…"}</span> : <><span>{selected.whitelisted ? "Whitelisted" : "Not whitelisted"}</span><span>{selected.operator ? "Operator" : "Not operator"}</span><span>{selected.banned ? "Banned" : "Not banned"}</span></>}</div></div>
         </div>
         {detailLoading ? <p className="state-message">Reading saved player data…</p> : <>
           <p className="players-caption">Game details are from the last saved player file and may lag behind a running server.</p>
@@ -166,21 +181,24 @@ export function PlayersPanel({ profileId, remote, running }: PlayersPanelProps) 
             <div><span>Player kills</span><strong>{stat(summary, "minecraft:custom", "minecraft:player_kills") ?? "—"}</strong></div>
             <div><span>Deaths</span><strong>{stat(summary, "minecraft:custom", "minecraft:deaths") ?? "—"}</strong></div>
           </div>}
-          {summary.length ? <div className="player-stats-list">{summary.map((item) => <div key={`${item.category}/${item.key}`}><span>{label(item.category)} · {label(item.key)}</span><strong>{item.value.toLocaleString()}</strong></div>)}</div> : <p className="state-message">{detail && !detail.hasSavedStatistics ? "No saved statistics yet. Refresh after the server saves this player." : "No saved statistics are available for this player."}</p>}
+          {summary.length ? <div className="player-stat-groups">{statisticGroups.map((category) => <section className="player-stat-group" key={category} aria-label={`${categoryLabel(category)} statistics`}>
+            <h5>{categoryLabel(category)}</h5>
+            <div className="player-stats-list">{summary.filter((item) => item.category === category).map((item) => <div key={item.key}><span>{label(item.key)}</span><strong>{item.value.toLocaleString()}</strong></div>)}</div>
+          </section>)}</div> : <p className="state-message">{detail && !detail.hasSavedStatistics ? "No saved statistics yet. Refresh after the server saves this player." : "No saved statistics are available for this player."}</p>}
         </>}
       </section>
     </> : <>
       <section className="player-actions" aria-label="Player management">
         <h3>Manage access</h3>
         <div className="player-management-links">
-          <button className="button button-secondary" type="button" onClick={() => openList("whitelist")}>Whitelist <span>{lists.whitelist.length}</span></button>
-          <button className="button button-secondary" type="button" onClick={() => openList("operators")}>OPs <span>{lists.operators.length}</span></button>
-          <button className="button button-secondary" type="button" onClick={() => openList("bannedNames")}>Ban by name <span>{lists.bannedNames.length}</span></button>
-          <button className="button button-secondary" type="button" onClick={() => openList("bannedIps")}>Ban by IP <span>{lists.bannedIps.length}</span></button>
+          <button className="button button-secondary" type="button" onClick={() => openList("whitelist")}>Whitelist <span>{rosterRefreshing || rosterUnavailable ? "…" : lists.whitelist.length}</span></button>
+          <button className="button button-secondary" type="button" onClick={() => openList("operators")}>OPs <span>{rosterRefreshing || rosterUnavailable ? "…" : lists.operators.length}</span></button>
+          <button className="button button-secondary" type="button" onClick={() => openList("bannedNames")}>Ban by name <span>{rosterRefreshing || rosterUnavailable ? "…" : lists.bannedNames.length}</span></button>
+          <button className="button button-secondary" type="button" onClick={() => openList("bannedIps")}>Ban by IP <span>{rosterRefreshing || rosterUnavailable ? "…" : lists.bannedIps.length}</span></button>
         </div>
       </section>
       <section className="player-roster" aria-label="Player list">
-        <div className="player-roster-heading"><h3>Known players</h3><span>{onlineLoading ? "Checking online status…" : onlineUnavailable ? "Online status unavailable" : `${players.filter((player) => player.online).length} online at last check`} · {players.length} total</span></div>
+        <div className="player-roster-heading"><h3>Known players</h3><span>{onlineLoading ? "Checking online status…" : onlineUnavailable || rosterUnavailable ? "Online status unavailable" : `${players.filter((player) => player.online).length} online at last check`} · {players.length} {rosterRefreshing || rosterUnavailable ? "cached" : "total"}</span></div>
         <SearchField id="players-roster-search" label="Search players" placeholder="Name or UUID" value={search} onChange={setSearch} />
         {loading ? <p className="state-message">Loading players…</p> : visiblePlayers.length ? <div className="player-list">{visiblePlayers.map((player) => <button type="button" key={player.key} onClick={() => { setSelectedKey(player.key); setMessage(null); }}>
           <span className={`player-presence${player.online ? " player-presence-online" : ""}`} aria-hidden="true" />

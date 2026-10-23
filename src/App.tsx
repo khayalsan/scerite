@@ -3,10 +3,11 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type { FormEvent } from "react";
-import { ArrowLeft, Download, FileKey, FolderOpen, Globe2, HardDrive, Network, Package, Palette, Plus, Puzzle, ScrollText, Server, Settings, SlidersHorizontal, Terminal, Users, X } from "lucide-react";
+import { ArrowLeft, Download, FileKey, FolderOpen, Globe2, MapPinned, Package, Palette, Plus, Puzzle, ScrollText, Server, Settings, SlidersHorizontal, Terminal, Users, X } from "lucide-react";
 import { appSettings, localInstallRoot, serverEnvironments, serverProfiles } from "./lib/serverProfiles";
 import type { ServerEnvironment, ServerProfile, ServerTarget } from "./lib/serverProfiles";
 import { serverSessions } from "./lib/serverSessions";
+import { serverWorlds } from "./lib/serverWorlds";
 import type { LocalServerStatus, RemoteServerStatus } from "./lib/serverSessions";
 import { LocalFilesPanel } from "./components/LocalFilesPanel";
 import { WorldsPanel } from "./components/WorldsPanel";
@@ -14,9 +15,14 @@ import { ServerPropertiesPanel } from "./components/ServerPropertiesPanel";
 import { ServerInstallPanel } from "./components/ServerInstallPanel";
 import { PackagesPanel } from "./components/PackagesPanel";
 import { ServerOverviewPanel } from "./components/ServerOverviewPanel";
+import { ServerListIcon } from "./components/ServerListIcon";
+import { DisplayCacheSettings } from "./components/DisplayCacheSettings";
 import { LogsPanel } from "./components/LogsPanel";
 import { SearchField } from "./components/SearchField";
 import { PlayersPanel } from "./components/PlayersPanel";
+import { PlayerMapPanel } from "./components/PlayerMapPanel";
+import { ConsoleCommandInput } from "./components/ConsoleCommandInput";
+import { ConsoleLogLine, isChatConsoleLine, plainConsoleLine } from "./components/ConsoleLogLine";
 import { serverFiles } from "./lib/serverFiles";
 import { packageSupportForSoftware, packageSupportFromFiles } from "./lib/serverSoftware";
 import type { PackageSupport } from "./lib/serverSoftware";
@@ -30,6 +36,7 @@ type ProfileDraft = {
   directory: string;
   executable: string;
   arguments: string;
+  ramMb: string;
   environmentId: string;
   manualDirectory: boolean;
 };
@@ -65,7 +72,7 @@ function readSavedTheme(): ThemeId {
   }
 }
 
-type ServerTab = "server" | "console" | "players" | "logs" | "files" | "worlds" | "properties" | "mods" | "plugins" | "install" | "settings";
+type ServerTab = "server" | "console" | "players" | "map" | "logs" | "files" | "worlds" | "properties" | "mods" | "plugins" | "install" | "settings";
 
 const emptyDraft: ProfileDraft = {
   name: "",
@@ -73,6 +80,7 @@ const emptyDraft: ProfileDraft = {
   directory: "",
   executable: "",
   arguments: "",
+  ramMb: "",
   environmentId: "",
   manualDirectory: false,
 };
@@ -116,6 +124,22 @@ function parseLaunchArguments(value: string): string[] {
   return launchArguments;
 }
 
+function isJavaExecutable(executable: string): boolean {
+  return /(?:^|[\\/])java(?:\.exe)?$/i.test(executable.trim());
+}
+
+function maximumRam(arguments_: string[]): string {
+  const values = arguments_.flatMap((argument) => {
+    const match = /^-Xmx(\d+)([mMgG])$/.exec(argument);
+    return match ? [Number(match[1]) * (match[2].toLowerCase() === "g" ? 1024 : 1)] : [];
+  });
+  return values.length ? String(values[values.length - 1]) : "";
+}
+
+function withoutMaximumRam(arguments_: string[]): string[] {
+  return arguments_.filter((argument) => !/^-Xmx\d+[mMgG]$/.test(argument));
+}
+
 function serverFolderName(name: string): string {
   return Array.from(name.trim())
     .map((character) => /[\p{L}\p{N}]/u.test(character) ? character.toLowerCase() : "-")
@@ -126,6 +150,10 @@ function serverFolderName(name: string): string {
 
 function targetFor(draft: ProfileDraft, previous?: ServerProfile): ServerTarget {
   const launchArguments = parseLaunchArguments(draft.arguments);
+  if (isJavaExecutable(draft.executable)) {
+    const withoutRam = withoutMaximumRam(launchArguments);
+    launchArguments.splice(0, launchArguments.length, ...(draft.ramMb ? [`-Xmx${draft.ramMb}M`] : []), ...withoutRam);
+  }
   const managedJava = previous?.target.kind === draft.kind &&
     (draft.kind === "local" || previous.target.kind === "remote" && previous.target.environmentId === draft.environmentId)
     ? previous.target.launch.managedJava : undefined;
@@ -155,6 +183,8 @@ function targetFor(draft: ProfileDraft, previous?: ServerProfile): ServerTarget 
 }
 
 function draftFor(profile: ServerProfile): ProfileDraft {
+  const arguments_ = profile.target.launch.arguments;
+  const javaLaunch = isJavaExecutable(profile.target.launch.executable);
   if (profile.target.kind === "remote") {
     return {
       ...emptyDraft,
@@ -164,7 +194,8 @@ function draftFor(profile: ServerProfile): ProfileDraft {
       directory: profile.target.directory,
       manualDirectory: true,
       executable: profile.target.launch.executable,
-      arguments: profile.target.launch.arguments.join("\n"),
+      arguments: (javaLaunch ? withoutMaximumRam(arguments_) : arguments_).join("\n"),
+      ramMb: javaLaunch ? maximumRam(arguments_) : "",
     };
   }
 
@@ -173,7 +204,8 @@ function draftFor(profile: ServerProfile): ProfileDraft {
     name: profile.name,
     directory: profile.target.directory,
     executable: profile.target.launch.executable,
-    arguments: profile.target.launch.arguments.join("\n"),
+    arguments: (javaLaunch ? withoutMaximumRam(arguments_) : arguments_).join("\n"),
+    ramMb: javaLaunch ? maximumRam(arguments_) : "",
   };
 }
 
@@ -185,6 +217,7 @@ function App() {
   const [theme, setTheme] = useState<ThemeId>(readSavedTheme);
   const navigate = useNavigate();
   const { pathname } = useLocation();
+  const isAppSettings = pathname === "/settings";
   const selectedProfileId = pathname.startsWith("/servers/") ? pathname.slice("/servers/".length) : null;
   const [profiles, setProfiles] = useState<ServerProfile[]>([]);
   const [environments, setEnvironments] = useState<ServerEnvironment[]>([]);
@@ -200,6 +233,9 @@ function App() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [sessionError, setSessionError] = useState<string | null>(null);
+  const [autoBackupBusyIds, setAutoBackupBusyIds] = useState<Record<string, boolean>>({});
+  const [backupRevisions, setBackupRevisions] = useState<Record<string, number>>({});
+  const observedServerStates = useRef<Record<string, string>>({});
   const [statuses, setStatuses] = useState<Record<string, LocalServerStatus>>({});
   const [remoteStatuses, setRemoteStatuses] = useState<Record<string, RemoteServerStatus | { state: "unreachable" }>>({});
   const [busySessionId, setBusySessionId] = useState<string | null>(null);
@@ -210,7 +246,7 @@ function App() {
   const [installProfileId, setInstallProfileId] = useState<string | null>(null);
   const [consoleOutput, setConsoleOutput] = useState("");
   const [consoleSearch, setConsoleSearch] = useState("");
-  const [consoleInput, setConsoleInput] = useState("");
+  const [consoleChatOnly, setConsoleChatOnly] = useState(false);
   const consoleCursor = useRef(0);
   const consoleOutputRef = useRef<HTMLDivElement>(null);
   const remoteStatusRouteRef = useRef<string | null>(null);
@@ -461,7 +497,6 @@ function App() {
       setConsoleProfileId(null);
       return;
     }
-    setConsoleInput("");
     setConsoleProfileId(profile.id);
     if (profile.target.kind === "remote" && !connectedRemotes[profile.id]) {
       void refreshRemoteStatus(profile.id).catch((error) => setSessionError(errorText(error)));
@@ -545,6 +580,24 @@ function App() {
   }, [remoteMonitorKey]);
 
   useEffect(() => {
+    for (const profile of profiles) {
+      const remote = profile.target.kind === "remote";
+      const state = remote ? remoteStatuses[profile.id]?.state : statuses[profile.id]?.state;
+      if (!state || state === "unreachable" || state === "unmanaged") continue;
+      const previous = observedServerStates.current[profile.id];
+      observedServerStates.current[profile.id] = state;
+      if (!(["running", "stopping"].includes(previous) && state === "stopped")) continue;
+      setAutoBackupBusyIds((current) => ({ ...current, [profile.id]: true }));
+      void serverWorlds.autoBackup(remote, profile.id)
+        .then((path) => {
+          if (path) setBackupRevisions((current) => ({ ...current, [profile.id]: (current[profile.id] ?? 0) + 1 }));
+        })
+        .catch((error: unknown) => setSessionError(`Automatic world backup failed: ${errorText(error)}`))
+        .finally(() => setAutoBackupBusyIds((current) => ({ ...current, [profile.id]: false })));
+    }
+  }, [profiles, statuses, remoteStatuses]);
+
+  useEffect(() => {
     if (!consoleProfileId) return;
     const profile = profiles.find((item) => item.id === consoleProfileId);
     if (profile?.target.kind === "remote") {
@@ -599,25 +652,25 @@ function App() {
 
   useEffect(() => {
     if (consoleOutputRef.current && !consoleSearch.trim()) consoleOutputRef.current.scrollTop = consoleOutputRef.current.scrollHeight;
-  }, [consoleOutput, consoleSearch]);
+  }, [consoleOutput, consoleSearch, consoleChatOnly]);
 
   useEffect(() => {
     if (consoleOutputRef.current && consoleSearch.trim()) consoleOutputRef.current.scrollTop = 0;
-  }, [consoleSearch]);
+  }, [consoleSearch, consoleChatOnly]);
 
   useEffect(() => { setConsoleSearch(""); }, [consoleProfileId]);
 
-  async function sendConsoleInput(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!consoleProfileId || !consoleInput.trim()) return;
+  async function sendConsoleInput(command: string): Promise<boolean> {
+    if (!consoleProfileId) return false;
     setSessionError(null);
     try {
       const profile = profiles.find((item) => item.id === consoleProfileId);
-      if (profile?.target.kind === "remote") await serverSessions.sendRemoteInput(consoleProfileId, consoleInput.trim());
-      else await serverSessions.sendInput(consoleProfileId, consoleInput.trim());
-      setConsoleInput("");
+      if (profile?.target.kind === "remote") await serverSessions.sendRemoteInput(consoleProfileId, command);
+      else await serverSessions.sendInput(consoleProfileId, command);
+      return true;
     } catch (error) {
       setSessionError(errorText(error));
+      return false;
     }
   }
 
@@ -726,6 +779,24 @@ function App() {
   async function saveProfile(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setFormError(null);
+    if (isJavaExecutable(draft.executable) && parseLaunchArguments(draft.arguments).some((argument) => argument.startsWith("-Xmx"))) {
+      setFormError("Set maximum RAM in the field below and remove -Xmx from launch arguments.");
+      return;
+    }
+    if (isJavaExecutable(draft.executable) && draft.ramMb &&
+        (!/^\d+$/.test(draft.ramMb) || Number(draft.ramMb) < 256 || Number(draft.ramMb) > 1048576)) {
+      setFormError("Choose a maximum RAM amount between 256 and 1048576 MB.");
+      return;
+    }
+    const initialHeaps = parseLaunchArguments(draft.arguments).flatMap((argument) => {
+      const match = /^-Xms(\d+)([mMgG])$/.exec(argument);
+      return match ? [Number(match[1]) * (match[2].toLowerCase() === "g" ? 1024 : 1)] : [];
+    });
+    const initialHeap = initialHeaps[initialHeaps.length - 1];
+    if (isJavaExecutable(draft.executable) && draft.ramMb && initialHeap && Number(draft.ramMb) < initialHeap) {
+      setFormError("Maximum RAM must be at least the -Xms amount in launch arguments.");
+      return;
+    }
     if (draft.kind === "remote" && !draft.environmentId) {
       setFormError("Choose a remote environment.");
       return;
@@ -948,7 +1019,7 @@ function App() {
                       <SelectContent>
                         {environments.map((environment) => (
                           <SelectItem key={environment.id} value={environment.id}>
-                            {environment.name} · {environment.username}@{environment.host}:{environment.port}
+                            {environment.name}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -1000,6 +1071,20 @@ function App() {
                   </label>
                 </>
               )}
+              <label className="field field-wide">
+                <span>Maximum RAM (MB)</span>
+                <input
+                  type="number"
+                  min="256"
+                  max="1048576"
+                  step="1"
+                  value={draft.ramMb}
+                  onChange={(event) => setDraft({ ...draft, ramMb: event.currentTarget.value })}
+                  placeholder="Use Java default"
+                  disabled={!isJavaExecutable(draft.executable)}
+                />
+                <small>Sets Java's maximum heap (-Xmx) on the next start. Leave blank to use Java's default. Custom launch scripts manage their own memory.</small>
+              </label>
             </div>
 
             <div className="form-actions">
@@ -1031,7 +1116,10 @@ function App() {
   }
 
   const normalizedConsoleSearch = consoleSearch.trim().toLowerCase();
-  const matchingConsoleLines = normalizedConsoleSearch ? consoleOutput.split(/\r?\n/).filter((line) => line.toLowerCase().includes(normalizedConsoleSearch)) : [];
+  const visibleConsoleLines = (consoleOutput || "Console output will appear here.")
+    .split(/\r?\n/)
+    .filter((line) => !consoleChatOnly || isChatConsoleLine(line))
+    .filter((line) => !normalizedConsoleSearch || plainConsoleLine(line).toLowerCase().includes(normalizedConsoleSearch));
 
   return (
     <main className={`app-shell${selectedProfile ? " server-detail-shell" : ""}`}>
@@ -1045,7 +1133,7 @@ function App() {
         const remoteStatus = !isLocal ? remoteStatuses[selectedProfile.id] : undefined;
         const state = status?.state ?? "checking";
         const remoteState = remoteStatus?.state;
-        const isBusy = busySessionId === selectedProfile.id;
+        const isBusy = busySessionId === selectedProfile.id || !!autoBackupBusyIds[selectedProfile.id];
         const isConnected = !!connectedRemotes[selectedProfile.id];
         const statusLabel = isLocal
           ? status ? state : "Checking status…"
@@ -1074,7 +1162,7 @@ function App() {
               <p>{selectedProfile.target.kind === "local"
                 ? selectedProfile.target.directory
                 : environment
-                  ? `${environment.name} · ${environment.username}@${environment.host}:${environment.port}`
+                  ? environment.name
                   : "Remote environment unavailable"}</p>
             </div>
             <section className="server-status-card" aria-label="Server status">
@@ -1102,6 +1190,9 @@ function App() {
               </button>
               <button className={`server-tab${activeServerTab === "players" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "players" ? "page" : undefined} onClick={() => setActiveServerTab("players")}>
                 <Users size={16} aria-hidden="true" /> Players
+              </button>
+              <button className={`server-tab${activeServerTab === "map" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "map" ? "page" : undefined} onClick={() => setActiveServerTab("map")}>
+                <MapPinned size={16} aria-hidden="true" /> Map
               </button>
               <button className={`server-tab${activeServerTab === "logs" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "logs" ? "page" : undefined} onClick={() => setActiveServerTab("logs")}>
                 <ScrollText size={16} aria-hidden="true" /> Logs
@@ -1134,6 +1225,9 @@ function App() {
                 <Settings size={16} aria-hidden="true" /> Settings
               </button>
             </nav>
+            <Link className="sidebar-settings-link server-page-app-settings" to="/settings" onClick={closeForm}>
+              <Settings size={17} aria-hidden="true" /> <span>App settings</span>
+            </Link>
           </aside>
         );
       })() : (
@@ -1143,15 +1237,23 @@ function App() {
             <span>scerite</span>
           </Link>
           <nav className="primary-nav">
-            <Link className="nav-link nav-link-active" to="/" aria-current="page">
+            <Link className={`nav-link${!isAppSettings ? " nav-link-active" : ""}`} to="/" aria-current={!isAppSettings ? "page" : undefined}>
               <span className="nav-indicator" aria-hidden="true" />
+              <Server className="sidebar-servers-icon" size={17} aria-hidden="true" />
               Servers
               <span className="nav-count">{profiles.length}</span>
             </Link>
+            {isAppSettings && profiles.length > 0 && <div className="sidebar-server-shortcuts" aria-label="Saved server shortcuts">
+              <span className="sidebar-server-shortcuts-title">Saved servers</span>
+              {profiles.map((profile) => <Link className="sidebar-server-link" to={`/servers/${profile.id}`} key={profile.id} title={profile.name} aria-label={`Open ${profile.name}`}>
+                <Server size={16} aria-hidden="true" /><span>{profile.name}</span>
+              </Link>)}
+            </div>}
           </nav>
           <div className="sidebar-footer">
-            <span className="connection-dot" aria-hidden="true" />
-            <span>Desktop app</span>
+            <Link className={`sidebar-settings-link${isAppSettings ? " sidebar-settings-link-active" : ""}`} to="/settings" aria-current={isAppSettings ? "page" : undefined} onClick={closeForm}>
+              <Settings size={17} aria-hidden="true" /> <span>App settings</span>
+            </Link>
           </div>
         </aside>
       )}
@@ -1162,34 +1264,12 @@ function App() {
         aria-labelledby={!selectedProfileId ? "page-title" : undefined}
         aria-label={selectedProfileId ? `${selectedProfile?.name ?? "Server"} workspace` : undefined}
       >
-        {!selectedProfileId && <header className="page-header">
+        {!selectedProfileId && !isAppSettings && <header className="page-header">
           <div>
             <h1 id="page-title">Servers</h1>
             <p>Manage local servers and group remote servers by environment.</p>
           </div>
           <div className="page-actions">
-            <label className="theme-picker">
-              <Palette size={16} aria-hidden="true" />
-              <span>Theme</span>
-              <Select
-                value={theme}
-                onValueChange={(value) => {
-                  const selectedTheme = themes.find((option) => option.id === value);
-                  if (selectedTheme) setTheme(selectedTheme.id);
-                }}
-              >
-                <SelectTrigger aria-label="Color theme" className="theme-select-trigger">
-                  <SelectValue>
-                    {(selected) => themes.find((option) => option.id === selected)?.label ?? "Violet Night"}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  {themes.map((option) => (
-                    <SelectItem key={option.id} value={option.id}>{option.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </label>
             {!isEnvironmentFormOpen && (
               <button className="button button-secondary" onClick={() => openNewEnvironment()}>
                 <Plus size={16} aria-hidden="true" /> Add environment
@@ -1203,13 +1283,31 @@ function App() {
           </div>
         </header>}
 
-        {!selectedProfileId && isEnvironmentFormOpen && renderEnvironmentForm()}
-        {!selectedProfileId && isFormOpen && !isEnvironmentFormOpen && renderProfileForm()}
+        {!selectedProfileId && !isAppSettings && isEnvironmentFormOpen && renderEnvironmentForm()}
+        {!selectedProfileId && !isAppSettings && isFormOpen && !isEnvironmentFormOpen && renderProfileForm()}
 
-        {!selectedProfileId && (
+        {isAppSettings && <header className="page-header"><div><h1 id="page-title">App settings</h1><p>Preferences for this app and local server files.</p></div></header>}
+
+        {isAppSettings && (
           <section className="app-settings-section" aria-labelledby="app-settings-title">
             <div className="environment-section-heading">
-              <h2 id="app-settings-title">App settings</h2>
+              <h2 id="app-settings-title">Preferences</h2>
+            </div>
+            <div className="app-setting-row app-theme-row">
+              <span className="app-setting-copy"><strong>Theme</strong><small>Choose the app's appearance.</small></span>
+              <label className="theme-picker">
+                <Palette size={16} aria-hidden="true" />
+                <span className="sr-only">Theme</span>
+                <Select value={theme} onValueChange={(value) => {
+                  const selectedTheme = themes.find((option) => option.id === value);
+                  if (selectedTheme) setTheme(selectedTheme.id);
+                }}>
+                  <SelectTrigger aria-label="Color theme" className="theme-select-trigger">
+                    <SelectValue>{(selected) => themes.find((option) => option.id === selected)?.label ?? "Violet Night"}</SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>{themes.map((option) => <SelectItem key={option.id} value={option.id}>{option.label}</SelectItem>)}</SelectContent>
+                </Select>
+              </label>
             </div>
             <label className="app-setting-row">
               <span className="app-setting-copy">
@@ -1237,7 +1335,7 @@ function App() {
           </section>
         )}
 
-        {!selectedProfileId && (
+        {isAppSettings && (
           <section className="local-root-section" aria-labelledby="local-root-title">
             <div className="environment-section-heading">
               <h2 id="local-root-title">This computer</h2>
@@ -1259,7 +1357,9 @@ function App() {
           </section>
         )}
 
-        {!selectedProfileId && environments.length > 0 && (
+        {isAppSettings && <DisplayCacheSettings />}
+
+        {!selectedProfileId && !isAppSettings && environments.length > 0 && (
           <section className="environment-section" aria-label="Remote environments">
             <div className="environment-section-heading">
               <h2>Remote environments</h2>
@@ -1274,7 +1374,6 @@ function App() {
                   <article className={`environment-card${isSelected ? " environment-card-selected" : ""}`} key={environment.id}>
                     <button className="environment-card-main" type="button" onClick={() => setEnvironmentFilterId(isSelected ? null : environment.id)}>
                       <span className="environment-card-title">{environment.name}</span>
-                      <span className="environment-card-address">{environment.username}@{environment.host}:{environment.port}</span>
                       <span className="environment-card-address">{environment.rootDirectory || "Set a Minecraft root to install versions"}</span>
                       <span className="environment-card-count">{serverCount} {serverCount === 1 ? "server" : "servers"}</span>
                     </button>
@@ -1297,7 +1396,7 @@ function App() {
           </section>
         )}
 
-        {loadError && profiles.length > 0 && (
+        {!isAppSettings && loadError && profiles.length > 0 && (
           <div className="notice notice-error" role="alert">
             <div>
               <strong>Could not refresh saved servers.</strong>
@@ -1307,7 +1406,7 @@ function App() {
           </div>
         )}
 
-        {actionError && (
+        {!isAppSettings && actionError && (
           <div className="notice notice-error" role="alert">
             <div>
               <strong>Could not remove the saved profile.</strong>
@@ -1317,19 +1416,19 @@ function App() {
           </div>
         )}
 
-        {sessionError && (
+        {!isAppSettings && sessionError && (
           <div className="notice notice-error" role="alert">
             <div><strong>Could not complete the server action.</strong><span>{sessionError}</span></div>
             <button className="button button-quiet" onClick={() => setSessionError(null)}>Dismiss</button>
           </div>
         )}
 
-        {!selectedProfileId && <div className="list-heading">
+        {!selectedProfileId && !isAppSettings && <div className="list-heading">
           <h2>{filteredEnvironment ? `${filteredEnvironment.name} servers` : "Saved servers"}</h2>
           {!isLoading && <span>{visibleProfiles.length} {visibleProfiles.length === 1 ? "server" : "servers"}</span>}
         </div>}
 
-        {isLoading ? (
+        {!isAppSettings && (isLoading ? (
           <p className="state-message" role="status">Loading saved servers…</p>
         ) : loadError && profiles.length === 0 ? (
           <div className="empty-state">
@@ -1380,15 +1479,13 @@ function App() {
                   ? "SSH reachable · tmux required"
                   : remoteState ? `SSH reachable · ${remoteState}` : "SSH reachable";
               const remoteStateTone = remoteState === "running" ? "running" : remoteState === "stopped" && remoteStatus?.tmuxAvailable ? "stopped" : "stopping";
-              const isBusy = busySessionId === profile.id;
+              const isBusy = busySessionId === profile.id || !!autoBackupBusyIds[profile.id];
               const isDetailPage = selectedProfileId === profile.id;
               return (
                 <article className={`server-row${selectedProfileId === profile.id ? " server-row-detail" : ""}`} key={profile.id} hidden={!!selectedProfileId && selectedProfileId !== profile.id}>
                   {!isDetailPage && (
                     <Link className="server-row-open" to={`/servers/${profile.id}`} onClick={() => setActiveServerTab("server")} aria-label={`Open ${profile.name}`}>
-                      <span className={isLocal ? "server-icon server-icon-local" : "server-icon server-icon-remote"} aria-hidden="true">
-                        {isLocal ? <HardDrive size={18} /> : <Network size={18} />}
-                      </span>
+                      <ServerListIcon profileId={profile.id} remote={!isLocal} />
                       <span className="server-main">
                         <span className="server-name-line">
                           <h3>{profile.name}</h3>
@@ -1413,17 +1510,16 @@ function App() {
                             <section className="console-panel" aria-label={`${profile.name} console`}>
                               <div className="console-toolbar">
                                 <strong>Live console</strong>
-                                <button className="button button-quiet" type="button" onClick={() => toggleConsole(profile)}>Disconnect</button>
+                                <div className="console-toolbar-actions">
+                                  <label className="console-chat-toggle">Chat only <span className="property-switch"><input type="checkbox" role="switch" checked={consoleChatOnly} onChange={(event) => setConsoleChatOnly(event.currentTarget.checked)} /><span aria-hidden="true" /></span></label>
+                                  <button className="button button-quiet" type="button" onClick={() => toggleConsole(profile)}>Disconnect</button>
+                                </div>
                               </div>
-                              <div className="console-search"><SearchField id="console-search" label="Search console output" placeholder="Find matching lines" value={consoleSearch} onChange={setConsoleSearch} />{normalizedConsoleSearch && <small>{matchingConsoleLines.length} matching lines</small>}</div>
+                              <div className="console-search"><SearchField id="console-search" label="Search console output" placeholder="Find matching lines" value={consoleSearch} onChange={setConsoleSearch} />{normalizedConsoleSearch && <small>{visibleConsoleLines.length} matching lines</small>}</div>
                               <div className="console-output" ref={consoleOutputRef} role="log" aria-live="polite">
-                                <pre>{normalizedConsoleSearch ? matchingConsoleLines.join("\n") || "No matching console lines." : consoleOutput || "Console output will appear here."}</pre>
+                                <pre>{visibleConsoleLines.length ? visibleConsoleLines.map((line, index) => <ConsoleLogLine key={index} line={line} trailingNewline={index < visibleConsoleLines.length - 1} />) : consoleChatOnly ? "No chat messages found." : "No matching console lines."}</pre>
                               </div>
-                              <form className="console-input-row" onSubmit={(event) => void sendConsoleInput(event)}>
-                                <span aria-hidden="true">&gt;</span>
-                                <input aria-label="Console command" value={consoleInput} onChange={(event) => setConsoleInput(event.currentTarget.value)} placeholder="Enter a server command" disabled={!serverRunning || isBusy} />
-                                <button className="button button-primary" type="submit" disabled={!serverRunning || isBusy || !consoleInput.trim()}>Send</button>
-                              </form>
+                              <ConsoleCommandInput key={profile.id} disabled={!serverRunning || isBusy} onSend={sendConsoleInput} />
                             </section>
                           ) : (
                             <div className="server-tab-empty">
@@ -1435,6 +1531,9 @@ function App() {
                         </section>
                         <section className="server-tab-panel" hidden={activeServerTab !== "players"} aria-label="Server players">
                           {activeServerTab === "players" && <PlayersPanel key={profile.id} profileId={profile.id} remote={!isLocal} running={serverRunning} />}
+                        </section>
+                        <section className="server-tab-panel" hidden={activeServerTab !== "map"} aria-label="Server map">
+                          {activeServerTab === "map" && <PlayerMapPanel key={profile.id} profileId={profile.id} remote={!isLocal} running={serverRunning} />}
                         </section>
                         <section className="server-tab-panel" hidden={activeServerTab !== "logs"} aria-label="Server logs">
                           {activeServerTab === "logs" && <LogsPanel key={profile.id} profileId={profile.id} remote={!isLocal} running={serverRunning} />}
@@ -1451,7 +1550,7 @@ function App() {
                           )}
                         </section>
                         <section className="server-tab-panel" hidden={activeServerTab !== "worlds"} aria-label="Server worlds">
-                          {activeServerTab === "worlds" && <WorldsPanel key={profile.id} profileId={profile.id} remote={!isLocal} />}
+                          {activeServerTab === "worlds" && <WorldsPanel key={profile.id} profileId={profile.id} remote={!isLocal} running={serverRunning} canEdit={!autoBackupBusyIds[profile.id] && (isLocal ? state === "stopped" : remoteState === "stopped" && !!remoteStatus?.tmuxAvailable)} backupRevision={backupRevisions[profile.id] ?? 0} />}
                         </section>
                         {packageSupport?.mods && <section className="server-tab-panel" hidden={activeServerTab !== "mods"} aria-label="Server mods">
                           {activeServerTab === "mods" && <PackagesPanel key={`${profile.id}-mods`} kind="mod" software={profile.installedSoftware} installedVersion={profile.installedVersion} profileId={profile.id} remote={!isLocal} canInstall={isLocal ? state === "stopped" : remoteState === "stopped"} />}
@@ -1510,7 +1609,7 @@ function App() {
               );
             })}
           </div>
-        )}
+        ))}
       </section>
     </main>
   );

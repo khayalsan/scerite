@@ -14,6 +14,57 @@ use crate::server_sessions::{LocalServerState, LocalSessionManager};
 const MAX_FILE_BYTES: u64 = 1024 * 1024;
 const MAX_DIRECTORY_ENTRIES: usize = 1000;
 
+pub(crate) fn validate_server_icon(bytes: &[u8]) -> Result<(), String> {
+    if bytes.len() > MAX_FILE_BYTES as usize || bytes.len() < 33 ||
+        &bytes[..8] != b"\x89PNG\r\n\x1a\n" || &bytes[12..16] != b"IHDR" ||
+        u32::from_be_bytes(bytes[16..20].try_into().unwrap()) != 64 ||
+        u32::from_be_bytes(bytes[20..24].try_into().unwrap()) != 64 {
+        return Err("Choose an image that can be saved as a 64×64 PNG under 1 MB.".into());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn upload_local_server_icon(
+    profile_id: Uuid,
+    bytes: Vec<u8>,
+    profiles: State<'_, ServerProfileStore>,
+    manager: State<'_, LocalSessionManager>,
+) -> Result<(), String> {
+    if !matches!(manager.status(profile_id)?.state, LocalServerState::Stopped) {
+        return Err("Stop the server before changing its multiplayer icon.".into());
+    }
+    validate_server_icon(&bytes)?;
+    let root = local_server_root(profile_id, &profiles)?;
+    let path = resolve_for_write(&root, "server-icon.png")?;
+    fs::write(path, bytes).map_err(|error| format!("Could not save the server icon: {error}"))
+}
+
+#[tauri::command]
+pub fn read_local_server_icon(
+    profile_id: Uuid,
+    profiles: State<'_, ServerProfileStore>,
+) -> Result<Option<Vec<u8>>, String> {
+    let root = local_server_root(profile_id, &profiles)?;
+    let path = root.join("server-icon.png");
+    let metadata = match fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("Could not inspect the server icon: {error}")),
+    };
+    if !metadata.file_type().is_file() || metadata.len() > MAX_FILE_BYTES {
+        return Ok(None);
+    }
+    let mut bytes = Vec::new();
+    fs::File::open(&path)
+        .and_then(|file| file.take(MAX_FILE_BYTES + 1).read_to_end(&mut bytes))
+        .map_err(|error| format!("Could not read the server icon: {error}"))?;
+    if validate_server_icon(&bytes).is_err() {
+        return Ok(None);
+    }
+    Ok(Some(bytes))
+}
+
 #[tauri::command]
 pub fn read_local_server_log_start(
     profile_id: Uuid,

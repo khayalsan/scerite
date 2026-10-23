@@ -26,7 +26,7 @@ function parseListResponse(lines: string[]): { names: string[]; response: string
   return null;
 }
 
-function appendedLines(before: string[], after: string[]): string[] {
+export function appendedLines(before: string[], after: string[]): string[] {
   if (before.length === after.length && before.every((line, index) => line === after[index])) return [];
   for (let trim = 0; trim <= 2; trim++) {
     const stable = before.slice(0, before.length - trim);

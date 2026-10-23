@@ -4,6 +4,30 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 ## [Unreleased]
 
+### Added
+
+- The Mods tab can browse and install compatible Modrinth modpacks into a stopped server. Existing server files are preserved, and the install summary lists conflicting paths that were skipped. Mod search results show Required, Optional, and Server badges, which can also filter results.
+- A Map tab plots online players on an interactive, chunk-aligned X/Z grid over lightweight tiles from saved terrain. Terrain detail changes with zoom and refreshes after saves or on demand; ungenerated areas remain blank. Drag, scroll, or use the map controls to move and zoom. Offline players appear at their last saved position with greyed-out heads, grouped by dimension.
+- Remote maps now show locally cached terrain and the last map view while current tiles and player locations refresh. Recent logs and remote server icons also appear from the local cache before being updated. App settings shows the display cache size and lets you clear it.
+- The server console suggests common commands and recently sent commands while typing. Use the arrow keys to choose a suggestion and Tab to complete it.
+- The Server tab lets you upload an image for the server's Minecraft multiplayer icon; Scerite crops it to a 64×64 PNG.
+- The Worlds tab shows saved seeds and gamerules, including the newer Minecraft gamerule formats. You can change gamerules on a running server, back up or download a stopped world as a ZIP, upload a replacement ZIP, and generate the active world again with new settings while preserving the previous world. Backups and preserved world folders can be restored individually or by choosing the latest backup for a world.
+- Each server can automatically back up its active world when Scerite observes it stop. You can choose how many automatic backups to keep (default 3); older automatic ZIPs are removed after a new one is saved. Manual ZIPs remain until you delete them.
+- Server settings now let you choose how much RAM Java can use when starting a server.
+
+### Changed
+
+- Remote environment cards and server navigation now show environment names without repeating SSH login details.
+- Player statistics are now grouped into separate panels by Minecraft category, including Custom, Dropped, Killed, Picked up, and Used.
+- Saved servers now show their Minecraft multiplayer icons in the Servers list when available.
+- Console and Logs output use distinct colors for timestamps, warnings, errors, and chat, with a chat-only switch in both tabs.
+- App settings now open from the bottom-left sidebar button, with shortcuts to saved servers in the sidebar. The Servers page uses the available width, and the theme control blends into its setting row.
+- The Players tab now shows previously found players right away while it refreshes the full list and their access status.
+
+### Fixed
+
+- Long world settings and file lists can now scroll within the Worlds tab.
+
 ## [0.4.1] - 2026-10-20
 
 ### Fixed

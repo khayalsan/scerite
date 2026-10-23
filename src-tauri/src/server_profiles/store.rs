@@ -1,8 +1,20 @@
 use std::{
+    collections::HashMap,
     fs, io,
     path::{Path, PathBuf},
     sync::{Mutex, MutexGuard},
 };
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoBackupSettings {
+    pub enabled: bool,
+    pub keep: u8,
+}
+
+impl Default for AutoBackupSettings {
+    fn default() -> Self { Self { enabled: false, keep: 3 } }
+}
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -22,6 +34,8 @@ struct ProfileData {
     environments: Vec<ServerEnvironment>,
     #[serde(default)]
     profiles: Vec<ServerProfile>,
+    #[serde(default)]
+    auto_backups: HashMap<Uuid, AutoBackupSettings>,
 }
 
 fn default_auto_accept_eula() -> bool {
@@ -35,6 +49,7 @@ impl Default for ProfileData {
             local_root: None,
             environments: Vec::new(),
             profiles: Vec::new(),
+            auto_backups: HashMap::new(),
         }
     }
 }
@@ -105,6 +120,23 @@ impl ServerProfileStore {
 
     pub fn list(&self) -> Result<Vec<ServerProfile>, String> {
         Ok(self.lock()?.profiles.clone())
+    }
+
+    pub fn auto_backup_settings(&self, id: Uuid) -> Result<AutoBackupSettings, String> {
+        let data = self.lock()?;
+        if !data.profiles.iter().any(|profile| profile.id == id) { return Err("Server profile was not found.".into()); }
+        Ok(data.auto_backups.get(&id).cloned().unwrap_or_default())
+    }
+
+    pub fn set_auto_backup_settings(&self, id: Uuid, settings: AutoBackupSettings) -> Result<AutoBackupSettings, String> {
+        if !(1..=100).contains(&settings.keep) { return Err("Keep between 1 and 100 automatic backups.".into()); }
+        let mut current = self.lock()?;
+        if !current.profiles.iter().any(|profile| profile.id == id) { return Err("Server profile was not found.".into()); }
+        let mut data = current.clone();
+        data.auto_backups.insert(id, settings.clone());
+        self.save(&data)?;
+        *current = data;
+        Ok(settings)
     }
 
     pub fn local_root(&self) -> Result<Option<String>, String> {
@@ -415,6 +447,7 @@ impl ServerProfileStore {
         let mut data = current.clone();
         let original_count = data.profiles.len();
         data.profiles.retain(|profile| profile.id != id);
+        data.auto_backups.remove(&id);
         if data.profiles.len() == original_count {
             return Err("Server profile was not found.".into());
         }
