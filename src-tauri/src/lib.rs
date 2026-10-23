@@ -16,6 +16,7 @@ mod server_overview;
 mod server_port;
 mod world_management;
 mod terrain;
+mod display_cache;
 
 use server_profiles::{ServerProfileStore, commands};
 use server_sessions::{LocalSessionManager, commands as session_commands};
@@ -96,6 +97,16 @@ pub fn run() {
             server_players::read_local_player_data,
             server_players::read_local_player_locations,
             terrain::read_local_terrain_tiles,
+            display_cache::read_cached_terrain_tiles,
+            display_cache::write_cached_terrain_tiles,
+            display_cache::read_cached_map_snapshot,
+            display_cache::write_cached_map_snapshot,
+            display_cache::read_cached_logs,
+            display_cache::write_cached_logs,
+            display_cache::read_cached_server_icon,
+            display_cache::write_cached_server_icon,
+            display_cache::display_cache_size,
+            display_cache::clear_display_cache,
             server_players::read_local_player_roster,
             server_players::read_local_player_usercache,
             server_files::write_local_server_file,

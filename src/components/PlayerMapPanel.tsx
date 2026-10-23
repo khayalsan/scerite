@@ -7,6 +7,7 @@ import { readLivePlayerLocations, readSavedPlayerLocations } from "../lib/player
 import type { LivePlayerLocation } from "../lib/playerLocations";
 import { readTerrainTiles, TerrainTileCache, terrainResolution } from "../lib/terrainTiles";
 import type { TerrainRequest, TileResolution } from "../lib/terrainTiles";
+import { displayCache } from "../lib/displayCache";
 
 type SavedLocation = { position: [number, number, number]; dimension: string | null };
 type MapPoint = {
@@ -95,6 +96,7 @@ export function PlayerMapPanel({ profileId, remote, running }: { profileId: stri
   const [savedWarning, setSavedWarning] = useState<string | null>(null);
   const [revision, setRevision] = useState(0);
   const [view, setView] = useState<MapView | null>(null);
+  const [cacheReady, setCacheReady] = useState(!remote);
   const [gridSize, setGridSize] = useState({ width: 600, height: 420 });
   const [dragging, setDragging] = useState(false);
   const [terrainEpoch, setTerrainEpoch] = useState(0);
@@ -234,9 +236,33 @@ export function PlayerMapPanel({ profileId, remote, running }: { profileId: stri
       }
     }
 
-    void refresh();
+    if (remote) {
+      void displayCache.readMap(profileId).then((snapshot) => {
+        if (!active || !snapshot || !Array.isArray(snapshot.players) || !snapshot.saved || typeof snapshot.saved !== "object") return;
+        setPlayers(snapshot.players.filter((player) => player && typeof player.key === "string"
+          && (player.name === null || typeof player.name === "string")
+          && (player.uuid === null || typeof player.uuid === "string")).map((player) => ({ ...player, online: false })));
+        setSaved(Object.fromEntries(Object.entries(snapshot.saved).filter(([, location]) => location
+          && Array.isArray(location.position) && location.position.length === 3
+          && location.position.every((value) => typeof value === "number" && Number.isFinite(value))
+          && (location.dimension === null || typeof location.dimension === "string"))));
+        if (snapshot.view && Number.isFinite(snapshot.view.centerX) && Number.isFinite(snapshot.view.centerZ)
+          && Number.isFinite(snapshot.view.unitsPerPixel) && snapshot.view.unitsPerPixel >= minimumZoom
+          && snapshot.view.unitsPerPixel <= maximumZoom && snapshot.view.dimension === "minecraft:overworld") {
+          setView(snapshot.view);
+        }
+      }).catch(() => {}).finally(() => { if (active) { setCacheReady(true); void refresh(); } });
+    } else void refresh();
     return () => { active = false; if (timer !== undefined) window.clearTimeout(timer); };
   }, [profileId, remote, running, revision]);
+
+  useEffect(() => {
+    if (!remote || !cacheReady) return;
+    const timer = window.setTimeout(() => {
+      void displayCache.writeMap(profileId, { players: players.map((player) => ({ ...player, online: false })), saved, view: viewRef.current }).catch(() => {});
+    }, 800);
+    return () => window.clearTimeout(timer);
+  }, [remote, cacheReady, profileId, players, saved, view]);
 
   const points: MapPoint[] = [];
   const seenNames = new Set<string>();
@@ -257,7 +283,7 @@ export function PlayerMapPanel({ profileId, remote, running }: { profileId: stri
       position: location.position, dimension: location.dimension ?? unknownDimension, online: true, live: true });
   }
   const dimensionOrder = ["minecraft:overworld", "minecraft:the_nether", "minecraft:the_end"];
-  const dimensions = [...new Set(points.map((point) => point.dimension))].sort((left, right) =>
+  const dimensions = [...new Set(["minecraft:overworld", ...points.map((point) => point.dimension)])].sort((left, right) =>
     (dimensionOrder.indexOf(left) < 0 ? left === unknownDimension ? 4 : 3 : dimensionOrder.indexOf(left)) -
     (dimensionOrder.indexOf(right) < 0 ? right === unknownDimension ? 4 : 3 : dimensionOrder.indexOf(right)));
   const activeDimension = dimensions.includes(dimension) ? dimension : dimensions[0] ?? dimension;
@@ -317,16 +343,33 @@ export function PlayerMapPanel({ profileId, remote, running }: { profileId: stri
         let hadError = false;
         let bytesRead = 0;
         let limited = false;
+        if (remote && !work.force) {
+          const uncached = work.requests.filter((request) => request.knownTimestamp === null);
+          if (uncached.length) {
+            try {
+              const cached = await displayCache.readTiles(profileId, work.dimension, work.resolution, uncached);
+              if (!terrainMountedRef.current || work.generation !== terrainGenerationRef.current) continue;
+              for (const tile of cached) terrainCacheRef.current!.apply(work.dimension, tile);
+              if (cached.length) setTerrainEpoch((epoch) => epoch + 1);
+            } catch { /* A damaged or missing local cache must not prevent the remote read. */ }
+          }
+        }
         for (let offset = 0; offset < work.requests.length && terrainMountedRef.current && work.generation === terrainGenerationRef.current; offset += terrainBatchSize) {
           try {
-            const results = await readTerrainTiles(remote, profileId, work.dimension, work.resolution, work.requests.slice(offset, offset + terrainBatchSize));
+            const batch = work.requests.slice(offset, offset + terrainBatchSize);
+            const fresh = batch.map((request) => ({ ...request,
+              knownTimestamp: work.force ? null : terrainCacheRef.current!.knownTimestamp(work.dimension, request.x, request.z, work.resolution) }));
+            const results = await readTerrainTiles(remote, profileId, work.dimension, work.resolution, fresh);
             if (!terrainMountedRef.current) break;
             for (const result of results) {
               bytesRead += result.readBytes;
               if (result.status === "error") hadError = true;
-              terrainCacheRef.current!.apply(work.dimension, result, work.force);
+              terrainCacheRef.current!.apply(work.dimension, result);
             }
             setTerrainEpoch((epoch) => epoch + 1);
+            if (remote && results.some((tile) => tile.status === "tile")) {
+              void displayCache.writeTiles(profileId, work.dimension, work.resolution, results).catch(() => {});
+            }
             if (bytesRead >= terrainReadBudgetBytes) { limited = true; break; }
             await new Promise((resolve) => window.setTimeout(resolve, 75));
           } catch {
@@ -345,7 +388,7 @@ export function PlayerMapPanel({ profileId, remote, running }: { profileId: stri
   }
 
   useEffect(() => {
-    if (activeDimension === unknownDimension) {
+    if (!cacheReady || activeDimension === unknownDimension) {
       terrainQueueRef.current = null;
       terrainGenerationRef.current++;
       setTerrainWarning(null);
@@ -366,7 +409,7 @@ export function PlayerMapPanel({ profileId, remote, running }: { profileId: stri
       if (requests.length) void drainTerrain();
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [activeDimension, currentView.centerX, currentView.centerZ, currentView.unitsPerPixel, width, height, dragging, terrainTick, terrainRefresh, priorityKey, profileId, remote]);
+  }, [activeDimension, currentView.centerX, currentView.centerZ, currentView.unitsPerPixel, width, height, dragging, terrainTick, terrainRefresh, priorityKey, profileId, remote, cacheReady]);
 
   function zoom(factor: number) {
     setView({ ...currentView, unitsPerPixel: Math.max(minimumZoom, Math.min(maximumZoom, currentView.unitsPerPixel * factor)) });
@@ -417,7 +460,7 @@ export function PlayerMapPanel({ profileId, remote, running }: { profileId: stri
     {savedWarning && <p className="notice notice-error" role="status">{savedWarning}</p>}
     {terrainWarning && <p className="notice notice-error" role="status">{terrainWarning}</p>}
     <div className="player-map-dimensions" aria-label="Dimension">
-      {(dimensions.length ? dimensions : ["minecraft:overworld"]).map((item) => <button key={item} type="button" className={item === activeDimension ? "player-map-dimension active" : "player-map-dimension"} onClick={() => { setDimension(item); setSelectedKey(null); }}>{dimensionLabel(item)} <span>{points.filter((point) => point.dimension === item).length}</span></button>)}
+      {dimensions.map((item) => <button key={item} type="button" className={item === activeDimension ? "player-map-dimension active" : "player-map-dimension"} onClick={() => { setDimension(item); setSelectedKey(null); }}>{dimensionLabel(item)} <span>{points.filter((point) => point.dimension === item).length}</span></button>)}
     </div>
     <div className="player-map-layout">
       <div ref={gridRef} className={`player-map-grid${dragging ? " player-map-grid-dragging" : ""}`} role="group" tabIndex={0}

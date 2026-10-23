@@ -6,6 +6,7 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 ### Added
 
+- Remote maps now show locally cached terrain and the last map view while current tiles and player locations refresh. Recent logs and remote server icons also appear from the local cache before being updated. App settings shows the display cache size and lets you clear it.
 - The Mods tab can browse and install compatible Modrinth modpacks into a stopped server. Existing server files are preserved, and the install summary lists conflicting paths that were skipped. Mod search results show Required, Optional, and Server badges, which can also filter results.
 - A Map tab plots online players on an interactive, chunk-aligned X/Z grid over lightweight tiles from saved terrain. Terrain detail changes with zoom and refreshes after saves or on demand; ungenerated areas remain blank. Drag, scroll, or use the map controls to move and zoom. Offline players appear at their last saved position with greyed-out heads, grouped by dimension.
 - The server console suggests common commands and recently sent commands while typing. Use the arrow keys to choose a suggestion and Tab to complete it.
@@ -16,6 +17,9 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 ### Changed
 
+- Player statistics are now grouped into separate panels by Minecraft category, including Custom, Dropped, Killed, Picked up, and Used.
+- Map terrain now uses deeper Minecraft-style foliage greens and stronger height shading, bringing forest colors closer to an in-game map. Previously cached terrain tiles are regenerated with the new palette.
+- Cached map tiles now load together from the local device before the remote map refresh begins, so returning to a map no longer waits for the remote batch pacing to reveal cached terrain.
 - Saved servers now show their Minecraft multiplayer icons in the Servers list when available.
 - Saved terrain on the Map tab now uses brighter Minecraft-style colors, hillside shading, and water depth shading.
 - Console suggestions now appear above the fixed command field. Console and Logs output use distinct colors for timestamps, warnings, errors, and chat, with a chat-only switch in both tabs.
@@ -25,6 +29,8 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 ### Fixed
 
+- The Map tab now opens on Overworld and keeps it available even when no players are there. A cached Nether view no longer selects Nether when the tab opens.
+- Zooming back into a map keeps previously loaded high-detail terrain instead of briefly showing lower-detail tiles while those chunks reload.
 - Long world settings and file lists can now scroll within the Worlds tab.
 
 ## [0.4.1] - 2026-10-20
