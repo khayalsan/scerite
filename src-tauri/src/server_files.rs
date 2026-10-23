@@ -41,6 +41,31 @@ pub fn upload_local_server_icon(
 }
 
 #[tauri::command]
+pub fn read_local_server_icon(
+    profile_id: Uuid,
+    profiles: State<'_, ServerProfileStore>,
+) -> Result<Option<Vec<u8>>, String> {
+    let root = local_server_root(profile_id, &profiles)?;
+    let path = root.join("server-icon.png");
+    let metadata = match fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("Could not inspect the server icon: {error}")),
+    };
+    if !metadata.file_type().is_file() || metadata.len() > MAX_FILE_BYTES {
+        return Ok(None);
+    }
+    let mut bytes = Vec::new();
+    fs::File::open(&path)
+        .and_then(|file| file.take(MAX_FILE_BYTES + 1).read_to_end(&mut bytes))
+        .map_err(|error| format!("Could not read the server icon: {error}"))?;
+    if validate_server_icon(&bytes).is_err() {
+        return Ok(None);
+    }
+    Ok(Some(bytes))
+}
+
+#[tauri::command]
 pub fn read_local_server_log_start(
     profile_id: Uuid,
     profiles: State<'_, ServerProfileStore>,

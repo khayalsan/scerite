@@ -15,6 +15,7 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 ### Changed
 
+- Saved servers now show their Minecraft multiplayer icons in the Servers list when available.
 - Saved terrain on the Map tab now uses brighter Minecraft-style colors, hillside shading, and water depth shading.
 - Console suggestions now appear above the fixed command field. Console and Logs output use distinct colors for timestamps, warnings, errors, and chat, with a chat-only switch in both tabs.
 - The server multiplayer icon picker now has a separate Choose image button and shows the selected filename.
