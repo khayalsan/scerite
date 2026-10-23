@@ -38,15 +38,22 @@ function newRemoteLines(before: string[], after: string[]): string[] {
 }
 
 async function readTps(profileId: string, remote: boolean): Promise<number | null> {
-  const beforeRemote = remote ? (await serverSessions.remoteConsole(profileId)).lines : [];
-  const afterSequence = remote ? 0 : (await serverSessions.console(profileId, 0)).nextSequence;
+  let previousRemote = remote ? (await serverSessions.remoteConsole(profileId)).lines : [];
+  let localCursor = remote ? 0 : (await serverSessions.console(profileId, 0)).nextSequence;
+  const freshLines: string[] = [];
   await (remote ? serverSessions.sendRemoteInput(profileId, "tps") : serverSessions.sendInput(profileId, "tps"));
-  for (const delay of [500, 800, 1200, 1500]) {
+  for (const delay of [500, 800, 1200, 1500, 2000]) {
     await new Promise((resolve) => window.setTimeout(resolve, delay));
-    const lines = remote
-      ? newRemoteLines(beforeRemote, (await serverSessions.remoteConsole(profileId)).lines)
-      : (await serverSessions.console(profileId, afterSequence)).lines.map((line) => line.text);
-    const tps = tpsFromLines(lines);
+    if (remote) {
+      const next = (await serverSessions.remoteConsole(profileId)).lines;
+      freshLines.push(...newRemoteLines(previousRemote, next));
+      previousRemote = next;
+    } else {
+      const next = await serverSessions.console(profileId, localCursor);
+      freshLines.push(...next.lines.map((line) => line.text));
+      localCursor = next.nextSequence;
+    }
+    const tps = tpsFromLines(freshLines);
     if (tps !== null) return tps;
   }
   return null;

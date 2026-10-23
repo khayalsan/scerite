@@ -24,6 +24,7 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 ### Fixed
 
+- The Server tab keeps a moving console cursor while reading TPS, so remote pane updates do not hide a valid response.
 - The Server tab now recognizes wrapped TPS console responses and remote console redraws. It also checks whether a non-Paper server provides a TPS command before deciding that no reading is available.
 - Long world settings and file lists can now scroll within the Worlds tab.
 
