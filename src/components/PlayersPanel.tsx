@@ -20,6 +20,11 @@ const emptyLists: AccessLists = { whitelist: [], operators: [], bannedNames: [],
 
 function errorText(error: unknown) { return error instanceof Error ? error.message : String(error); }
 function label(value: string) { return value.replace(/^minecraft:/, "").replace(/_/g, " "); }
+const statisticCategoryOrder = ["minecraft:custom", "minecraft:dropped", "minecraft:killed", "minecraft:picked_up", "minecraft:used"];
+function categoryLabel(category: string) {
+  const name = label(category);
+  return name.charAt(0).toUpperCase() + name.slice(1);
+}
 function stat(stats: PlayerStatistic[], category: string, key: string) {
   return stats.find((entry) => entry.category === category && entry.key === key)?.value;
 }
@@ -115,6 +120,12 @@ export function PlayersPanel({ profileId, remote, running }: PlayersPanelProps) 
 
   const actionDisabled = !running || busy || rosterRefreshing || rosterUnavailable;
   const summary = detail?.statistics ?? [];
+  const statisticGroups = [...new Set(summary.map((item) => item.category))].sort((left, right) => {
+    const leftIndex = statisticCategoryOrder.indexOf(left);
+    const rightIndex = statisticCategoryOrder.indexOf(right);
+    return (leftIndex < 0 ? statisticCategoryOrder.length : leftIndex) - (rightIndex < 0 ? statisticCategoryOrder.length : rightIndex)
+      || left.localeCompare(right);
+  });
   const management = view === "players" ? null : listSettings[view];
   const entries = view === "players" ? [] : lists[view];
   const normalizedSearch = search.trim().toLowerCase();
@@ -170,7 +181,10 @@ export function PlayersPanel({ profileId, remote, running }: PlayersPanelProps) 
             <div><span>Player kills</span><strong>{stat(summary, "minecraft:custom", "minecraft:player_kills") ?? "—"}</strong></div>
             <div><span>Deaths</span><strong>{stat(summary, "minecraft:custom", "minecraft:deaths") ?? "—"}</strong></div>
           </div>}
-          {summary.length ? <div className="player-stats-list">{summary.map((item) => <div key={`${item.category}/${item.key}`}><span>{label(item.category)} · {label(item.key)}</span><strong>{item.value.toLocaleString()}</strong></div>)}</div> : <p className="state-message">{detail && !detail.hasSavedStatistics ? "No saved statistics yet. Refresh after the server saves this player." : "No saved statistics are available for this player."}</p>}
+          {summary.length ? <div className="player-stat-groups">{statisticGroups.map((category) => <section className="player-stat-group" key={category} aria-label={`${categoryLabel(category)} statistics`}>
+            <h5>{categoryLabel(category)}</h5>
+            <div className="player-stats-list">{summary.filter((item) => item.category === category).map((item) => <div key={item.key}><span>{label(item.key)}</span><strong>{item.value.toLocaleString()}</strong></div>)}</div>
+          </section>)}</div> : <p className="state-message">{detail && !detail.hasSavedStatistics ? "No saved statistics yet. Refresh after the server saves this player." : "No saved statistics are available for this player."}</p>}
         </>}
       </section>
     </> : <>

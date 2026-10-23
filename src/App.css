@@ -964,8 +964,12 @@
 .player-facts div { display: flex; flex-direction: column; gap: 4px; padding: 12px; background: var(--app-ground); border: 1px solid var(--app-line); border-radius: 8px; }
 .player-facts span { color: var(--app-muted); font-size: 12px; }
 .player-facts strong { font-size: 14px; overflow-wrap: anywhere; }
-.player-stats-list { display: grid; gap: 1px; max-height: 400px; overflow-y: auto; background: var(--app-line); border: 1px solid var(--app-line); border-radius: 8px; }
-.player-stats-list div { display: flex; justify-content: space-between; gap: 16px; padding: 8px 12px; background: var(--app-ground); font-size: 12px; }
+.player-stat-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); align-items: start; gap: 12px; }
+.player-stat-group { min-width: 0; overflow: hidden; background: var(--app-ground); border: 1px solid var(--app-line); border-radius: 8px; }
+.player-stat-group h5 { margin: 0; padding: 11px 12px; font-size: 13px; }
+.player-stats-list { max-height: 360px; overflow-y: auto; border-top: 1px solid var(--app-line); }
+.player-stats-list div { display: flex; justify-content: space-between; gap: 16px; padding: 8px 12px; border-top: 1px solid var(--app-line); font-size: 12px; }
+.player-stats-list div:first-child { border-top: 0; }
 .player-stats-list span { color: var(--app-muted); }
 @media (max-width: 640px) { .players-header, .player-roster-heading { flex-direction: column; } .player-list button em { display: none; } }
 
