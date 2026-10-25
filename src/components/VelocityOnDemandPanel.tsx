@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import { velocityOnDemand } from "../lib/velocityOnDemand";
-import type { VelocityOnDemandStatus } from "../lib/velocityOnDemand";
+import type { VelocityOnDemandStatus, VelocityProxyUsage } from "../lib/velocityOnDemand";
 
 export function VelocityOnDemandPanel({ profileId, canChange }: { profileId: string; canChange: boolean }) {
   const [status, setStatus] = useState<VelocityOnDemandStatus | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [usage, setUsage] = useState<VelocityProxyUsage | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -13,6 +14,27 @@ export function VelocityOnDemandPanel({ profileId, canChange }: { profileId: str
       .catch((reason) => { if (active) setError(String(reason)); });
     return () => { active = false; };
   }, [profileId]);
+
+  useEffect(() => {
+    if (!status?.enabled) { setUsage(null); return; }
+    let active = true;
+    let timer: number | undefined;
+    const refresh = async () => {
+      try {
+        const value = await velocityOnDemand.usage(profileId);
+        if (active) {
+          setUsage(value);
+          setStatus((current) => current ? { ...current, proxyRunning: value.running } : current);
+        }
+      } catch {
+        if (active) setUsage(null);
+      } finally {
+        if (active) timer = window.setTimeout(() => void refresh(), 5000);
+      }
+    };
+    void refresh();
+    return () => { active = false; if (timer !== undefined) window.clearTimeout(timer); };
+  }, [profileId, status?.enabled]);
 
   const change = async () => {
     if (!status || !canChange) return;
@@ -33,6 +55,7 @@ export function VelocityOnDemandPanel({ profileId, canChange }: { profileId: str
     <label>On-demand startup <span className="property-switch"><input type="checkbox" role="switch" checked={status?.enabled ?? false} disabled={!status || !canChange || busy} onChange={() => void change()} /><span aria-hidden="true" /></span></label>
     {!canChange && <p>Stop the server before changing this setting.</p>}
     {status?.enabled && <p>Public port: {status.publicPort}. Backend port: {status.backendPort} (local access only).</p>}
+    {status?.enabled && <p>Velocity usage · CPU {usage?.cpuPercent != null ? `${usage.cpuPercent.toFixed(1)}%` : "Unavailable"} · RAM {usage?.memoryBytes != null ? `${(usage.memoryBytes / 1024 / 1024).toFixed(0)} MB` : "Unavailable"}</p>}
     {status?.enabled && !status.proxyRunning && <p className="form-error" role="alert">The Velocity proxy is not running. Players cannot join until it is restarted.</p>}
     {busy && <p>Configuring Velocity…</p>}
     {error && <p className="form-error" role="alert">{error}</p>}

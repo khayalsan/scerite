@@ -3514,6 +3514,14 @@ pub struct VelocityOnDemandStatus {
     proxy_running: bool,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VelocityProxyUsage {
+    running: bool,
+    cpu_percent: Option<f32>,
+    memory_bytes: Option<u64>,
+}
+
 fn velocity_root(sftp: &RemoteSftp, profile: &ServerProfile, environment: &ServerEnvironment) -> Result<String, String> {
     let root = remote_root_with_sftp(sftp, &environment.root_directory)?;
     let folder = profile.id.simple().to_string();
@@ -3577,6 +3585,31 @@ pub async fn velocity_on_demand_status(
             }
             Err(error) => Err(format!("Could not check Velocity setup: {error}")),
         }
+    }).await
+}
+
+#[tauri::command]
+pub async fn velocity_proxy_usage(
+    profile_id: Uuid, profiles: State<'_, ServerProfileStore>,
+    remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<VelocityProxyUsage, String> {
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    run_remote(profile, environment.clone(), Arc::clone(remote_sessions.inner()), move |session, profile| {
+        let sftp = session.sftp()?;
+        let root = velocity_root(&sftp, profile, &environment)?;
+        let command = format!(
+            "root={}; for process in /proc/[0-9]*; do [ -r \"$process/comm\" ] || continue; [ \"$(cat \"$process/comm\" 2>/dev/null)\" = java ] || continue; cwd=$(readlink -f -- \"$process/cwd\" 2>/dev/null) || continue; [ \"$cwd\" = \"$root\" ] || continue; ps -p \"${{process##*/}}\" -o %cpu=,rss=; exit $?; done; exit 1",
+            shell_quote(&root),
+        );
+        let result = execute(session, &command)?;
+        if result.exit_code != 0 {
+            return Ok(VelocityProxyUsage { running: false, cpu_percent: None, memory_bytes: None });
+        }
+        let output = String::from_utf8_lossy(&result.stdout);
+        let mut values = output.split_whitespace();
+        let cpu_percent = values.next().and_then(|value| value.parse::<f32>().ok());
+        let memory_bytes = values.next().and_then(|value| value.parse::<u64>().ok()).map(|value| value * 1024);
+        Ok(VelocityProxyUsage { running: true, cpu_percent, memory_bytes })
     }).await
 }
 
