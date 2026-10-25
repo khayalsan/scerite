@@ -2097,13 +2097,19 @@
 .worlds-backups h3 { margin: 0 0 4px; font-size: 15px; }
 .worlds-backups p { margin: 0; color: var(--app-muted); font-size: 12px; }
 .worlds-auto-backup { display: grid; grid-template-columns: minmax(0, 1fr) minmax(140px, 180px) auto; align-items: end; gap: 12px; padding: 14px; border: 1px solid var(--app-line); border-radius: 8px; background: var(--app-paper); }
+.worlds-import { display: grid; grid-template-columns: minmax(0, 1fr) minmax(180px, 260px) auto; align-items: end; gap: 12px; padding: 14px; border: 1px solid var(--app-line); border-radius: 8px; background: var(--app-paper); }
+.worlds-import h4 { margin: 0 0 4px; font-size: 13px; }
+.worlds-import p { margin: 0; color: var(--app-muted); font-size: 12px; }
+.worlds-import label { display: grid; gap: 6px; font-size: 12px; }
+.worlds-import input { width: 100%; min-width: 0; min-height: 36px; padding: 7px 9px; border: 1px solid var(--app-line); border-radius: 7px; color: var(--app-ink); background: var(--app-ground); font: inherit; }
+.worlds-import .button { display: inline-flex; align-items: center; gap: 7px; }
 .worlds-auto-backup > div, .worlds-auto-backup > .files-error { grid-column: 1 / -1; }
 .worlds-auto-backup h4 { margin: 0 0 4px; font-size: 13px; }
 .worlds-auto-toggle { display: flex; align-items: center; gap: 8px; font-size: 12px; }
 .worlds-auto-keep { display: grid; gap: 5px; font-size: 12px; }
 .worlds-auto-keep input { width: 100%; min-height: 36px; padding: 7px 9px; border: 1px solid var(--app-line); border-radius: 7px; color: var(--app-ink); background: var(--app-ground); font: inherit; }
 .worlds-auto-backup > .button { align-self: end; }
-@media (max-width: 680px) { .worlds-auto-backup { grid-template-columns: 1fr; } }
+@media (max-width: 680px) { .worlds-auto-backup, .worlds-import { grid-template-columns: 1fr; } }
 .worlds-backup-groups, .worlds-backup-list { display: grid; gap: 8px; }
 .worlds-backup-group { display: grid; gap: 8px; }
 .worlds-backup-group + .worlds-backup-group { padding-top: 16px; border-top: 1px solid var(--app-line); }

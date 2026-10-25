@@ -45,6 +45,7 @@ export function WorldsPanel({ profileId, remote, canEdit, running, backupRevisio
   const [autoBackupSaving, setAutoBackupSaving] = useState(false);
   const [autoBackupError, setAutoBackupError] = useState<string | null>(null);
   const [activeWorldName, setActiveWorldName] = useState("");
+  const [newWorldName, setNewWorldName] = useState("");
   const [selectedWorld, setSelectedWorld] = useState<string | null>(null);
   const [directory, setDirectory] = useState<string | null>(null);
   const [entries, setEntries] = useState<ServerFileEntry[]>([]);
@@ -188,6 +189,25 @@ export function WorldsPanel({ profileId, remote, canEdit, running, backupRevisio
     finally { setBusy(null); }
   }
 
+  async function importWorld() {
+    const name = newWorldName.trim();
+    if (!canEdit || busy) return;
+    if (!name || name.length > 128 || /[\\/:*?"<>|\x00-\x1f]/.test(name) || name === "." || name === ".." || name.endsWith(".")) {
+      setError("Choose a valid new world folder name.");
+      return;
+    }
+    const source = await openDialog({ multiple: false, filters: [{ name: "ZIP archive", extensions: ["zip"] }] });
+    if (typeof source !== "string") return;
+    setBusy("import"); setError(null); setMessage(null);
+    try {
+      await serverWorlds.import(remote, profileId, name, source);
+      setMessage(`World ${name} imported. Select it to browse its files and settings.`);
+      setNewWorldName("");
+      setRevision((value) => value + 1);
+    } catch (reason) { setError(`Could not import the world: ${errorText(reason)}`); }
+    finally { setBusy(null); }
+  }
+
   async function regenerateWorld() {
     if (!selectedWorld || !canEdit || selectedWorld !== activeWorldName) return;
     if (!levelType.trim() || /[\r\n]/.test(seed + levelType)) { setError("Enter a valid seed and world type."); return; }
@@ -303,6 +323,11 @@ export function WorldsPanel({ profileId, remote, canEdit, running, backupRevisio
         <label className="worlds-auto-keep">Automatic backups to keep<input type="number" min="1" max="100" step="1" value={autoBackupKeep} onChange={(event) => setAutoBackupKeep(event.currentTarget.value)} disabled={autoBackupLoading || autoBackupSaving} /></label>
         <button className="button button-secondary" type="button" disabled={autoBackupLoading || autoBackupSaving} onClick={() => void saveAutoBackupSettings()}>{autoBackupSaving ? "Saving…" : "Save settings"}</button>
         {autoBackupError && <p className="files-error" role="alert">{autoBackupError}</p>}
+      </section>
+      <section className="worlds-import" aria-label="Import a world">
+        <div><h4>Import a world</h4><p>Add a ZIP as a new world folder. Existing worlds stay in place.</p></div>
+        <label>New world folder name<input value={newWorldName} maxLength={128} onChange={(event) => setNewWorldName(event.currentTarget.value)} disabled={!canEdit || !!busy} placeholder="my-world" /></label>
+        <button className="button button-secondary" type="button" disabled={!canEdit || !!busy || !newWorldName.trim()} onClick={() => void importWorld()}><Upload size={15} aria-hidden="true" /> {busy === "import" ? "Importing…" : "Choose ZIP"}</button>
       </section>
       {isLoading ? <p className="state-message">Finding worlds…</p> : worlds.length === 0 ? (
         <p className="state-message">No world folders were found. A world appears here after the server creates a folder containing level.dat.</p>

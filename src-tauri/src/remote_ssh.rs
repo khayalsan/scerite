@@ -3361,17 +3361,34 @@ pub async fn upload_remote_world(
         let root = remote_root_with_sftp(&sftp, configured_remote_root(profile)?)?;
         require_remote_world_stopped(session, profile, &root)?;
         checked_remote_world(&sftp, &root, &world_name)?;
-        install_remote_archive(session, &sftp, &root, &world_name, &mut archive, entries, true)
+        install_remote_archive(session, &sftp, &root, &world_name, &mut archive, entries, true, false)
+    }).await
+}
+
+#[tauri::command]
+pub async fn import_remote_world(
+    profile_id: Uuid, world_name: String, source: String,
+    profiles: State<'_, ServerProfileStore>, remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<String, String> {
+    if !world_management::valid_world_name(&world_name) { return Err("Choose a valid world folder name.".into()); }
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    run_remote(profile, environment, Arc::clone(remote_sessions.inner()), move |session, profile| {
+        let (mut archive, entries) = world_management::open_archive(Path::new(&source))?;
+        let sftp = session.sftp().map_err(|error| format!("Could not open SFTP: {error}"))?;
+        let root = remote_root_with_sftp(&sftp, configured_remote_root(profile)?)?;
+        require_remote_world_stopped(session, profile, &root)?;
+        install_remote_archive(session, &sftp, &root, &world_name, &mut archive, entries, false, true)
     }).await
 }
 
 fn install_remote_archive(
     session: &RemoteConnection, sftp: &RemoteSftp, root: &str, world_name: &str,
-    archive: &mut zip::ZipArchive<File>, entries: Vec<world_management::ArchiveEntry>, require_existing: bool,
+    archive: &mut zip::ZipArchive<File>, entries: Vec<world_management::ArchiveEntry>, require_existing: bool, require_absent: bool,
 ) -> Result<String, String> {
         let world = resolve_remote_relative(root, world_name, false)?;
         let existing = match sftp.lstat_optional(Path::new(&world)) {
             Ok(metadata) if metadata.file_type() == FileType::Dir => {
+                if require_absent { return Err("A world folder with this name already exists.".into()); }
                 checked_remote_world(sftp, root, world_name)?;
                 true
             }
@@ -3438,7 +3455,7 @@ pub async fn restore_remote_world_backup(
         require_remote_world_stopped(session, profile, &root)?;
         if let Some(source) = source {
             let (mut archive, entries) = world_management::open_archive(&source)?;
-            return install_remote_archive(session, &sftp, &root, &world_name, &mut archive, entries, false);
+            return install_remote_archive(session, &sftp, &root, &world_name, &mut archive, entries, false, false);
         }
         let filename = Path::new(&backup_path).file_name().and_then(|name| name.to_str())
             .ok_or("Choose a valid preserved world.")?;
