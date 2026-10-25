@@ -349,7 +349,7 @@ export function PlayerMapPanel({ profileId, remote, running }: { profileId: stri
             try {
               const cached = await displayCache.readTiles(profileId, work.dimension, work.resolution, uncached);
               if (!terrainMountedRef.current || work.generation !== terrainGenerationRef.current) continue;
-              for (const tile of cached) terrainCacheRef.current!.apply(work.dimension, tile);
+              for (const tile of cached) terrainCacheRef.current!.apply(work.dimension, tile, "disk");
               if (cached.length) setTerrainEpoch((epoch) => epoch + 1);
             } catch { /* A damaged or missing local cache must not prevent the remote read. */ }
           }

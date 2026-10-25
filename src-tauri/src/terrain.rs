@@ -184,7 +184,7 @@ pub(crate) fn decode_region_payload(
     timestamp: u32,
     data: &[u8],
 ) -> TerrainTile {
-    match decode_pixels(data, resolution) {
+    match decode_pixels(data, request, resolution) {
         Ok(Some(rgba)) => TerrainTile {
             x: request.x,
             z: request.z,
@@ -205,7 +205,7 @@ pub(crate) fn decode_region_payload(
     }
 }
 
-fn decode_pixels(data: &[u8], resolution: u8) -> Result<Option<Vec<u8>>, String> {
+fn decode_pixels(data: &[u8], request: &TerrainRequest, resolution: u8) -> Result<Option<Vec<u8>>, String> {
     let (&compression, compressed) = data.split_first().ok_or("The chunk is empty.")?;
     if compression & 0x80 != 0 {
         return Err("External chunk storage is not supported by this map.".into());
@@ -230,6 +230,11 @@ fn decode_pixels(data: &[u8], resolution: u8) -> Result<Option<Vec<u8>>, String>
     let root: HashMap<String, Value> =
         fastnbt::from_bytes(&decoded).map_err(|error| error.to_string())?;
     let chunk = root.get("Level").and_then(compound).unwrap_or(&root);
+    let x = chunk.get("xPos").and_then(Value::as_i64);
+    let z = chunk.get("zPos").and_then(Value::as_i64);
+    if x != Some(i64::from(request.x)) || z != Some(i64::from(request.z)) {
+        return Err("The chunk coordinates do not match its region location.".into());
+    }
     let status = chunk.get("Status").and_then(string).unwrap_or("");
     if status != "full" && status != "minecraft:full" {
         return Ok(None);
@@ -551,4 +556,30 @@ fn read_local_terrain_tiles_from_root(
         results.push(result.unwrap_or_else(|_| failed(request, resolution)));
     }
     Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{decode_region_payload, TerrainRequest};
+    use serde::Serialize;
+
+    #[derive(Serialize)]
+    struct ChunkCoordinates {
+        #[serde(rename = "xPos")]
+        x: i32,
+        #[serde(rename = "zPos")]
+        z: i32,
+    }
+
+    #[test]
+    fn rejects_a_chunk_from_another_region_slot() {
+        let mut payload = vec![3];
+        payload.extend(fastnbt::to_bytes(&ChunkCoordinates { x: 16, z: 24 }).unwrap());
+        let requested = TerrainRequest { x: 12, z: 7, known_timestamp: None };
+        let wrong = decode_region_payload(&requested, 16, 1, &payload);
+        assert_eq!(wrong.status, "error");
+        let matching = TerrainRequest { x: 16, z: 24, known_timestamp: None };
+        let same = decode_region_payload(&matching, 16, 1, &payload);
+        assert_eq!(same.status, "missing");
+    }
 }
