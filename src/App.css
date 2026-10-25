@@ -923,6 +923,7 @@
 
 .server-detail-shell .server-tab-panel[aria-label="Server players"]:not([hidden]) { display: flex; min-height: 0; flex: 1 1 auto; flex-direction: column; }
 .server-detail-shell .server-tab-panel[aria-label="Server map"]:not([hidden]) { display: flex; min-height: 0; flex: 1 1 auto; flex-direction: column; }
+.server-detail-shell .server-tab-panel[aria-label="Server files"]:not([hidden]) { display: flex; min-height: 0; flex: 1 1 auto; flex-direction: column; }
 .players-panel { display: flex; min-height: 0; flex: 1 1 auto; flex-direction: column; gap: 16px; padding: 18px; overflow-y: auto; }
 .players-header, .player-roster-heading { display: flex; align-items: start; justify-content: space-between; gap: 16px; }
 .players-header h2 { margin: 0 0 4px; font-size: 20px; }
@@ -1811,11 +1812,13 @@
 
 .files-panel {
   display: grid;
-  flex: 0 0 calc(100% - 53px);
+  flex: 1 1 auto;
   min-width: 0;
+  min-height: 0;
   gap: 12px;
   margin: 0 0 16px 53px;
   padding: 15px;
+  overflow-y: auto;
   border: 1px solid var(--app-line);
   border-radius: 9px;
   background: var(--app-ground);
@@ -2321,7 +2324,6 @@
   }
 
   .files-panel {
-    flex-basis: calc(100% - 44px);
     margin-left: 44px;
   }
 
