@@ -7,8 +7,8 @@ import { Client, EmbedBuilder, Events, GatewayIntentBits, TextChannel, type Webh
 
 type Action = "chat_to_discord" | "chat_to_minecraft" | "online" | "offline" | "join" | "leave" | "kills" | "achievements";
 type Server = { id: string; name: string; directory: string; session: string; channel_id: string; chat_to_minecraft_template?: string } & Record<Action, boolean> & Record<`${Action}_channel_id`, string>;
-const defaultMinecraftTemplate = "<🎮{color:blue}{name}{color:reset}> {message}";
-const legacyMinecraftTemplate = "<🎮{username}> {message}";
+const defaultMinecraftTemplate = "<{color:blue}🎮{name}{color:reset}> {message}";
+const legacyMinecraftTemplates = new Set(["<🎮{username}> {message}", "<🎮{color:blue}{name}{color:reset}> {message}"]);
 const minecraftColors = new Set(["black", "dark_blue", "dark_green", "dark_aqua", "dark_red", "dark_purple", "gold", "gray", "dark_gray", "blue", "green", "aqua", "red", "light_purple", "yellow", "white"]);
 const root = dirname(fileURLToPath(import.meta.url));
 const servers = JSON.parse(await readFile(join(root, "servers.json"), "utf8")) as Server[];
@@ -80,7 +80,7 @@ async function sendToMinecraft(server: Server, username: string, name: string, c
   }
   if (!available) throw new Error("Minecraft console was unavailable after three checks");
   const savedTemplate = server.chat_to_minecraft_template;
-  const template = !savedTemplate || savedTemplate === legacyMinecraftTemplate ? defaultMinecraftTemplate : savedTemplate;
+  const template = !savedTemplate || legacyMinecraftTemplates.has(savedTemplate) ? defaultMinecraftTemplate : savedTemplate;
   const command = `tellraw @a ${JSON.stringify(minecraftChat(template, username, name, content))}`;
   await run("tmux", ["send-keys", "-t", server.session, command, "Enter"], { timeout: 5000 });
 }

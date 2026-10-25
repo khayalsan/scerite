@@ -5,7 +5,7 @@ import type { ServerEnvironment, ServerProfile } from "../lib/serverProfiles";
 
 type Action = "chatToDiscord" | "chatToMinecraft" | "online" | "offline" | "join" | "leave" | "kills" | "achievements";
 type Mapping = { profileId: string; channelId: string; chatToMinecraftTemplate: string } & Record<Action, boolean> & Record<`${Action}ChannelId`, string>;
-const defaultMinecraftTemplate = "<🎮{color:blue}{name}{color:reset}> {message}";
+const defaultMinecraftTemplate = "<{color:blue}🎮{name}{color:reset}> {message}";
 const previewColors: Record<string, string> = {
   black: "#000000", dark_blue: "#0000aa", dark_green: "#00aa00", dark_aqua: "#00aaaa",
   dark_red: "#aa0000", dark_purple: "#aa00aa", gold: "#ffaa00", gray: "#aaaaaa",
@@ -48,7 +48,7 @@ const actions: { key: Action; label: string }[] = [
   { key: "offline", label: "Server offline" },
   { key: "join", label: "Player joined" },
   { key: "leave", label: "Player left" },
-  { key: "kills", label: "Player deaths (including PvP)" },
+  { key: "kills", label: "Player deaths" },
   { key: "achievements", label: "Advancement earned" },
 ];
 function defaultMapping(profileId: string): Mapping {
