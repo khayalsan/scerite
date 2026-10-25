@@ -354,10 +354,9 @@ async function watchServers() {
             if (!server.achievements || !channelFor(server, "achievements")) continue;
             const [, player, kind, name] = achievement;
             const color = kind === "completed the challenge" ? 0xaa00aa : kind === "reached the goal" ? 0xffaa00 : 0x55aa55;
-            const marker = kind === "completed the challenge" ? "🟣" : kind === "reached the goal" ? "🟡" : "🟢";
             void versionFor(server).then((version) => descriptionFor(version, name))
               .catch((error) => { console.error(`Could not read advancement descriptions for ${server.name}: ${String(error)}`); return null; })
-              .then((description) => announceEmbed(server, "achievements", `${player} has ${kind} ${marker} ${clean(name, 100)}`, description ?? "", color));
+              .then((description) => announceEmbed(server, "achievements", `${player} has ${kind} ${clean(name, 100)}`, description ?? "", color));
             continue;
           }
           const death = line.match(/\]: ([A-Za-z0-9_]{1,16}) ((?:was |drowned|died|fell |hit |burned |went |tried |starved|suffocated|froze|walked |experienced |discovered |blew ).*)$/);
