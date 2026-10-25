@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
-import { Maximize2, Minus, Plus, RefreshCw, UserRound } from "lucide-react";
+import { Maximize2, Minus, Plus, RefreshCw } from "lucide-react";
 import { loadPlayers } from "../lib/serverPlayers";
 import type { PlayerRecord } from "../lib/serverPlayers";
 import { readLivePlayerLocations, readSavedPlayerLocations } from "../lib/playerLocations";
@@ -482,7 +482,7 @@ export function PlayerMapPanel({ profileId, remote, running }: { profileId: stri
           aria-label={`${point.name}, ${point.online ? "online" : "offline"}, ${point.live ? "live" : "last saved"} position ${coords(point.position)}`}
           title={`${point.name} · ${coords(point.position)} · ${point.live ? "Live" : "Last saved"}`}
           onClick={() => setSelectedKey(point.key)}>
-          <span className="player-map-head"><UserRound size={21} aria-hidden="true" /><img src={`https://mc-heads.net/avatar/${encodeURIComponent(point.uuid ?? point.name)}/64`} alt="" onError={(event) => { event.currentTarget.style.display = "none"; }} /></span>
+          <span className="player-map-head"><img src={`https://mc-heads.net/avatar/${encodeURIComponent(point.uuid ?? point.name)}/64`} alt="" onError={(event) => { event.currentTarget.style.display = "none"; }} /></span>
           <span className="player-map-name">{point.name}</span>
         </button>)}
         {!visible.length && <p className="player-map-empty">{refreshing || savedLoading ? "Finding player locations…" : "No saved player locations in this dimension."}</p>}

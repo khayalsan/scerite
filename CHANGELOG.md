@@ -26,6 +26,7 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 ### Fixed
 
+- Offline player markers on the Map tab no longer show a person icon through the skin head.
 - Long world settings and file lists can now scroll within the Worlds tab.
 
 ## [0.4.1] - 2026-10-20
