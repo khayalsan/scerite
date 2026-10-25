@@ -28,6 +28,7 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 ### Fixed
 
+- Cached map terrain appears immediately, then gets a fresh read before the app trusts its timestamp, so an old tile cannot stay in the wrong place until manual Refresh.
 - Offline player markers on the Map tab no longer show a person icon through the skin head.
 - Long folder listings in the Files tab now scroll inside the browser, with the search and editor kept accessible.
 - Long world settings and file lists can now scroll within the Worlds tab.
