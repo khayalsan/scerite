@@ -232,8 +232,12 @@
 .discord-setup { display: grid; gap: 14px; padding: 14px; border: 1px solid var(--app-line); border-radius: 8px; background: var(--app-ground); }
 .discord-setup > p { margin: 0; color: var(--app-muted); font-size: 13px; }
 .discord-server { display: grid; gap: 8px; padding-top: 12px; border-top: 1px solid var(--app-line); }
-.discord-options, .discord-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
-.discord-options label { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+.discord-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.discord-event-list { display: grid; gap: 8px; }
+.discord-event-row { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(160px, 260px); align-items: center; gap: 12px; }
+.discord-event-row label { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+.discord-event-row > input { min-width: 0; padding: 8px 10px; border: 1px solid var(--app-line); border-radius: 6px; background: var(--app-ground); color: var(--app-ink); }
+@media (max-width: 600px) { .discord-event-row { grid-template-columns: 1fr; gap: 4px; } }
 
 .local-root-form {
   display: grid;

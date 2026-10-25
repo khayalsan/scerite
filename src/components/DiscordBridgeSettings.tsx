@@ -2,8 +2,23 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { ServerEnvironment, ServerProfile } from "../lib/serverProfiles";
 
-type Mapping = { profileId: string; channelId: string; chat: boolean; status: boolean; joins: boolean };
+type Action = "chatToDiscord" | "chatToMinecraft" | "online" | "offline" | "join" | "leave" | "kills" | "achievements";
+type Mapping = { profileId: string; channelId: string } & Record<Action, boolean> & Record<`${Action}ChannelId`, string>;
 type BridgeStatus = { enabled: boolean; running: boolean; hasToken: boolean; servers: Mapping[] };
+const actions: { key: Action; label: string }[] = [
+  { key: "chatToDiscord", label: "Game chat → Discord" },
+  { key: "chatToMinecraft", label: "Discord chat → game" },
+  { key: "online", label: "Server online" },
+  { key: "offline", label: "Server offline" },
+  { key: "join", label: "Player joined" },
+  { key: "leave", label: "Player left" },
+  { key: "kills", label: "Player killed player" },
+  { key: "achievements", label: "Advancement earned" },
+];
+function defaultMapping(profileId: string): Mapping {
+  return { profileId, channelId: "", chatToDiscord: true, chatToMinecraft: true, online: true, offline: true, join: true, leave: true, kills: true, achievements: true,
+    chatToDiscordChannelId: "", chatToMinecraftChannelId: "", onlineChannelId: "", offlineChannelId: "", joinChannelId: "", leaveChannelId: "", killsChannelId: "", achievementsChannelId: "" };
+}
 
 function BridgeEnvironment({ environment, profiles }: { environment: ServerEnvironment; profiles: ServerProfile[] }) {
   const servers = profiles.filter((profile) => profile.target.kind === "remote" && profile.target.environmentId === environment.id);
@@ -18,7 +33,7 @@ function BridgeEnvironment({ environment, profiles }: { environment: ServerEnvir
     const next = await invoke<BridgeStatus>("discord_bridge_status", { environmentId: environment.id });
     setStatus(next);
     setDraft(servers.map((server) => next.servers.find((item) => item.profileId === server.id)
-      ?? { profileId: server.id, channelId: "", chat: true, status: true, joins: true }));
+      ?? defaultMapping(server.id)));
   }
 
   useEffect(() => {
@@ -28,7 +43,7 @@ function BridgeEnvironment({ environment, profiles }: { environment: ServerEnvir
         if (!active) return;
         setStatus(next);
         setDraft(servers.map((server) => next.servers.find((item) => item.profileId === server.id)
-          ?? { profileId: server.id, channelId: "", chat: true, status: true, joins: true }));
+          ?? defaultMapping(server.id)));
       })
       .catch((cause: unknown) => { if (active) setError(String(cause)); });
     return () => { active = false; };
@@ -45,7 +60,7 @@ function BridgeEnvironment({ environment, profiles }: { environment: ServerEnvir
       await invoke("enable_discord_bridge", {
         environmentId: environment.id,
         token,
-        servers: draft.filter((item) => item.channelId.trim()).map((item) => ({ ...item, channelId: item.channelId.trim() })),
+        servers: draft.map((item) => Object.fromEntries(Object.entries(item).map(([key, value]) => [key, key.endsWith("ChannelId") || key === "channelId" ? String(value).trim() : value]))),
       });
       setToken("");
       await refresh();
@@ -71,9 +86,9 @@ function BridgeEnvironment({ environment, profiles }: { environment: ServerEnvir
 
   return <div className="discord-environment">
     <div className="app-setting-row">
-      <span className="app-setting-copy"><strong>{environment.name}</strong><small>{!status ? "Checking bridge status…" : status.enabled ? status.running ? "Bridge running" : "Bridge configured but stopped" : !servers.length ? "Add a server here to set up Discord." : "Off — bridge not running"}</small></span>
+      <span className="app-setting-copy"><strong>{environment.name}</strong><small>{!status ? "Checking bridge status…" : status.enabled ? status.running ? "Bridge running" : "Bridge configured but stopped" : "Off — bridge not running"}</small></span>
       <label className="property-switch" aria-label={`Enable Discord for ${environment.name}`}>
-        <input type="checkbox" checked={(status?.enabled ?? false) || editing} disabled={(!servers.length && !status?.enabled) || busy || status === null} onChange={(event) => {
+        <input type="checkbox" checked={(status?.enabled ?? false) || editing} disabled={busy || status === null} onChange={(event) => {
           if (status?.enabled) void disable();
           else setEditing(event.currentTarget.checked);
         }} />
@@ -82,7 +97,7 @@ function BridgeEnvironment({ environment, profiles }: { environment: ServerEnvir
     </div>
     {status?.enabled && !editing && <button className="button button-quiet" type="button" onClick={() => setEditing(true)}>Edit channels or bot token</button>}
     {editing && <div className="discord-setup">
-      <p>Use a bot you own. Invite it to your Discord server, enable Message Content intent, and give it access to the channels below. Enable Discord Developer Mode to copy each channel ID. The token is stored on this remote environment.</p>
+      <p>Use a bot you own. Invite it to your Discord server and enable Message Content intent. You can add channel IDs now or later. Enable Discord Developer Mode to copy channel IDs. The token is stored on this remote environment.</p>
       <label className="field"><span>Bot token {status?.hasToken ? "(leave blank to keep the current token)" : ""}</span>
         <input type="password" autoComplete="off" value={token} onChange={(event) => setToken(event.currentTarget.value)} placeholder="Discord bot token" />
       </label>
@@ -91,16 +106,20 @@ function BridgeEnvironment({ environment, profiles }: { environment: ServerEnvir
         if (!value) return null;
         return <div className="discord-server" key={server.id}>
           <strong>{server.name}</strong>
-          <label className="field"><span>Channel ID (leave blank to exclude this server)</span><input inputMode="numeric" value={value.channelId} onChange={(event) => change(server.id, { channelId: event.currentTarget.value })} /></label>
-          <div className="discord-options">
-            <label><input type="checkbox" checked={value.chat} onChange={(event) => change(server.id, { chat: event.currentTarget.checked })} /> Chat both ways</label>
-            <label><input type="checkbox" checked={value.status} onChange={(event) => change(server.id, { status: event.currentTarget.checked })} /> Online/offline</label>
-            <label><input type="checkbox" checked={value.joins} onChange={(event) => change(server.id, { joins: event.currentTarget.checked })} /> Joins/leaves</label>
+          <label className="field"><span>Default channel ID (optional)</span><input inputMode="numeric" value={value.channelId} onChange={(event) => change(server.id, { channelId: event.currentTarget.value })} /></label>
+          <div className="discord-event-list">
+            {actions.map(({ key, label }) => {
+              const channelKey = `${key}ChannelId` as const;
+              return <div className="discord-event-row" key={key}>
+                <label><input type="checkbox" checked={value[key]} onChange={(event) => change(server.id, { [key]: event.currentTarget.checked })} /> {label}</label>
+                <input aria-label={`${label} channel ID for ${server.name}`} inputMode="numeric" placeholder="Default channel" value={value[channelKey]} disabled={!value[key]} onChange={(event) => change(server.id, { [channelKey]: event.currentTarget.value })} />
+              </div>;
+            })}
           </div>
         </div>;
       })}
       <div className="discord-actions">
-        <button className="button button-primary" type="button" disabled={busy || (!token.trim() && !status?.hasToken) || !draft.some((item) => item.channelId.trim())} onClick={() => void save()}>{busy ? "Setting up…" : status?.enabled ? "Save Discord setup" : "Enable Discord"}</button>
+        <button className="button button-primary" type="button" disabled={busy || (!token.trim() && !status?.hasToken)} onClick={() => void save()}>{busy ? "Setting up…" : status?.enabled ? "Save Discord setup" : "Enable Discord"}</button>
         <button className="button button-quiet" type="button" disabled={busy} onClick={() => { setEditing(false); setToken(""); }}>Cancel</button>
       </div>
     </div>}

@@ -2689,9 +2689,22 @@ fn session_name(profile_id: Uuid) -> String {
 pub struct DiscordBridgeServer {
     profile_id: Uuid,
     channel_id: String,
-    chat: bool,
-    status: bool,
-    joins: bool,
+    chat_to_discord: bool,
+    chat_to_minecraft: bool,
+    online: bool,
+    offline: bool,
+    join: bool,
+    leave: bool,
+    kills: bool,
+    achievements: bool,
+    chat_to_discord_channel_id: String,
+    chat_to_minecraft_channel_id: String,
+    online_channel_id: String,
+    offline_channel_id: String,
+    join_channel_id: String,
+    leave_channel_id: String,
+    kills_channel_id: String,
+    achievements_channel_id: String,
 }
 
 #[derive(Serialize)]
@@ -2785,8 +2798,22 @@ pub async fn discord_bridge_status(
             let value: serde_json::Value = serde_json::from_slice(&sftp.read_file(Path::new(&config_path))?)
                 .map_err(|error| format!("Could not read Discord bridge settings: {error}"))?;
             value.as_array().ok_or_else(|| "Discord bridge settings are invalid.".to_owned())?
-                .iter().map(|item| serde_json::from_value(item.clone())
-                    .map_err(|error| format!("Discord bridge settings are invalid: {error}")))
+                .iter().map(|item| {
+                    let mut item = item.clone();
+                    let object = item.as_object_mut().ok_or_else(|| "Discord bridge settings are invalid.".to_owned())?;
+                    let defaults = [("chatToDiscord", "chat"), ("chatToMinecraft", "chat"), ("online", "status"), ("offline", "status"), ("join", "joins"), ("leave", "joins")];
+                    for (field, legacy) in defaults {
+                        if !object.contains_key(field) { object.insert(field.into(), object.get(legacy).cloned().unwrap_or(serde_json::Value::Bool(true))); }
+                    }
+                    for field in ["kills", "achievements"] {
+                        if !object.contains_key(field) { object.insert(field.into(), serde_json::Value::Bool(true)); }
+                    }
+                    for field in ["chatToDiscordChannelId", "chatToMinecraftChannelId", "onlineChannelId", "offlineChannelId", "joinChannelId", "leaveChannelId", "killsChannelId", "achievementsChannelId"] {
+                        if !object.contains_key(field) { object.insert(field.into(), serde_json::Value::String(String::new())); }
+                    }
+                    serde_json::from_value(item)
+                        .map_err(|error| format!("Discord bridge settings are invalid: {error}"))
+                })
                 .collect::<Result<Vec<_>, _>>()?
         } else { Vec::new() };
         let running = execute(session, &format!("tmux has-session -t {} 2>/dev/null", shell_quote(&session_name)))?.exit_code == 0;
@@ -2804,15 +2831,15 @@ pub async fn enable_discord_bridge(
 ) -> Result<(), String> {
     let (profile, environment) = discord_bridge_profile(&profiles, environment_id)?;
     let candidates = profiles.list()?;
-    if servers.is_empty() { return Err("Choose at least one server and Discord channel.".into()); }
     let mut seen_profiles = std::collections::HashSet::new();
-    let mut seen_channels = std::collections::HashSet::new();
     for server in &servers {
-        if !seen_profiles.insert(server.profile_id) || !seen_channels.insert(server.channel_id.clone()) {
-            return Err("Each server and Discord channel must appear only once.".into());
+        if !seen_profiles.insert(server.profile_id) {
+            return Err("Each server must appear only once.".into());
         }
-        if !(15..=22).contains(&server.channel_id.len()) || !server.channel_id.bytes().all(|byte| byte.is_ascii_digit()) {
-            return Err("Enter a valid numeric Discord channel ID for each server.".into());
+        for channel in [&server.channel_id, &server.chat_to_discord_channel_id, &server.chat_to_minecraft_channel_id, &server.online_channel_id, &server.offline_channel_id, &server.join_channel_id, &server.leave_channel_id, &server.kills_channel_id, &server.achievements_channel_id] {
+            if !channel.is_empty() && (!(15..=22).contains(&channel.len()) || !channel.bytes().all(|byte| byte.is_ascii_digit())) {
+                return Err("Enter a valid numeric Discord channel ID or leave it blank.".into());
+            }
         }
         if !candidates.iter().any(|candidate| candidate.id == server.profile_id && matches!(&candidate.target, ServerTarget::Remote { environment_id: id, .. } if *id == environment_id)) {
             return Err("A selected server does not belong to this environment.".into());
@@ -2847,9 +2874,22 @@ pub async fn enable_discord_bridge(
                 "profileId": server.profile_id,
                 "channelId": server.channel_id,
                 "channel_id": server.channel_id,
-                "chat": server.chat,
-                "status": server.status,
-                "joins": server.joins,
+                "chat_to_discord": server.chat_to_discord,
+                "chat_to_minecraft": server.chat_to_minecraft,
+                "online": server.online,
+                "offline": server.offline,
+                "join": server.join,
+                "leave": server.leave,
+                "kills": server.kills,
+                "achievements": server.achievements,
+                "chat_to_discord_channel_id": server.chat_to_discord_channel_id,
+                "chat_to_minecraft_channel_id": server.chat_to_minecraft_channel_id,
+                "online_channel_id": server.online_channel_id,
+                "offline_channel_id": server.offline_channel_id,
+                "join_channel_id": server.join_channel_id,
+                "leave_channel_id": server.leave_channel_id,
+                "kills_channel_id": server.kills_channel_id,
+                "achievements_channel_id": server.achievements_channel_id,
             }));
         }
         let architecture = execute(session, "uname -m")?;
@@ -2877,6 +2917,7 @@ pub async fn enable_discord_bridge(
             }
         }
         let npm = format!("{bridge_root}/{folder}/lib/node_modules/npm/bin/npm-cli.js");
+        bridge_write(&sftp, &format!("{bridge_root}/package.json"), br#"{"name":"scerite-discord-bridge","private":true,"type":"module","dependencies":{"discord.js":"14.27.0"}}"#)?;
         let install = execute(session, &format!(
             "{} {} install --no-audit --no-fund --ignore-scripts --silent --prefix {} --save-exact 'discord.js@14.27.0'",
             shell_quote(&node), shell_quote(&npm), shell_quote(&bridge_root)

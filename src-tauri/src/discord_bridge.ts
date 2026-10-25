@@ -5,7 +5,8 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { Client, Events, GatewayIntentBits, type TextChannel } from "discord.js";
 
-type Server = { id: string; name: string; directory: string; session: string; channel_id: string; chat: boolean; status: boolean; joins: boolean };
+type Action = "chat_to_discord" | "chat_to_minecraft" | "online" | "offline" | "join" | "leave" | "kills" | "achievements";
+type Server = { id: string; name: string; directory: string; session: string; channel_id: string } & Record<Action, boolean> & Record<`${Action}_channel_id`, string>;
 const root = dirname(fileURLToPath(import.meta.url));
 const servers = JSON.parse(await readFile(join(root, "servers.json"), "utf8")) as Server[];
 const token = (await readFile(join(root, "token"), "utf8")).trim();
@@ -17,6 +18,14 @@ const client = new Client({
 const positions = new Map<string, { inode: number; offset: number }>();
 const running = new Map<string, boolean>();
 const ready = new Map<string, boolean>();
+const knownPlayers = new Map<string, Set<string>>();
+
+for (const server of servers) {
+  try {
+    const entries = JSON.parse(await readFile(join(server.directory, "usercache.json"), "utf8")) as { name?: string }[];
+    knownPlayers.set(server.id, new Set(entries.map((entry) => entry.name).filter((name): name is string => !!name)));
+  } catch { knownPlayers.set(server.id, new Set()); }
+}
 
 function clean(value: string, limit = 300) { return value.replace(/\s+/g, " ").trim().slice(0, limit); }
 
@@ -35,9 +44,15 @@ async function sendToMinecraft(server: Server, author: string, content: string) 
   await run("tmux", ["send-keys", "-t", server.session, "Enter"], { timeout: 5000 });
 }
 
-async function announce(server: Server, text: string) {
+function channelFor(server: Server, action: Action) {
+  return server[`${action}_channel_id`] || server.channel_id;
+}
+
+async function announce(server: Server, action: Action, text: string) {
+  const channelId = channelFor(server, action);
+  if (!server[action] || !channelId) return;
   try {
-    const channel = await client.channels.fetch(server.channel_id);
+    const channel = await client.channels.fetch(channelId);
     if (!channel?.isTextBased() || !("send" in channel)) return;
     await (channel as TextChannel).send({ content: text, allowedMentions: { parse: [] } });
   } catch (error) { console.error(`Could not post to ${server.name}'s Discord channel: ${String(error)}`); }
@@ -64,29 +79,34 @@ async function newLines(server: Server) {
 }
 
 async function watchServers() {
+  const outbound: Action[] = ["chat_to_discord", "online", "offline", "join", "leave", "kills", "achievements"];
+  const watchedServers = servers.filter((server) => outbound.some((action) => server[action] && channelFor(server, action)));
   while (true) {
-    for (const server of servers) {
+    for (const server of watchedServers) {
       try {
         const active = await hasSession(server.session);
         const previous = running.get(server.id);
         running.set(server.id, active);
         if (previous === undefined) ready.set(server.id, active);
         else if (previous && !active) {
-          if (server.status) await announce(server, `🔴 **${server.name}** is offline.`);
+          await announce(server, "offline", `🔴 **${server.name}** is offline.`);
           ready.set(server.id, false);
         } else if (!previous && active) ready.set(server.id, false);
         for (const line of await newLines(server)) {
           if (active && !ready.get(server.id) && line.includes("Done (")) {
             ready.set(server.id, true);
-            if (server.status) await announce(server, `🟢 **${server.name}** is online.`);
+            await announce(server, "online", `🟢 **${server.name}** is online.`);
           }
           const chat = line.match(/\]: <([^<>]{1,32})> (.+)$/);
-          if (server.chat && chat) { await announce(server, `**${clean(chat[1], 32)}:** ${clean(chat[2])}`); continue; }
-          if (!server.joins) continue;
+          if (chat) { await announce(server, "chat_to_discord", `**${clean(chat[1], 32)}:** ${clean(chat[2])}`); continue; }
           const joined = line.match(/\]: ([A-Za-z0-9_]{1,16}) joined the game$/);
-          if (joined) await announce(server, `${joined[1]} joined **${server.name}**.`);
+          if (joined) { knownPlayers.get(server.id)?.add(joined[1]); await announce(server, "join", `${joined[1]} joined **${server.name}**.`); continue; }
           const left = line.match(/\]: ([A-Za-z0-9_]{1,16}) left the game$/);
-          if (left) await announce(server, `${left[1]} left **${server.name}**.`);
+          if (left) { await announce(server, "leave", `${left[1]} left **${server.name}**.`); continue; }
+          const achievement = line.match(/\]: ([A-Za-z0-9_]{1,16}) has (?:made the advancement|completed the challenge|reached the goal) \[([^\]]{1,100})\]$/);
+          if (achievement) { await announce(server, "achievements", `🏆 **${achievement[1]}** earned **${clean(achievement[2], 100)}**.`); continue; }
+          const kill = line.match(/\]: ([A-Za-z0-9_]{1,16}) (?:was (?:slain|shot|killed|blown up|impaled|squashed|pummeled)|drowned|burned to death|fell from a high place|hit the ground too hard|experienced kinetic energy|tried to swim in lava|went up in flames|froze to death|withered away|was fireballed|was killed by magic|was poked to death|was struck by lightning) by ([A-Za-z0-9_]{1,16})(?: using .*)?$/);
+          if (kill && kill[1] !== kill[2] && knownPlayers.get(server.id)?.has(kill[2])) await announce(server, "kills", `⚔️ **${kill[2]}** killed **${kill[1]}** on **${server.name}**.`);
         }
       } catch (error) { console.error(`Could not read ${server.name}: ${String(error)}`); }
     }
@@ -96,10 +116,11 @@ async function watchServers() {
 
 client.on(Events.MessageCreate, (message) => {
   if (!message.guild || message.author.bot || message.webhookId) return;
-  const server = servers.find((item) => item.chat && item.channel_id === message.channel.id);
-  if (!server || !message.content.trim()) return;
-  void sendToMinecraft(server, clean(message.author.displayName, 40), clean(message.content))
-    .catch((error) => console.error(`Could not deliver Discord chat to ${server.name}: ${String(error)}`));
+  if (!message.content.trim()) return;
+  for (const server of servers.filter((item) => item.chat_to_minecraft && channelFor(item, "chat_to_minecraft") === message.channel.id)) {
+    void sendToMinecraft(server, clean(message.author.displayName, 40), clean(message.content))
+      .catch((error) => console.error(`Could not deliver Discord chat to ${server.name}: ${String(error)}`));
+  }
 });
 client.once(Events.ClientReady, () => { void watchServers(); });
 client.on(Events.Error, (error) => console.error(`Discord connection error: ${String(error)}`));
