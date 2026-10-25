@@ -2,15 +2,18 @@ import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
-import { Download, Package, RefreshCw, Search } from "lucide-react";
+import { Download, Heart, Package, RefreshCw, Search } from "lucide-react";
 import { serverFiles } from "../lib/serverFiles";
 import type { ServerFileEntry } from "../lib/serverFiles";
 import { packageLoader } from "../lib/serverSoftware";
 import type { PackageKind } from "../lib/serverSoftware";
 import { serverProfiles } from "../lib/serverProfiles";
 import type { InstalledPackage } from "../lib/serverProfiles";
+import { readPackageFavorites, savePackageFavorites } from "../lib/packageFavorites";
+import type { FavoritePackage } from "../lib/packageFavorites";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { SearchField } from "./SearchField";
+import { PackageConfigPanel } from "./PackageConfigPanel";
 
 type Project = { id: string; title: string; description: string; author: string; iconUrl: string | null; downloads: number; badges?: ("required" | "optional" | "server")[] };
 type Version = { id: string; name: string; versionNumber: string; requiredDependencies: number };
@@ -77,6 +80,7 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software, i
   const [sort, setSort] = useState("relevance");
   const [catalogKind, setCatalogKind] = useState<"mod" | "modpack">("mod");
   const [badgeFilter, setBadgeFilter] = useState("all");
+  const [favorites, setFavorites] = useState(readPackageFavorites);
   const [packPreview, setPackPreview] = useState<PackPreview | null>(null);
   const [includeOptional, setIncludeOptional] = useState(false);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -86,7 +90,9 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software, i
   const [selectedVersionId, setSelectedVersionId] = useState("");
   const [installed, setInstalled] = useState<ServerFileEntry[]>([]);
   const [installedSearch, setInstalledSearch] = useState("");
+  const [installedFavoritesOnly, setInstalledFavoritesOnly] = useState(false);
   const [installedPackages, setInstalledPackages] = useState<InstalledPackage[]>([]);
+  const [configPackage, setConfigPackage] = useState<{ title: string; filename: string } | null>(null);
   const [plan, setPlan] = useState<PlanEntry[]>([]);
   const [loadingPlan, setLoadingPlan] = useState(false);
   const [loadingInstalled, setLoadingInstalled] = useState(true);
@@ -161,6 +167,7 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software, i
 
   function changeCatalog(next: "mod" | "modpack") {
     setCatalogKind(next);
+    setBadgeFilter("all");
     setProjects([]);
     setHasSearched(false);
     setSelectedProject(null);
@@ -175,6 +182,7 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software, i
 
   async function search(event?: FormEvent<HTMLFormElement>, nextBadge = badgeFilter) {
     event?.preventDefault();
+    if (nextBadge === "favourites") { setHasSearched(true); setSelectedProject(null); return; }
     if (!gameVersion) return;
     setSearching(true);
     setError(null);
@@ -285,20 +293,39 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software, i
   }
 
   const selectedVersion = versions.find((version) => version.id === selectedVersionId);
+  const favoriteProjects = favorites.filter((item) => item.kind === kind && !item.id.startsWith("jar:")
+    && (!query.trim() || [item.title, item.description, item.author].some((value) => value.toLowerCase().includes(query.trim().toLowerCase()))));
+  const visibleProjects: Project[] = badgeFilter === "favourites" ? favoriteProjects.map(({ id, title, description, author, iconUrl, downloads, badges }) => ({ id, title, description, author, iconUrl, downloads, badges })) : projects;
+  function isFavorite(id: string) { return favorites.some((item) => item.kind === kind && item.id === id); }
+  function toggleFavorite(project: FavoritePackage) {
+    const removing = isFavorite(project.id);
+    const next = removing
+      ? favorites.filter((item) => item.kind !== kind || item.id !== project.id)
+      : [...favorites, project];
+    try {
+      savePackageFavorites(next);
+      setFavorites(next);
+      if (removing && badgeFilter === "favourites" && selectedProject?.id === project.id) setSelectedProject(null);
+    }
+    catch (cause) { setError(`Could not save favourites: ${errorText(cause)}`); }
+  }
   const selectedInstalled = installedPackages.find((item) => item.kind === kind && item.projectId === selectedProject?.id && installed.some((file) => file.name === item.filename));
   const updating = selectedInstalled && selectedInstalled.versionId !== selectedVersionId;
   const normalizedInstalledSearch = installedSearch.trim().toLowerCase();
   const visibleInstalled = installed.filter((entry) => {
     const record = installedPackages.find((item) => item.kind === kind && item.filename === entry.name);
-    return !normalizedInstalledSearch || [entry.name, record?.title ?? "", ...(record?.requiredBy ?? [])]
-      .some((value) => value.toLowerCase().includes(normalizedInstalledSearch));
+    const id = record?.projectId ?? `jar:${entry.name.toLowerCase()}`;
+    return (!installedFavoritesOnly || isFavorite(id)) && (!normalizedInstalledSearch || [entry.name, record?.title ?? "", ...(record?.requiredBy ?? [])]
+      .some((value) => value.toLowerCase().includes(normalizedInstalledSearch)));
   });
   const dependencyFiles = visibleInstalled.filter((entry) => installedPackages.some((item) => item.kind === kind && item.filename === entry.name && !item.direct && item.requiredBy.length > 0));
   const primaryFiles = visibleInstalled.filter((entry) => !dependencyFiles.includes(entry));
 
   function installedRow(entry: ServerFileEntry) {
     const record = installedPackages.find((item) => item.kind === kind && item.filename === entry.name);
-    return <li key={entry.path}><Package size={16} aria-hidden="true" /><span className="packages-installed-copy" title={entry.name}><strong>{record?.title ?? entry.name}</strong>{record && <small>{entry.name}</small>}{record?.requiredBy.length ? <em className="packages-tag packages-tag-dependency">Dependency for {record.requiredBy.join(", ")}</em> : null}</span><small>{formatSize(entry.size)}</small>{record && <span className="packages-installed-actions"><button type="button" className="button button-quiet" aria-label={`Update ${record.title}`} disabled={busy || !gameVersion || record.requiredBy.length > 0} onClick={() => void chooseProject({ id: record.projectId, title: record.title, description: "", author: "", iconUrl: null, downloads: 0 })}>Update</button><button type="button" className="button button-quiet" aria-label={`Remove ${record.title}`} disabled={busy || !canInstall || (kind === "plugin" && record.requiredBy.length > 0)} onClick={() => void removePackage(record)}>Remove</button></span>}</li>;
+    const id = record?.projectId ?? `jar:${entry.name.toLowerCase()}`;
+    const title = record?.title ?? entry.name;
+    return <li key={entry.path}><Package size={16} aria-hidden="true" /><span className="packages-installed-copy" title={entry.name}><button type="button" className="packages-installed-open" onClick={() => setConfigPackage({ title, filename: entry.name })} aria-label={`Configure ${title}`}>{title}</button>{record && <small>{entry.name}</small>}{isFavorite(id) && <em className="packages-tag packages-tag-favorite">Favourite</em>}{record?.requiredBy.length ? <em className="packages-tag packages-tag-dependency">Dependency for {record.requiredBy.join(", ")}</em> : null}</span><small>{formatSize(entry.size)}</small><button type="button" className="packages-favorite" aria-label={`${isFavorite(id) ? "Remove" : "Add"} ${title} ${isFavorite(id) ? "from" : "to"} favourites`} aria-pressed={isFavorite(id)} onClick={() => toggleFavorite({ kind, id, title, description: "", author: "", iconUrl: null, downloads: 0 })}><Heart size={16} fill={isFavorite(id) ? "currentColor" : "none"} aria-hidden="true" /></button>{record && <span className="packages-installed-actions"><button type="button" className="button button-quiet" aria-label={`Update ${record.title}`} disabled={busy || !gameVersion || record.requiredBy.length > 0} onClick={() => void chooseProject({ id: record.projectId, title: record.title, description: "", author: "", iconUrl: null, downloads: 0 })}>Update</button><button type="button" className="button button-quiet" aria-label={`Remove ${record.title}`} disabled={busy || !canInstall || (kind === "plugin" && record.requiredBy.length > 0)} onClick={() => void removePackage(record)}>Remove</button></span>}</li>;
   }
 
   useEffect(() => {
@@ -320,6 +347,8 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software, i
     return () => { planRequest.current += 1; };
   }, [profileId, kind, catalogKind, gameVersion, loader, selectedProject?.id, selectedVersionId]);
 
+  if (configPackage) return <section className="packages-panel" aria-label={`${configPackage.title} configuration`}><PackageConfigPanel profileId={profileId} remote={remote} canEdit={canInstall} kind={kind} title={configPackage.title} filename={configPackage.filename} onClose={() => setConfigPackage(null)} /></section>;
+
   return <section className="packages-panel" aria-label={kind === "mod" ? "Mods" : "Plugins"}>
     <header className="packages-header">
       <h2>{kind === "mod" ? "Mods" : "Plugins"}</h2>
@@ -329,7 +358,7 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software, i
         {kind === "mod" && <div className="packages-mode" role="group" aria-label="Browse type"><button type="button" aria-pressed={catalogKind === "mod"} onClick={() => changeCatalog("mod")}>Mods</button><button type="button" aria-pressed={catalogKind === "modpack"} onClick={() => changeCatalog("modpack")}>Modpacks</button></div>}
         <form className="packages-search-form" onSubmit={(event) => void search(event)}>
           <label htmlFor="package-query">Search Modrinth</label>
-          <div className="packages-query"><input id="package-query" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={kind === "plugin" ? "Search plugins or browse popular" : catalogKind === "modpack" ? "Search modpacks or browse popular" : "Search mods or browse popular"} maxLength={100} disabled={busy} /><button className="button button-primary" type="submit" disabled={searching || busy || !gameVersion}><Search size={15} aria-hidden="true" /> {searching ? "Searching…" : query ? "Search" : "Browse"}</button></div>
+          <div className="packages-query"><input id="package-query" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={kind === "plugin" ? "Search plugins or browse popular" : catalogKind === "modpack" ? "Search modpacks or browse popular" : "Search mods or browse popular"} maxLength={100} disabled={busy} /><button className="button button-primary" type="submit" disabled={searching || busy || (!gameVersion && badgeFilter !== "favourites")}><Search size={15} aria-hidden="true" /> {searching ? "Searching…" : query ? "Search" : "Browse"}</button></div>
           <div className="packages-search-options">
             <div className="packages-sort"><label htmlFor="package-sort">Sort results</label><Select value={sort} onValueChange={(value) => setSort(value ?? "relevance")} disabled={busy}><SelectTrigger id="package-sort"><SelectValue>{(value) => ({ relevance: "Relevance", downloads: "Most downloaded", updated: "Recently updated" })[value as "relevance" | "downloads" | "updated"] ?? "Relevance"}</SelectValue></SelectTrigger><SelectContent><SelectItem value="relevance">Relevance</SelectItem><SelectItem value="downloads">Most downloaded</SelectItem><SelectItem value="updated">Recently updated</SelectItem></SelectContent></Select></div>
             <dl className="packages-compatibility">
@@ -338,16 +367,16 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software, i
             </dl>
             {!fixedLoader && <div className="packages-loader-select"><label htmlFor="package-loader">Server loader</label><Select value={loader} onValueChange={(value) => changeCompatibility(value ?? availableLoaders[0].id)} disabled={busy}><SelectTrigger id="package-loader"><SelectValue>{(value) => loaders[kind].find((item) => item.id === value)?.label ?? "Choose loader"}</SelectValue></SelectTrigger><SelectContent>{availableLoaders.map((item) => <SelectItem key={item.id} value={item.id}>{item.label}</SelectItem>)}</SelectContent></Select></div>}
           </div>
-          {kind === "mod" && catalogKind === "mod" && <div className="packages-filters" role="group" aria-label="Player installation requirement">{["all", "required", "optional", "server"].map((badge) => <button key={badge} type="button" className="packages-filter" aria-pressed={badgeFilter === badge} disabled={searching || busy || !gameVersion} onClick={() => { setBadgeFilter(badge); void search(undefined, badge); }}>{badge === "all" ? "All" : badge[0].toUpperCase() + badge.slice(1)}</button>)}</div>}
+          {(kind === "plugin" || catalogKind === "mod") && <div className="packages-filters" role="group" aria-label="Filter packages">{(kind === "mod" ? ["all", "required", "optional", "server", "favourites"] : ["all", "favourites"]).map((badge) => <button key={badge} type="button" className="packages-filter" aria-pressed={badgeFilter === badge} disabled={searching || busy || (badge !== "favourites" && !gameVersion)} onClick={() => { setBadgeFilter(badge); void search(undefined, badge); }}>{badge === "favourites" && <Heart size={13} fill={badgeFilter === badge ? "currentColor" : "none"} aria-hidden="true" />}{badge === "all" ? "All" : badge[0].toUpperCase() + badge.slice(1)}</button>)}</div>}
           {versionError && <p className="files-error" role="alert">{versionError} <button type="button" className="button button-quiet" onClick={() => setVersionRetry((value) => value + 1)}>Retry</button></p>}
         </form>
         {error && <p className="files-error" role="alert">{error}</p>}
         {message && <p className="install-success" role="status">{message}</p>}
-        {(projects.length > 0 || selectedProject) && <div className="packages-browser">
-          <div className="packages-results" aria-label="Search results">{projects.map((project) => <button key={project.id} type="button" className={`packages-result${selectedProject?.id === project.id ? " packages-result-selected" : ""}`} onClick={() => void chooseProject(project)} disabled={busy}>
+        {(visibleProjects.length > 0 || selectedProject) && <div className="packages-browser">
+          <div className="packages-results" aria-label="Search results">{visibleProjects.map((project) => <div className="packages-result-row" key={project.id}><button type="button" className={`packages-result${selectedProject?.id === project.id ? " packages-result-selected" : ""}`} onClick={() => void chooseProject(project)} disabled={busy}>
             <span className="packages-result-icon">{project.iconUrl ? <img src={project.iconUrl} alt="" loading="lazy" /> : <Package size={20} aria-hidden="true" />}</span>
-            <span className="packages-result-copy"><strong>{project.title}</strong><span>{project.description}</span><small>by {project.author} · {Intl.NumberFormat(undefined, { notation: "compact" }).format(project.downloads)} downloads</small>{kind === "mod" && catalogKind === "mod" && project.badges?.length ? <span className="packages-badges">{project.badges.map((badge) => <em key={badge} className="packages-tag">{badge[0].toUpperCase() + badge.slice(1)}</em>)}</span> : null}{installedPackages.some((item) => item.kind === kind && item.projectId === project.id && installed.some((file) => file.name === item.filename)) && <em>Installed</em>}</span>
-          </button>)}</div>
+            <span className="packages-result-copy"><strong>{project.title}</strong><span>{project.description}</span><small>by {project.author} · {Intl.NumberFormat(undefined, { notation: "compact" }).format(project.downloads)} downloads</small>{(isFavorite(project.id) || kind === "mod" && catalogKind === "mod" && !!project.badges?.length) && <span className="packages-badges">{isFavorite(project.id) && <em className="packages-tag packages-tag-favorite">Favourite</em>}{kind === "mod" && catalogKind === "mod" && project.badges?.map((badge) => <em key={badge} className="packages-tag">{badge[0].toUpperCase() + badge.slice(1)}</em>)}</span>}{installedPackages.some((item) => item.kind === kind && item.projectId === project.id && installed.some((file) => file.name === item.filename)) && <em>Installed</em>}</span>
+          </button><button type="button" className="packages-favorite" aria-label={`${isFavorite(project.id) ? "Remove" : "Add"} ${project.title} ${isFavorite(project.id) ? "from" : "to"} favourites`} aria-pressed={isFavorite(project.id)} onClick={() => toggleFavorite({ ...project, kind })}><Heart size={16} fill={isFavorite(project.id) ? "currentColor" : "none"} aria-hidden="true" /></button></div>)}</div>
           <div className="packages-version">
             {selectedProject ? <>
               <div className="packages-detail-heading">{selectedProject.iconUrl && <img src={selectedProject.iconUrl} alt="" />}<div><h3>{selectedProject.title}</h3>{selectedProject.author && <p>by {selectedProject.author}</p>}</div></div>
@@ -379,11 +408,12 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software, i
             </> : <p className="state-message">Select a result to see compatible releases.</p>}
           </div>
         </div>}
-        {hasSearched && projects.length === 0 && <p className="state-message">No matching {kind === "plugin" ? "plugins" : catalogKind === "modpack" ? "modpacks" : "mods"} found for this server. Try another search or sort order.</p>}
+        {hasSearched && visibleProjects.length === 0 && <p className="state-message">{badgeFilter === "favourites" ? `No favourite ${kind === "plugin" ? "plugins" : "mods"}${query.trim() ? " match this search" : " yet"}.` : `No matching ${kind === "plugin" ? "plugins" : catalogKind === "modpack" ? "modpacks" : "mods"} found for this server. Try another search or sort order.`}</p>}
       </div>
       <aside className="packages-installed" aria-label={`Installed ${folder}`}>
         <div className="packages-installed-heading"><div><h3>Installed {folder}</h3><p>JAR files in this server’s {folder}/ folder</p></div><button type="button" className="button button-quiet" onClick={() => void refreshInstalled()} disabled={loadingInstalled}><RefreshCw size={14} aria-hidden="true" /> Refresh</button></div>
         <SearchField id={`installed-${folder}-search`} label={`Search installed ${folder}`} placeholder="Name or JAR file" value={installedSearch} onChange={setInstalledSearch} />
+        <div className="packages-filters" role="group" aria-label={`Filter installed ${folder}`}><button type="button" className="packages-filter" aria-pressed={!installedFavoritesOnly} onClick={() => setInstalledFavoritesOnly(false)}>All</button><button type="button" className="packages-filter" aria-pressed={installedFavoritesOnly} onClick={() => setInstalledFavoritesOnly(true)}><Heart size={13} fill={installedFavoritesOnly ? "currentColor" : "none"} aria-hidden="true" /> Favourites</button></div>
         {installedError && <p className="files-error" role="alert">{installedError}</p>}
         {loadingInstalled ? <p className="state-message">Loading {folder}…</p> : installed.length === 0 ? <p className="state-message">No {folder} installed yet.</p> : <>
           {visibleInstalled.length === 0 && <p className="state-message">No matching installed {folder}.</p>}
