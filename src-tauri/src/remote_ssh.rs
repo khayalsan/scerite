@@ -22,7 +22,7 @@ use russh_sftp::{
     protocol::{FileAttributes, FileType, OpenFlags, Packet, StatusCode},
 };
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 use tokio::{
     io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
@@ -3522,6 +3522,31 @@ pub struct VelocityProxyUsage {
     memory_bytes: Option<u64>,
 }
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VelocitySetupProgress {
+    profile_id: Uuid,
+    step: &'static str,
+}
+
+fn velocity_progress(app: &AppHandle, profile_id: Uuid, step: &'static str) {
+    let _ = app.emit("velocity-setup-progress", VelocitySetupProgress { profile_id, step });
+}
+
+fn velocity_startup_diagnostic(session: &RemoteConnection, proxy_root: &str, proxy_session: &str) -> String {
+    let log_path = format!("{proxy_root}/logs/latest.log");
+    let command = format!("if [ -f {} ]; then tail -c 6000 -- {}; else tmux capture-pane -p -t {} -S -80 2>/dev/null; fi",
+        shell_quote(&log_path), shell_quote(&log_path), shell_quote(proxy_session));
+    let Ok(result) = execute(session, &command) else { return String::new(); };
+    let output = String::from_utf8_lossy(&result.stdout);
+    let lines = output.lines().filter(|line| {
+        let lower = line.to_ascii_lowercase();
+        !["secret", "password", "token"].iter().any(|word| lower.contains(word))
+    }).rev().take(12).collect::<Vec<_>>();
+    let message = lines.into_iter().rev().collect::<Vec<_>>().join("\n");
+    message.chars().filter(|character| !character.is_control() || *character == '\n').take(1800).collect()
+}
+
 fn velocity_root(sftp: &RemoteSftp, profile: &ServerProfile, environment: &ServerEnvironment) -> Result<String, String> {
     let root = remote_root_with_sftp(sftp, &environment.root_directory)?;
     let folder = profile.id.simple().to_string();
@@ -3618,6 +3643,7 @@ pub async fn enable_velocity_on_demand(
     app: AppHandle, profile_id: Uuid, profiles: State<'_, ServerProfileStore>,
     remote_sessions: State<'_, Arc<RemoteSessionManager>>,
 ) -> Result<VelocityOnDemandStatus, String> {
+    velocity_progress(&app, profile_id, "Checking the server");
     let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
     if !matches!(profile.installed_software.as_deref(), Some("paper" | "purpur")) {
         return Err("On-demand Velocity start currently supports remote Paper and Purpur servers.".into());
@@ -3642,10 +3668,14 @@ pub async fn enable_velocity_on_demand(
         Ok(())
     }).await?;
 
+    velocity_progress(&app, profile_id, "Preparing Java 25");
     let client = crate::vanilla_install::client()?;
     let java = crate::vanilla_install::install_remote_java(&client, &app, &profile, &environment, Arc::clone(&sessions), 25).await?;
+    velocity_progress(&app, profile_id, "Downloading Velocity");
     let velocity_jar = velocity_download::stable_velocity_jar(&client).await?;
+    let progress_app = app.clone();
     run_remote(profile, environment.clone(), sessions, move |session, profile| {
+        velocity_progress(&progress_app, profile.id, "Writing proxy files");
         if remote_is_running(session, profile)? != Some(false) { return Err("Stop the server before enabling on-demand startup.".into()); }
         let sftp = session.sftp()?;
         let root = remote_root_with_sftp(&sftp, configured_remote_root(profile)?)?;
@@ -3691,7 +3721,7 @@ pub async fn enable_velocity_on_demand(
             shell_quote(&session_id), shell_quote(&session_id), shell_quote(&session_id), shell_quote(&session_id), shell_quote(&root), shell_quote(&launch_command), shell_quote(&session_id));
         let stop = format!("#!/bin/sh\ntmux send-keys -t {} -l stop\ntmux send-keys -t {} Enter\n", shell_quote(&session_id), shell_quote(&session_id));
         let plugin_config = format!("serverName=backend\nbackendPort={backend_port}\nidleSeconds=300\nstartScript={proxy_root}/start.sh\nstopScript={proxy_root}/stop.sh\n");
-        let proxy_config = format!("config-version = \"2.9\"\nbind = \"0.0.0.0:{public_port}\"\nonline-mode = true\nforce-key-authentication = true\nplayer-info-forwarding-mode = \"modern\"\nforwarding-secret-file = \"forwarding.secret\"\n[servers]\nbackend = \"127.0.0.1:{backend_port}\"\ntry = [\"backend\"]\n");
+        let proxy_config = velocity_download::proxy_config(public_port, backend_port);
         velocity_write(&sftp, &format!("{proxy_root}/velocity.jar"), &velocity_jar)?;
         velocity_write(&sftp, &format!("{proxy_root}/plugins/scerite-velocity.jar"), SCERITE_VELOCITY_JAR)?;
         velocity_write(&sftp, &format!("{plugin_folder}/config.properties"), plugin_config.as_bytes())?;
@@ -3707,23 +3737,36 @@ pub async fn enable_velocity_on_demand(
             return Err(error);
         }
         let start_result = (|| {
-            let start_proxy = execute(session, &format!("tmux new-session -d -s {} -c {} {}",
-                shell_quote(&proxy_session), shell_quote(&proxy_root), shell_quote(&format!("{} -jar velocity.jar", shell_quote(&java)))))?;
-            if start_proxy.exit_code != 0 {
-                return Err(remote_command_error("Could not start Velocity", start_proxy));
-            }
+            velocity_progress(&progress_app, profile.id, "Starting Velocity");
+            let start_proxy = execute(session, &format!("tmux new-session -d -s {} -c {}",
+                shell_quote(&proxy_session), shell_quote(&proxy_root)))?;
+            if start_proxy.exit_code != 0 { return Err(remote_command_error("Could not start Velocity", start_proxy)); }
+            let remain = execute(session, &format!("tmux set-window-option -t {} remain-on-exit on", shell_quote(&proxy_session)))?;
+            if remain.exit_code != 0 { return Err(remote_command_error("Could not keep the Velocity console open", remain)); }
+            let launch = execute(session, &format!("tmux send-keys -t {} -l {} && tmux send-keys -t {} Enter",
+                shell_quote(&proxy_session), shell_quote(&format!("exec {} -jar velocity.jar", shell_quote(&java))), shell_quote(&proxy_session)))?;
+            if launch.exit_code != 0 { return Err(remote_command_error("Could not launch Velocity", launch)); }
+            velocity_progress(&progress_app, profile.id, "Waiting for the proxy and plugin");
+            let mut port_open = false;
             for _ in 0..30 {
                 let plugin_log = execute(session, &format!("tmux capture-pane -p -t {} -S -200 2>/dev/null | grep -F 'Scerite on-demand backend ready'",
                     shell_quote(&proxy_session)))?;
-                if plugin_log.exit_code == 0 && remote_listening_ports(session)?.contains(&public_port) {
+                port_open = remote_listening_ports(session)?.contains(&public_port);
+                if plugin_log.exit_code == 0 && port_open {
                     return velocity_write(&sftp, &format!("{proxy_root}/manifest.json"),
                         serde_json::to_string(&manifest).map_err(|error| error.to_string())?.as_bytes());
                 }
+                let pane = execute(session, &format!("tmux display-message -p -t {} '#{{pane_dead}}' 2>/dev/null", shell_quote(&proxy_session)))?;
+                if String::from_utf8_lossy(&pane.stdout).trim() == "1" { break; }
                 std::thread::sleep(Duration::from_secs(1));
             }
-            Err("Velocity did not open its public port. Check the Velocity console output.".into())
+            let reason = if port_open { "Velocity opened its port, but the Scerite plugin did not initialize." }
+                else { "Velocity did not open its public port." };
+            let diagnostic = velocity_startup_diagnostic(session, &proxy_root, &proxy_session);
+            if diagnostic.is_empty() { Err(reason.into()) } else { Err(format!("{reason}\n{diagnostic}")) }
         })();
         if let Err(error) = start_result {
+            velocity_progress(&progress_app, profile.id, "Restoring server settings");
             let _ = execute(session, &format!("tmux kill-session -t {} 2>/dev/null", shell_quote(&proxy_session)));
             let properties_restore = velocity_write(&sftp, &properties_path, manifest.original_properties.as_bytes());
             let paper_restore = velocity_write(&sftp, &paper_path, manifest.original_paper.as_bytes());
@@ -3732,6 +3775,7 @@ pub async fn enable_velocity_on_demand(
             }
             return Err(error);
         }
+        velocity_progress(&progress_app, profile.id, "Ready");
         Ok(VelocityOnDemandStatus { enabled: true, public_port: Some(public_port), backend_port: Some(backend_port), proxy_running: true })
     }).await
 }

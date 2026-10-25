@@ -31,6 +31,7 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 ### Changed
 
+- Velocity setup now shows each installation step, reports proxy startup errors, and avoids Velocity's sample forced-host entries. Its card aligns with the other server settings.
 - Remote environment cards and server navigation now show environment names without repeating SSH login details.
 - Player statistics are now grouped into separate panels by Minecraft category, including Custom, Dropped, Killed, Picked up, and Used.
 - Saved servers now show their Minecraft multiplayer icons in the Servers list when available.

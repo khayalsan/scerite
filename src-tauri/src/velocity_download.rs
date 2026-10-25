@@ -68,6 +68,10 @@ pub fn backend_properties(original: &str, port: u16) -> String {
     set_property(&updated, "online-mode", "false")
 }
 
+pub fn proxy_config(public_port: u16, backend_port: u16) -> String {
+    format!("config-version = \"2.9\"\nbind = \"0.0.0.0:{public_port}\"\nonline-mode = true\nforce-key-authentication = true\nplayer-info-forwarding-mode = \"modern\"\nforwarding-secret-file = \"forwarding.secret\"\n[servers]\nbackend = \"127.0.0.1:{backend_port}\"\ntry = [\"backend\"]\n[forced-hosts]\n")
+}
+
 pub fn restore_backend_properties(current: &str, original: &str, patched: &str) -> Result<String, String> {
     let mut restored = current.to_owned();
     for key in ["server-port", "server-ip", "online-mode"] {
@@ -203,6 +207,14 @@ mod tests {
         assert!(patched.contains("server-port=25566\n"));
         assert!(patched.contains("server-ip=127.0.0.1\n"));
         assert!(patched.contains("online-mode=false\n"));
+    }
+
+    #[test]
+    fn proxy_config_clears_velocity_sample_hosts() {
+        let config = proxy_config(25565, 25566);
+        assert!(config.contains("[servers]\nbackend = \"127.0.0.1:25566\"\ntry = [\"backend\"]\n"));
+        assert!(config.ends_with("[forced-hosts]\n"));
+        assert!(!config.contains("lobby.example.com"));
     }
 
     #[test]
