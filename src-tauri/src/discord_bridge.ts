@@ -6,7 +6,8 @@ import { promisify } from "node:util";
 import { Client, EmbedBuilder, Events, GatewayIntentBits, TextChannel, type Webhook } from "discord.js";
 
 type Action = "chat_to_discord" | "chat_to_minecraft" | "online" | "offline" | "join" | "leave" | "kills" | "achievements";
-type Server = { id: string; name: string; directory: string; session: string; channel_id: string; chat_to_minecraft_template?: string } & Record<Action, boolean> & Record<`${Action}_channel_id`, string>;
+type Server = { id: string; name: string; directory: string; session: string; channel_id: string; minecraft_version?: string | null; chat_to_minecraft_template?: string } & Record<Action, boolean> & Record<`${Action}_channel_id`, string>;
+type AttachmentLink = { label: string; url: string };
 const defaultMinecraftTemplate = "<{color:blue}🎮{color:reset}{name}> {message}";
 const legacyMinecraftTemplates = new Set(["<🎮{username}> {message}", "<🎮{color:blue}{name}{color:reset}> {message}", "<{color:blue}🎮{name}{color:reset}> {message}"]);
 const minecraftColors = new Set(["black", "dark_blue", "dark_green", "dark_aqua", "dark_red", "dark_purple", "gold", "gray", "dark_gray", "blue", "green", "aqua", "red", "light_purple", "yellow", "white"]);
@@ -43,8 +44,15 @@ async function hasSession(name: string) {
   catch { return false; }
 }
 
-function minecraftChat(template: string, username: string, name: string, content: string) {
-  const extra: { text: string; color?: string }[] = [];
+function modernClickEvents(version?: string | null) {
+  const match = /^(\d+)\.(\d+)(?:\.(\d+))?/.exec(version ?? "");
+  if (!match) return true;
+  const [, major, minor, patch] = match.map(Number);
+  return major > 1 || major === 1 && (minor > 21 || minor === 21 && patch >= 5);
+}
+
+function minecraftChat(template: string, username: string, name: string, content: string, attachments: AttachmentLink[], modern: boolean) {
+  const extra: { text: string; color?: string; underlined?: boolean; click_event?: { action: string; url: string }; clickEvent?: { action: string; value: string } }[] = [];
   const tokens = /\{(username|name|message|color:[^{}]+)\}/g;
   let color: string | undefined;
   let offset = 0;
@@ -69,10 +77,17 @@ function minecraftChat(template: string, username: string, name: string, content
     offset = match.index + match[0].length;
   }
   add(template.slice(offset));
+  for (const attachment of attachments) {
+    const separator = extra.length && !/\s$/.test(extra.at(-1)?.text ?? "") ? " " : "";
+    const link = { text: `${separator}[${attachment.label}]`, color: "aqua", underlined: true };
+    extra.push(modern
+      ? { ...link, click_event: { action: "open_url", url: attachment.url } }
+      : { ...link, clickEvent: { action: "open_url", value: attachment.url } });
+  }
   return { text: "", extra };
 }
 
-async function sendToMinecraft(server: Server, username: string, name: string, content: string) {
+async function sendToMinecraft(server: Server, username: string, name: string, content: string, attachments: AttachmentLink[]) {
   let available = false;
   for (let attempt = 0; attempt < 3; attempt++) {
     if (await hasSession(server.session)) { available = true; break; }
@@ -81,7 +96,7 @@ async function sendToMinecraft(server: Server, username: string, name: string, c
   if (!available) throw new Error("Minecraft console was unavailable after three checks");
   const savedTemplate = server.chat_to_minecraft_template;
   const template = !savedTemplate || legacyMinecraftTemplates.has(savedTemplate) ? defaultMinecraftTemplate : savedTemplate;
-  const command = `tellraw @a ${JSON.stringify(minecraftChat(template, username, name, content))}`;
+  const command = `tellraw @a ${JSON.stringify(minecraftChat(template, username, name, content, attachments, modernClickEvents(server.minecraft_version)))}`;
   await run("tmux", ["send-keys", "-t", server.session, command, "Enter"], { timeout: 5000 });
 }
 
@@ -204,10 +219,20 @@ async function watchServers() {
 
 client.on(Events.MessageCreate, (message) => {
   if (!message.guild || message.author.bot || message.webhookId) return;
-  if (!message.content.trim()) return;
+  if (!message.content.trim() && !message.attachments.size) return;
   const content = clean(message.content.replace(/<(?:a:|:)?([A-Za-z0-9_]+):\d+>/g, ":$1:"));
+  const attachments = message.attachments.map((attachment) => {
+    const type = attachment.contentType ?? "";
+    const label = type.startsWith("image/") || /\.(?:png|jpe?g|gif|webp|avif|bmp)$/i.test(attachment.name) ? "image"
+      : type.startsWith("video/") || /\.(?:mp4|mov|webm)$/i.test(attachment.name) ? "video"
+      : type.startsWith("audio/") || /\.(?:mp3|ogg|wav|m4a)$/i.test(attachment.name) ? "audio" : "file";
+    const url = attachment.proxyURL || attachment.url;
+    try { return new URL(url).protocol === "https:" ? { label, url } : null; }
+    catch { return null; }
+  }).filter((attachment): attachment is AttachmentLink => attachment !== null);
+  if (!content && !attachments.length) return;
   for (const server of servers.filter((item) => item.chat_to_minecraft && channelFor(item, "chat_to_minecraft") === message.channel.id)) {
-    void sendToMinecraft(server, clean(message.author.username, 40), clean(message.author.displayName, 40), content)
+    void sendToMinecraft(server, clean(message.author.username, 40), clean(message.author.displayName, 40), content, attachments)
       .catch((error) => console.error(`Could not deliver Discord message ${message.id} to ${server.name}: ${String(error)}`));
   }
 });

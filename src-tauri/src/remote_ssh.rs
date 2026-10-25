@@ -2898,6 +2898,7 @@ pub async fn enable_discord_bridge(
             config.push(serde_json::json!({
                 "id": server.profile_id,
                 "name": selected.name,
+                "minecraft_version": selected.installed_version,
                 "directory": directory,
                 "session": session_name(server.profile_id),
                 "profileId": server.profile_id,
