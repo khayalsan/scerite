@@ -21,8 +21,8 @@ use russh_sftp::{
     client::{SftpSession, error::Error as SftpError, rawsession::RawSftpSession},
     protocol::{FileAttributes, FileType, OpenFlags, Packet, StatusCode},
 };
-use serde::Serialize;
-use tauri::{AppHandle, State};
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter, State};
 use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 use tokio::{
     io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
@@ -41,12 +41,15 @@ use crate::server_port;
 use crate::terrain::{self, TerrainRequest, TerrainTile};
 use crate::server_files::validate_server_icon;
 use crate::world_management::{self, WorldBackup, WorldSettings};
+use crate::velocity_download;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_FILE_BYTES: u64 = 1024 * 1024;
 const MAX_CONSOLE_BYTES: u64 = 512 * 1024;
 const MAX_DIRECTORY_ENTRIES: usize = 1000;
 const CONNECTION_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+const SCERITE_VELOCITY_JAR: &[u8] = include_bytes!("../resources/scerite-velocity.jar");
+const SCERITE_VELOCITY_VERSION: &str = "1.1.1";
 
 pub struct RemoteSessionManager {
     sessions: Mutex<HashMap<Uuid, CachedConnection>>,
@@ -2684,6 +2687,322 @@ fn session_name(profile_id: Uuid) -> String {
     format!("scerite-{}", profile_id.simple())
 }
 
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscordBridgeServer {
+    profile_id: Uuid,
+    channel_id: String,
+    chat_to_discord: bool,
+    chat_to_minecraft: bool,
+    chat_to_minecraft_template: String,
+    online: bool,
+    offline: bool,
+    join: bool,
+    leave: bool,
+    kills: bool,
+    achievements: bool,
+    chat_to_discord_channel_id: String,
+    chat_to_minecraft_channel_id: String,
+    online_channel_id: String,
+    offline_channel_id: String,
+    join_channel_id: String,
+    leave_channel_id: String,
+    kills_channel_id: String,
+    achievements_channel_id: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscordBridgeStatus {
+    enabled: bool,
+    running: bool,
+    has_token: bool,
+    update_available: bool,
+    cpu_percent: Option<f32>,
+    memory_bytes: Option<u64>,
+    servers: Vec<DiscordBridgeServer>,
+}
+
+fn discord_bridge_profile(
+    profiles: &ServerProfileStore,
+    environment_id: Uuid,
+) -> Result<(ServerProfile, ServerEnvironment), String> {
+    let environment = profiles.environment(environment_id)?;
+    let profile = profiles.list()?.into_iter().find(|profile| {
+        matches!(&profile.target, ServerTarget::Remote { environment_id: id, .. } if *id == environment_id)
+    }).unwrap_or_else(|| ServerProfile {
+        id: environment_id,
+        name: environment.name.clone(),
+        target: ServerTarget::Remote {
+            environment_id,
+            directory: environment.root_directory.clone(),
+            launch: LocalLaunchConfig::default(),
+        },
+        installed_software: None,
+        installed_version: None,
+        installed_packages: Vec::new(),
+    });
+    Ok((profile, environment))
+}
+
+fn bridge_session_name(environment_id: Uuid) -> String {
+    format!("scerite-discord-{}", environment_id.simple())
+}
+
+fn bridge_directory(session: &RemoteConnection, environment: &ServerEnvironment) -> Result<String, String> {
+    let root = remote_root(session, &environment.root_directory)?;
+    let sftp = session.sftp()?;
+    let environment_folder = environment.id.simple().to_string();
+    let bridge_root = format!("{root}/runtimes/discord-bridge/{environment_folder}");
+    let mut path = root;
+    for part in ["runtimes", "discord-bridge", environment_folder.as_str()] {
+        path = format!("{path}/{part}");
+        match sftp.lstat_optional(Path::new(&path)) {
+            Ok(attrs) if attrs.file_type() == FileType::Dir => {},
+            Ok(_) => return Err("A Discord bridge folder is not a regular directory.".into()),
+            Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile => break,
+            Err(error) => return Err(format!("Could not inspect the Discord bridge folder: {error}")),
+        }
+    }
+    Ok(bridge_root)
+}
+
+fn bridge_file_exists(sftp: &RemoteSftp, path: &str) -> Result<bool, String> {
+    match sftp.lstat_optional(Path::new(path)) {
+        Ok(attrs) if attrs.file_type() == FileType::File => Ok(true),
+        Ok(_) => Err("A Discord bridge file is not a regular file.".into()),
+        Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile => Ok(false),
+        Err(error) => Err(format!("Could not inspect Discord bridge file: {error}")),
+    }
+}
+
+fn bridge_write(sftp: &RemoteSftp, path: &str, content: &[u8]) -> Result<(), String> {
+    let temporary = format!("{path}.{}.tmp", Uuid::new_v4().simple());
+    sftp.write_file_exclusive(Path::new(&temporary), content)?;
+    if let Err(error) = sftp.posix_rename(Path::new(&temporary), Path::new(path)) {
+        let _ = sftp.unlink(Path::new(&temporary));
+        return Err(format!("Could not save Discord bridge setup: {error}"));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn discord_bridge_status(
+    environment_id: Uuid,
+    profiles: State<'_, ServerProfileStore>,
+    remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<DiscordBridgeStatus, String> {
+    let (profile, environment) = discord_bridge_profile(&profiles, environment_id)?;
+    let session_name = bridge_session_name(environment_id);
+    run_remote(profile, environment.clone(), Arc::clone(remote_sessions.inner()), move |session, _| {
+        let root = bridge_directory(session, &environment)?;
+        let sftp = session.sftp()?;
+        let config_path = format!("{root}/servers.json");
+        let token_path = format!("{root}/token");
+        let enabled = bridge_file_exists(&sftp, &config_path)?;
+        let has_token = bridge_file_exists(&sftp, &token_path)?;
+        let script_path = format!("{root}/discord_bridge.ts");
+        let bundled = include_bytes!("discord_bridge.ts");
+        let update_available = enabled && (!bridge_file_exists(&sftp, &script_path)?
+            || sftp.read_prefix(Path::new(&script_path), bundled.len() + 1)? != bundled);
+        let servers = if enabled {
+            let value: serde_json::Value = serde_json::from_slice(&sftp.read_file(Path::new(&config_path))?)
+                .map_err(|error| format!("Could not read Discord bridge settings: {error}"))?;
+            value.as_array().ok_or_else(|| "Discord bridge settings are invalid.".to_owned())?
+                .iter().map(|item| {
+                    let mut item = item.clone();
+                    let object = item.as_object_mut().ok_or_else(|| "Discord bridge settings are invalid.".to_owned())?;
+                    let defaults = [("chatToDiscord", "chat"), ("chatToMinecraft", "chat"), ("online", "status"), ("offline", "status"), ("join", "joins"), ("leave", "joins")];
+                    for (field, legacy) in defaults {
+                        if !object.contains_key(field) { object.insert(field.into(), object.get(legacy).cloned().unwrap_or(serde_json::Value::Bool(true))); }
+                    }
+                    for field in ["kills", "achievements"] {
+                        if !object.contains_key(field) { object.insert(field.into(), serde_json::Value::Bool(true)); }
+                    }
+                    for field in ["chatToDiscordChannelId", "chatToMinecraftChannelId", "onlineChannelId", "offlineChannelId", "joinChannelId", "leaveChannelId", "killsChannelId", "achievementsChannelId"] {
+                        if !object.contains_key(field) { object.insert(field.into(), serde_json::Value::String(String::new())); }
+                    }
+                    if object.get("chatToMinecraftTemplate").and_then(serde_json::Value::as_str)
+                        .is_none_or(|value| matches!(value, "<🎮{username}> {message}" | "<🎮{color:blue}{name}{color:reset}> {message}" | "<{color:blue}🎮{name}{color:reset}> {message}")) {
+                        object.insert("chatToMinecraftTemplate".into(), serde_json::Value::String("<{color:blue}🎮{color:reset}{name}> {message}".into()));
+                    }
+                    serde_json::from_value(item)
+                        .map_err(|error| format!("Discord bridge settings are invalid: {error}"))
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        } else { Vec::new() };
+        let pane = execute(session, &format!("tmux display-message -p -t {} '#{{pane_pid}} #{{pane_dead}}' 2>/dev/null", shell_quote(&session_name)))?;
+        let pane_output = String::from_utf8_lossy(&pane.stdout);
+        let mut pane_parts = pane_output.split_whitespace();
+        let pid = pane_parts.next().and_then(|value| value.parse::<u32>().ok());
+        let running = pane.exit_code == 0 && pid.is_some() && pane_parts.next() == Some("0");
+        let (cpu_percent, memory_bytes) = if running {
+            let result = execute(session, &format!("ps -p {} -o %cpu=,rss=", pid.unwrap()))?;
+            if result.exit_code == 0 {
+                let output = String::from_utf8_lossy(&result.stdout);
+                let mut parts = output.split_whitespace();
+                (parts.next().and_then(|value| value.parse::<f32>().ok()), parts.next().and_then(|value| value.parse::<u64>().ok()).map(|value| value * 1024))
+            } else { (None, None) }
+        } else { (None, None) };
+        Ok(DiscordBridgeStatus { enabled, running, has_token, update_available, cpu_percent, memory_bytes, servers })
+    }).await
+}
+
+#[tauri::command]
+pub async fn enable_discord_bridge(
+    environment_id: Uuid,
+    token: String,
+    servers: Vec<DiscordBridgeServer>,
+    profiles: State<'_, ServerProfileStore>,
+    remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<(), String> {
+    let (profile, environment) = discord_bridge_profile(&profiles, environment_id)?;
+    let candidates = profiles.list()?;
+    let mut seen_profiles = std::collections::HashSet::new();
+    for server in &servers {
+        if !seen_profiles.insert(server.profile_id) {
+            return Err("Each server must appear only once.".into());
+        }
+        for channel in [&server.channel_id, &server.chat_to_discord_channel_id, &server.chat_to_minecraft_channel_id, &server.online_channel_id, &server.offline_channel_id, &server.join_channel_id, &server.leave_channel_id, &server.kills_channel_id, &server.achievements_channel_id] {
+            if !channel.is_empty() && (!(15..=22).contains(&channel.len()) || !channel.bytes().all(|byte| byte.is_ascii_digit())) {
+                return Err("Enter a valid numeric Discord channel ID or leave it blank.".into());
+            }
+        }
+        if !server.chat_to_minecraft_template.contains("{message}")
+            || server.chat_to_minecraft_template.chars().count() > 200
+            || server.chat_to_minecraft_template.chars().any(char::is_control) {
+            return Err("The Discord-to-game format must include {message}, be at most 200 characters, and stay on one line.".into());
+        }
+        if !candidates.iter().any(|candidate| candidate.id == server.profile_id && matches!(&candidate.target, ServerTarget::Remote { environment_id: id, .. } if *id == environment_id)) {
+            return Err("A selected server does not belong to this environment.".into());
+        }
+    }
+    let token = token.trim().to_owned();
+    if !token.is_empty() && (token.len() > 512 || !token.bytes().all(|byte| byte.is_ascii_graphic())) {
+        return Err("The Discord bot token has an invalid format.".into());
+    }
+    let bridge_servers = servers.into_iter().map(|server| {
+        let selected = candidates.iter().find(|candidate| candidate.id == server.profile_id).unwrap();
+        (server, selected.clone())
+    }).collect::<Vec<_>>();
+    let bridge_name = bridge_session_name(environment_id);
+    run_remote(profile, environment.clone(), Arc::clone(remote_sessions.inner()), move |session, _| {
+        let sftp = session.sftp()?;
+        let root = remote_root(session, &environment.root_directory)?;
+        let environment_folder = environment_id.simple().to_string();
+        let bridge_root = ensure_remote_managed_dirs(session, &sftp, &root, &["runtimes", "discord-bridge", &environment_folder])?;
+        let token_path = format!("{bridge_root}/token");
+        if token.is_empty() && !bridge_file_exists(&sftp, &token_path)? {
+            return Err("Enter your Discord bot token to enable the bridge.".into());
+        }
+        let mut config = Vec::new();
+        for (server, selected) in bridge_servers {
+            let directory = remote_root(session, configured_remote_root(&selected)?)?;
+            config.push(serde_json::json!({
+                "id": server.profile_id,
+                "name": selected.name,
+                "minecraft_version": selected.installed_version,
+                "directory": directory,
+                "session": session_name(server.profile_id),
+                "profileId": server.profile_id,
+                "channelId": server.channel_id,
+                "channel_id": server.channel_id,
+                "chat_to_discord": server.chat_to_discord,
+                "chat_to_minecraft": server.chat_to_minecraft,
+                "chatToMinecraftTemplate": server.chat_to_minecraft_template,
+                "chat_to_minecraft_template": server.chat_to_minecraft_template,
+                "online": server.online,
+                "offline": server.offline,
+                "join": server.join,
+                "leave": server.leave,
+                "kills": server.kills,
+                "achievements": server.achievements,
+                "chat_to_discord_channel_id": server.chat_to_discord_channel_id,
+                "chat_to_minecraft_channel_id": server.chat_to_minecraft_channel_id,
+                "online_channel_id": server.online_channel_id,
+                "offline_channel_id": server.offline_channel_id,
+                "join_channel_id": server.join_channel_id,
+                "leave_channel_id": server.leave_channel_id,
+                "kills_channel_id": server.kills_channel_id,
+                "achievements_channel_id": server.achievements_channel_id,
+            }));
+        }
+        let architecture = execute(session, "uname -m")?;
+        if architecture.exit_code != 0 { return Err(remote_command_error("Could not detect remote CPU architecture", architecture)); }
+        let (arch, expected_hash) = match String::from_utf8_lossy(&architecture.stdout).trim() {
+            "x86_64" | "amd64" => ("x64", "6c172a9ab6718f7b801fb5a7bd486af2ee5e32758086a04b84fcce2aa77095e6"),
+            "aarch64" | "arm64" => ("arm64", "dbabf7a1cbf947e6059ffad2c27b80041db97dea1e553b62afdee7f13fca336e"),
+            _ => return Err("The Discord bridge supports remote Linux x64 and arm64 hosts.".into()),
+        };
+        let folder = format!("node-v24.22.1-linux-{arch}");
+        let node = format!("{bridge_root}/{folder}/bin/node");
+        if execute(session, &format!("test -x {}", shell_quote(&node)))?.exit_code != 0 {
+            let archive = format!("{bridge_root}/{folder}.tar.xz");
+            let url = format!("https://nodejs.org/dist/v24.22.1/{folder}.tar.xz");
+            download_or_upload(session, &sftp, &archive, &url, None)?;
+            let checksum = execute(session, &format!("sha256sum -- {}", shell_quote(&archive)))?;
+            if checksum.exit_code != 0 || !String::from_utf8_lossy(&checksum.stdout).starts_with(expected_hash) {
+                let _ = sftp.unlink(Path::new(&archive));
+                return Err("The downloaded Node.js runtime failed SHA-256 verification.".into());
+            }
+            let unpack = execute(session, &format!("tar -xJf {} -C {}", shell_quote(&archive), shell_quote(&bridge_root)))?;
+            let _ = sftp.unlink(Path::new(&archive));
+            if unpack.exit_code != 0 || execute(session, &format!("test -x {}", shell_quote(&node)))?.exit_code != 0 {
+                return Err("Could not unpack the Discord bridge's Node.js runtime.".into());
+            }
+        }
+        let npm = format!("{bridge_root}/{folder}/lib/node_modules/npm/bin/npm-cli.js");
+        bridge_write(&sftp, &format!("{bridge_root}/package.json"), br#"{"name":"scerite-discord-bridge","private":true,"type":"module","dependencies":{"discord.js":"14.27.0"}}"#)?;
+        let install = execute(session, &format!(
+            "{} {} install --no-audit --no-fund --ignore-scripts --silent --prefix {} --save-exact 'discord.js@14.27.0'",
+            shell_quote(&node), shell_quote(&npm), shell_quote(&bridge_root)
+        ))?;
+        if install.exit_code != 0 { return Err("Could not install discord.js. The remote host needs outbound HTTPS access to npm.".into()); }
+        let script_path = format!("{bridge_root}/discord_bridge.ts");
+        bridge_write(&sftp, &script_path, include_str!("discord_bridge.ts").as_bytes())?;
+        bridge_write(&sftp, &format!("{bridge_root}/servers.json"), &serde_json::to_vec(&config).map_err(|error| error.to_string())?)?;
+        if !token.is_empty() { bridge_write(&sftp, &token_path, token.as_bytes())?; }
+        let _ = execute(session, &format!("tmux kill-session -t {} 2>/dev/null", shell_quote(&bridge_name)));
+        let launch = format!(
+            "umask 077; exec {} {} >> {} 2>&1",
+            shell_quote(&node), shell_quote(&script_path), shell_quote(&format!("{bridge_root}/bridge.log"))
+        );
+        let started = execute(session, &format!(
+            "tmux new-session -d -s {} -c {} {}",
+            shell_quote(&bridge_name), shell_quote(&bridge_root), shell_quote(&launch)
+        ))?;
+        if started.exit_code != 0 { return Err(remote_command_error("Could not start the Discord bridge", started)); }
+        std::thread::sleep(Duration::from_secs(2));
+        if execute(session, &format!("tmux has-session -t {} 2>/dev/null", shell_quote(&bridge_name)))?.exit_code != 0 {
+            return Err(format!("The Discord bridge exited during startup. Check {bridge_root}/bridge.log on the remote host."));
+        }
+        Ok(())
+    }).await
+}
+
+#[tauri::command]
+pub async fn disable_discord_bridge(
+    environment_id: Uuid,
+    profiles: State<'_, ServerProfileStore>,
+    remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<(), String> {
+    let (profile, environment) = discord_bridge_profile(&profiles, environment_id)?;
+    let bridge_name = bridge_session_name(environment_id);
+    run_remote(profile, environment.clone(), Arc::clone(remote_sessions.inner()), move |session, _| {
+        let root = bridge_directory(session, &environment)?;
+        let sftp = session.sftp()?;
+        let stopped = execute(session, &format!("tmux kill-session -t {} 2>/dev/null", shell_quote(&bridge_name)))?;
+        if stopped.exit_code != 0 && stopped.exit_code != 1 {
+            return Err(remote_command_error("Could not stop the Discord bridge", stopped));
+        }
+        for name in ["token", "servers.json"] {
+            let path = format!("{root}/{name}");
+            if bridge_file_exists(&sftp, &path)? { sftp.unlink(Path::new(&path))?; }
+        }
+        Ok(())
+    }).await
+}
+
 fn configured_remote_root(profile: &ServerProfile) -> Result<&str, String> {
     let ServerTarget::Remote { directory, .. } = &profile.target else {
         return Err("This operation is only available for remote profiles.".into());
@@ -3045,17 +3364,34 @@ pub async fn upload_remote_world(
         let root = remote_root_with_sftp(&sftp, configured_remote_root(profile)?)?;
         require_remote_world_stopped(session, profile, &root)?;
         checked_remote_world(&sftp, &root, &world_name)?;
-        install_remote_archive(session, &sftp, &root, &world_name, &mut archive, entries, true)
+        install_remote_archive(session, &sftp, &root, &world_name, &mut archive, entries, true, false)
+    }).await
+}
+
+#[tauri::command]
+pub async fn import_remote_world(
+    profile_id: Uuid, world_name: String, source: String,
+    profiles: State<'_, ServerProfileStore>, remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<String, String> {
+    if !world_management::valid_world_name(&world_name) { return Err("Choose a valid world folder name.".into()); }
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    run_remote(profile, environment, Arc::clone(remote_sessions.inner()), move |session, profile| {
+        let (mut archive, entries) = world_management::open_archive(Path::new(&source))?;
+        let sftp = session.sftp().map_err(|error| format!("Could not open SFTP: {error}"))?;
+        let root = remote_root_with_sftp(&sftp, configured_remote_root(profile)?)?;
+        require_remote_world_stopped(session, profile, &root)?;
+        install_remote_archive(session, &sftp, &root, &world_name, &mut archive, entries, false, true)
     }).await
 }
 
 fn install_remote_archive(
     session: &RemoteConnection, sftp: &RemoteSftp, root: &str, world_name: &str,
-    archive: &mut zip::ZipArchive<File>, entries: Vec<world_management::ArchiveEntry>, require_existing: bool,
+    archive: &mut zip::ZipArchive<File>, entries: Vec<world_management::ArchiveEntry>, require_existing: bool, require_absent: bool,
 ) -> Result<String, String> {
         let world = resolve_remote_relative(root, world_name, false)?;
         let existing = match sftp.lstat_optional(Path::new(&world)) {
             Ok(metadata) if metadata.file_type() == FileType::Dir => {
+                if require_absent { return Err("A world folder with this name already exists.".into()); }
                 checked_remote_world(sftp, root, world_name)?;
                 true
             }
@@ -3122,7 +3458,7 @@ pub async fn restore_remote_world_backup(
         require_remote_world_stopped(session, profile, &root)?;
         if let Some(source) = source {
             let (mut archive, entries) = world_management::open_archive(&source)?;
-            return install_remote_archive(session, &sftp, &root, &world_name, &mut archive, entries, false);
+            return install_remote_archive(session, &sftp, &root, &world_name, &mut archive, entries, false, false);
         }
         let filename = Path::new(&backup_path).file_name().and_then(|name| name.to_str())
             .ok_or("Choose a valid preserved world.")?;
@@ -3156,6 +3492,486 @@ pub async fn restore_remote_world_backup(
             return Err(format!("Could not restore the world: {error}.{recovery}"));
         }
         Ok(preserved.unwrap_or_default())
+    }).await
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct VelocityManifest {
+    public_port: u16,
+    backend_port: u16,
+    original_properties: String,
+    original_paper: String,
+    patched_properties: String,
+    patched_paper: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VelocityOnDemandStatus {
+    enabled: bool,
+    public_port: Option<u16>,
+    backend_port: Option<u16>,
+    proxy_running: bool,
+    idle_minutes: u16,
+    update_required: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VelocityProxyUsage {
+    running: bool,
+    cpu_percent: Option<f32>,
+    memory_bytes: Option<u64>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VelocitySetupProgress {
+    profile_id: Uuid,
+    step: &'static str,
+}
+
+fn velocity_progress(app: &AppHandle, profile_id: Uuid, step: &'static str) {
+    let _ = app.emit("velocity-setup-progress", VelocitySetupProgress { profile_id, step });
+}
+
+fn velocity_startup_diagnostic(session: &RemoteConnection, proxy_root: &str, proxy_session: &str) -> String {
+    let log_path = format!("{proxy_root}/logs/latest.log");
+    let command = format!("if [ -f {} ]; then tail -c 6000 -- {}; else tmux capture-pane -p -t {} -S -80 2>/dev/null; fi",
+        shell_quote(&log_path), shell_quote(&log_path), shell_quote(proxy_session));
+    let Ok(result) = execute(session, &command) else { return String::new(); };
+    let output = String::from_utf8_lossy(&result.stdout);
+    let lines = output.lines().filter(|line| {
+        let lower = line.to_ascii_lowercase();
+        !["secret", "password", "token"].iter().any(|word| lower.contains(word))
+    }).rev().take(12).collect::<Vec<_>>();
+    let message = lines.into_iter().rev().collect::<Vec<_>>().join("\n");
+    message.chars().filter(|character| !character.is_control() || *character == '\n').take(1800).collect()
+}
+
+fn velocity_start_proxy(session: &RemoteConnection, proxy_root: &str, proxy_session: &str, java: &str) -> Result<(), String> {
+    let start = execute(session, &format!("tmux new-session -d -s {} -c {}",
+        shell_quote(proxy_session), shell_quote(proxy_root)))?;
+    if start.exit_code != 0 { return Err(remote_command_error("Could not start Velocity", start)); }
+    let remain = execute(session, &format!("tmux set-window-option -t {} remain-on-exit on", shell_quote(proxy_session)))?;
+    if remain.exit_code != 0 { return Err(remote_command_error("Could not keep the Velocity console open", remain)); }
+    let launch = execute(session, &format!("tmux send-keys -t {} -l {} && tmux send-keys -t {} Enter",
+        shell_quote(proxy_session), shell_quote(&format!("exec {} -jar velocity.jar", shell_quote(java))), shell_quote(proxy_session)))?;
+    if launch.exit_code != 0 { return Err(remote_command_error("Could not launch Velocity", launch)); }
+    Ok(())
+}
+
+fn velocity_root(sftp: &RemoteSftp, profile: &ServerProfile, environment: &ServerEnvironment) -> Result<String, String> {
+    let root = remote_root_with_sftp(sftp, &environment.root_directory)?;
+    let folder = profile.id.simple().to_string();
+    Ok(format!("{root}/runtimes/velocity/{folder}"))
+}
+
+fn velocity_read(sftp: &RemoteSftp, path: &str) -> Result<String, String> {
+    let metadata = sftp.lstat(Path::new(path)).map_err(|error| format!("Could not read Velocity setup: {error}"))?;
+    if metadata.file_type() != FileType::File || metadata.size.is_some_and(|size| size > MAX_FILE_BYTES) {
+        return Err("The Velocity setup file is not a regular text file under 1 MB.".into());
+    }
+    let bytes = sftp.read_prefix(Path::new(path), MAX_FILE_BYTES as usize + 1)?;
+    if bytes.len() as u64 > MAX_FILE_BYTES {
+        return Err("The Velocity setup file is too large to read.".into());
+    }
+    String::from_utf8(bytes).map_err(|_| "The Velocity setup file is not UTF-8 text.".into())
+}
+
+fn velocity_write(sftp: &RemoteSftp, path: &str, bytes: &[u8]) -> Result<(), String> {
+    let temporary = format!("{path}.{}.tmp", Uuid::new_v4().simple());
+    sftp.write_file_exclusive(Path::new(&temporary), bytes)?;
+    if let Err(error) = sftp.posix_rename(Path::new(&temporary), Path::new(path)) {
+        let _ = sftp.unlink(Path::new(&temporary));
+        return Err(format!("Could not save Velocity setup: {error}"));
+    }
+    Ok(())
+}
+
+fn remote_listening_ports(session: &RemoteConnection) -> Result<std::collections::HashSet<u16>, String> {
+    let sockets = execute(session, "cat /proc/net/tcp /proc/net/tcp6")?;
+    if sockets.exit_code != 0 { return Err("Could not inspect remote listening ports.".into()); }
+    Ok(String::from_utf8_lossy(&sockets.stdout).lines().filter_map(|line| {
+        let mut fields = line.split_whitespace();
+        fields.next()?;
+        let address = fields.next()?;
+        fields.next()?;
+        (fields.next()? == "0A").then(|| address.rsplit(':').next())
+            .flatten().and_then(|port| u16::from_str_radix(port, 16).ok())
+    }).collect())
+}
+
+#[tauri::command]
+pub async fn velocity_on_demand_status(
+    profile_id: Uuid, profiles: State<'_, ServerProfileStore>,
+    remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<VelocityOnDemandStatus, String> {
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    run_remote(profile, environment.clone(), Arc::clone(remote_sessions.inner()), move |session, profile| {
+        let sftp = session.sftp()?;
+        let root = velocity_root(&sftp, profile, &environment)?;
+        let path = format!("{root}/manifest.json");
+        match sftp.lstat_optional(Path::new(&path)) {
+            Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile => Ok(VelocityOnDemandStatus { enabled: false, public_port: None, backend_port: None, proxy_running: false, idle_minutes: 5, update_required: false }),
+            Ok(_) => {
+                let manifest: VelocityManifest = serde_json::from_str(&velocity_read(&sftp, &path)?)
+                    .map_err(|_| "The saved Velocity setup is invalid.".to_owned())?;
+                let proxy_session = format!("scerite-velocity-{}", profile.id.simple());
+                let proxy_running = execute(session, &format!("tmux has-session -t {} 2>/dev/null", shell_quote(&proxy_session)))?.exit_code == 0
+                    && remote_listening_ports(session)?.contains(&manifest.public_port);
+                let plugin_config = velocity_read(&sftp, &format!("{root}/plugins/sceritevelocity/config.properties"))?;
+                let idle_minutes = velocity_download::idle_minutes(&plugin_config)?;
+                let expected = format!("pluginVersion={SCERITE_VELOCITY_VERSION}");
+                let update_required = !plugin_config.lines().any(|line| line.trim() == expected);
+                Ok(VelocityOnDemandStatus { enabled: true, public_port: Some(manifest.public_port), backend_port: Some(manifest.backend_port), proxy_running, idle_minutes, update_required })
+            }
+            Err(error) => Err(format!("Could not check Velocity setup: {error}")),
+        }
+    }).await
+}
+
+#[tauri::command]
+pub async fn set_velocity_idle_minutes(
+    profile_id: Uuid, idle_minutes: u16, profiles: State<'_, ServerProfileStore>,
+    remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<(), String> {
+    if !(1..=120).contains(&idle_minutes) { return Err("Choose an idle delay from 1 to 120 minutes.".into()); }
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    run_remote(profile, environment.clone(), Arc::clone(remote_sessions.inner()), move |session, profile| {
+        let sftp = session.sftp()?;
+        let root = velocity_root(&sftp, profile, &environment)?;
+        match sftp.lstat_optional(Path::new(&format!("{root}/manifest.json"))) {
+            Ok(_) => (),
+            Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile =>
+                return Err("Enable on-demand startup before changing its idle delay.".into()),
+            Err(error) => return Err(format!("Could not check Velocity setup: {error}")),
+        }
+        let path = format!("{root}/plugins/sceritevelocity/config.properties");
+        let config = velocity_read(&sftp, &path)?;
+        velocity_write(&sftp, &path, velocity_download::with_idle_minutes(&config, idle_minutes)?.as_bytes())
+    }).await
+}
+
+#[tauri::command]
+pub async fn update_velocity_on_demand(
+    app: AppHandle, profile_id: Uuid, profiles: State<'_, ServerProfileStore>,
+    remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<(), String> {
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    run_remote(profile, environment.clone(), Arc::clone(remote_sessions.inner()), move |session, profile| {
+        velocity_progress(&app, profile.id, "Checking Velocity");
+        if remote_is_running(session, profile)? != Some(false) {
+            return Err("Stop the server before updating Velocity.".into());
+        }
+        let sftp = session.sftp()?;
+        let server_root = remote_root_with_sftp(&sftp, configured_remote_root(profile)?)?;
+        if remote_directory_has_java_process(session, &server_root)? {
+            return Err("A Java process is still using the server folder. Stop it before updating Velocity.".into());
+        }
+        let proxy_root = velocity_root(&sftp, profile, &environment)?;
+        if [server_root.as_str(), proxy_root.as_str()].iter().any(|path| path.contains(['\n', '\r'])) {
+            return Err("Remote paths with line breaks cannot be used for Velocity setup.".into());
+        }
+        let manifest: VelocityManifest = serde_json::from_str(&velocity_read(&sftp, &format!("{proxy_root}/manifest.json"))?)
+            .map_err(|_| "The saved Velocity setup is invalid.".to_owned())?;
+        let proxy_session = format!("scerite-velocity-{}", profile.id.simple());
+        let pane = execute(session, &format!("tmux display-message -p -t {} '#{{pane_pid}} #{{pane_dead}}' 2>/dev/null",
+            shell_quote(&proxy_session)))?;
+        let pane_output = String::from_utf8_lossy(&pane.stdout);
+        let mut pane_fields = pane_output.split_whitespace();
+        let pane_pid = pane_fields.next().and_then(|value| value.parse::<u32>().ok());
+        if pane.exit_code != 0 || pane_fields.next() != Some("0") || pane_pid.is_none()
+            || !remote_listening_ports(session)?.contains(&manifest.public_port) {
+            return Err("Velocity must be running before it can be updated.".into());
+        }
+        let java_result = execute(session, &format!("readlink -f -- /proc/{}/exe", pane_pid.unwrap()))?;
+        if java_result.exit_code != 0 { return Err("Could not find Velocity's Java executable.".into()); }
+        let java = String::from_utf8_lossy(&java_result.stdout).trim().to_owned();
+        let environment_root = remote_root_with_sftp(&sftp, &environment.root_directory)?;
+        if !Path::new(&java).starts_with(Path::new(&environment_root).join("runtimes/java/25")) {
+            return Err("Velocity is not using its managed Java 25 runtime.".into());
+        }
+        let jar_path = format!("{proxy_root}/plugins/scerite-velocity.jar");
+        let config_path = format!("{proxy_root}/plugins/sceritevelocity/config.properties");
+        let old_config = velocity_read(&sftp, &config_path)?;
+        let jar_metadata = sftp.lstat(Path::new(&jar_path))?;
+        if jar_metadata.file_type() != FileType::File || jar_metadata.size.is_some_and(|size| size > MAX_FILE_BYTES) {
+            return Err("The installed Velocity plugin JAR is not a regular file under 1 MB.".into());
+        }
+        let old_jar = sftp.read_prefix(Path::new(&jar_path), MAX_FILE_BYTES as usize + 1)?;
+        if old_jar.len() as u64 > MAX_FILE_BYTES { return Err("The installed Velocity plugin JAR is too large to back up.".into()); }
+        let new_config = velocity_download::updated_plugin_config(&old_config, &server_root, SCERITE_VELOCITY_VERSION);
+
+        velocity_progress(&app, profile.id, "Stopping Velocity");
+        let stop = execute(session, &format!("tmux send-keys -t {} -l end && tmux send-keys -t {} Enter",
+            shell_quote(&proxy_session), shell_quote(&proxy_session)))?;
+        if stop.exit_code != 0 { return Err(remote_command_error("Could not stop Velocity for its update", stop)); }
+        for _ in 0..15 {
+            if !remote_listening_ports(session)?.contains(&manifest.public_port) { break; }
+            std::thread::sleep(Duration::from_secs(1));
+        }
+        if remote_listening_ports(session)?.contains(&manifest.public_port) {
+            return Err("Velocity did not stop for its update. Check its console and try again.".into());
+        }
+        let _ = execute(session, &format!("tmux kill-session -t {} 2>/dev/null", shell_quote(&proxy_session)));
+
+        let update_result = (|| {
+            velocity_progress(&app, profile.id, "Installing Velocity plugin");
+            velocity_write(&sftp, &jar_path, SCERITE_VELOCITY_JAR)?;
+            velocity_write(&sftp, &config_path, new_config.as_bytes())?;
+            velocity_progress(&app, profile.id, "Starting Velocity");
+            velocity_start_proxy(session, &proxy_root, &proxy_session, &java)?;
+            for _ in 0..30 {
+                let ready = execute(session, &format!("tmux capture-pane -p -t {} -S -200 2>/dev/null | grep -F 'Scerite on-demand backend ready'",
+                    shell_quote(&proxy_session)))?;
+                if ready.exit_code == 0 && remote_listening_ports(session)?.contains(&manifest.public_port) {
+                    return Ok(());
+                }
+                let pane = execute(session, &format!("tmux display-message -p -t {} '#{{pane_dead}}' 2>/dev/null", shell_quote(&proxy_session)))?;
+                if String::from_utf8_lossy(&pane.stdout).trim() == "1" { break; }
+                std::thread::sleep(Duration::from_secs(1));
+            }
+            let diagnostic = velocity_startup_diagnostic(session, &proxy_root, &proxy_session);
+            Err(if diagnostic.is_empty() { "Updated Velocity did not become ready.".into() }
+                else { format!("Updated Velocity did not become ready.\n{diagnostic}") })
+        })();
+        if let Err(error) = update_result {
+            velocity_progress(&app, profile.id, "Restoring previous Velocity plugin");
+            let _ = execute(session, &format!("tmux kill-session -t {} 2>/dev/null", shell_quote(&proxy_session)));
+            velocity_write(&sftp, &jar_path, &old_jar)
+                .map_err(|restore| format!("{error} Could not restore the previous plugin JAR: {restore}"))?;
+            velocity_write(&sftp, &config_path, old_config.as_bytes())
+                .map_err(|restore| format!("{error} Could not restore the previous plugin settings: {restore}"))?;
+            velocity_start_proxy(session, &proxy_root, &proxy_session, &java)
+                .map_err(|restore| format!("{error} Could not restart the previous proxy: {restore}"))?;
+            for _ in 0..30 {
+                let ready = execute(session, &format!("tmux capture-pane -p -t {} -S -200 2>/dev/null | grep -F 'Scerite on-demand backend ready'",
+                    shell_quote(&proxy_session)))?;
+                if ready.exit_code == 0 && remote_listening_ports(session)?.contains(&manifest.public_port) {
+                    return Err(format!("{error} The previous proxy was restored."));
+                }
+                let pane = execute(session, &format!("tmux display-message -p -t {} '#{{pane_dead}}' 2>/dev/null", shell_quote(&proxy_session)))?;
+                if String::from_utf8_lossy(&pane.stdout).trim() == "1" { break; }
+                std::thread::sleep(Duration::from_secs(1));
+            }
+            return Err(format!("{error} The previous plugin files were restored, but Velocity did not restart."));
+        }
+        velocity_progress(&app, profile.id, "Ready");
+        Ok(())
+    }).await
+}
+
+#[tauri::command]
+pub async fn velocity_proxy_usage(
+    profile_id: Uuid, profiles: State<'_, ServerProfileStore>,
+    remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<VelocityProxyUsage, String> {
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    run_remote(profile, environment.clone(), Arc::clone(remote_sessions.inner()), move |session, profile| {
+        let sftp = session.sftp()?;
+        let root = velocity_root(&sftp, profile, &environment)?;
+        let command = format!(
+            "root={}; for process in /proc/[0-9]*; do [ -r \"$process/comm\" ] || continue; [ \"$(cat \"$process/comm\" 2>/dev/null)\" = java ] || continue; cwd=$(readlink -f -- \"$process/cwd\" 2>/dev/null) || continue; [ \"$cwd\" = \"$root\" ] || continue; ps -p \"${{process##*/}}\" -o %cpu=,rss=; exit $?; done; exit 1",
+            shell_quote(&root),
+        );
+        let result = execute(session, &command)?;
+        if result.exit_code != 0 {
+            return Ok(VelocityProxyUsage { running: false, cpu_percent: None, memory_bytes: None });
+        }
+        let output = String::from_utf8_lossy(&result.stdout);
+        let mut values = output.split_whitespace();
+        let cpu_percent = values.next().and_then(|value| value.parse::<f32>().ok());
+        let memory_bytes = values.next().and_then(|value| value.parse::<u64>().ok()).map(|value| value * 1024);
+        Ok(VelocityProxyUsage { running: true, cpu_percent, memory_bytes })
+    }).await
+}
+
+#[tauri::command]
+pub async fn enable_velocity_on_demand(
+    app: AppHandle, profile_id: Uuid, idle_minutes: u16, profiles: State<'_, ServerProfileStore>,
+    remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<VelocityOnDemandStatus, String> {
+    if !(1..=120).contains(&idle_minutes) { return Err("Choose an idle delay from 1 to 120 minutes.".into()); }
+    velocity_progress(&app, profile_id, "Checking the server");
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    if !matches!(profile.installed_software.as_deref(), Some("paper" | "purpur")) {
+        return Err("On-demand Velocity start currently supports remote Paper and Purpur servers.".into());
+    }
+    let sessions = Arc::clone(remote_sessions.inner());
+    let preflight_environment = environment.clone();
+    run_remote(profile.clone(), environment.clone(), Arc::clone(&sessions), move |session, profile| {
+        if remote_is_running(session, profile)? != Some(false) {
+            return Err("Stop the server before enabling on-demand startup.".into());
+        }
+        let root = remote_root(session, configured_remote_root(profile)?)?;
+        if remote_directory_has_java_process(session, &root)? {
+            return Err("A Java process is still using this server folder. Stop it before enabling on-demand startup.".into());
+        }
+        let sftp = session.sftp()?;
+        let proxy_root = velocity_root(&sftp, profile, &preflight_environment)?;
+        match sftp.lstat_optional(Path::new(&format!("{proxy_root}/manifest.json"))) {
+            Ok(_) => return Err("On-demand startup is already enabled for this server.".into()),
+            Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile => {},
+            Err(error) => return Err(format!("Could not inspect Velocity setup: {error}")),
+        }
+        Ok(())
+    }).await?;
+
+    velocity_progress(&app, profile_id, "Preparing Java 25");
+    let client = crate::vanilla_install::client()?;
+    let java = crate::vanilla_install::install_remote_java(&client, &app, &profile, &environment, Arc::clone(&sessions), 25).await?;
+    velocity_progress(&app, profile_id, "Downloading Velocity");
+    let velocity_jar = velocity_download::stable_velocity_jar(&client).await?;
+    let progress_app = app.clone();
+    run_remote(profile, environment.clone(), sessions, move |session, profile| {
+        velocity_progress(&progress_app, profile.id, "Writing proxy files");
+        if remote_is_running(session, profile)? != Some(false) { return Err("Stop the server before enabling on-demand startup.".into()); }
+        let sftp = session.sftp()?;
+        let root = remote_root_with_sftp(&sftp, configured_remote_root(profile)?)?;
+        let environment_root = remote_root_with_sftp(&sftp, &environment.root_directory)?;
+        let folder = profile.id.simple().to_string();
+        let proxy_root = ensure_remote_managed_dirs(session, &sftp, &environment_root, &["runtimes", "velocity", &folder])?;
+        let plugin_folder = ensure_remote_managed_dirs(session, &sftp, &proxy_root, &["plugins", "sceritevelocity"])?;
+        if [root.as_str(), proxy_root.as_str()].iter().any(|path| path.contains(['\n', '\r'])) {
+            return Err("Remote paths with line breaks cannot be used for Velocity setup.".into());
+        }
+        let properties_path = format!("{root}/server.properties");
+        let paper_path = format!("{root}/config/paper-global.yml");
+        let original_properties = velocity_read(&sftp, &properties_path)?;
+        let original_paper = velocity_read(&sftp, &paper_path)?;
+        let spigot = velocity_read(&sftp, &format!("{root}/spigot.yml"))?;
+        if spigot.lines().any(|line| line.trim() == "bungeecord: true") {
+            return Err("Disable settings.bungeecord in spigot.yml before enabling Velocity forwarding.".into());
+        }
+        let public_port = server_port::configured_port(Some(&original_properties))?;
+        let used = remote_listening_ports(session)?;
+        if used.contains(&public_port) { return Err(format!("Port {public_port} is in use. Stop that service before enabling Velocity.")); }
+        let backend_port = server_port::available_port(public_port, |port| Ok(port == public_port || used.contains(&port)))?
+            .ok_or("Could not choose a backend port.")?;
+        let secret = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+        let patched_properties = velocity_download::backend_properties(&original_properties, backend_port);
+        let patched_paper = velocity_download::paper_forwarding(&original_paper, &secret)?;
+        let manifest = VelocityManifest { public_port, backend_port, original_properties, original_paper, patched_properties, patched_paper };
+        let session_id = session_name(profile.id);
+        let proxy_session = format!("scerite-velocity-{}", profile.id.simple());
+        let ServerTarget::Remote { launch, .. } = &profile.target else { unreachable!() };
+        let managed_java = if let Some(java) = launch.managed_java.as_deref() {
+            let actual = sftp.realpath(Path::new(java))?;
+            if !Path::new(&actual).starts_with(Path::new(&environment_root).join("runtimes/java")) {
+                return Err("The managed Java executable is outside the configured runtime folder.".into());
+            }
+            if execute(session, &format!("test -x {}", shell_quote(&actual)))?.exit_code != 0 {
+                return Err("The managed Java executable is missing or is not executable.".into());
+            }
+            Some(actual)
+        } else { None };
+        let launch_command = launch_command(launch, managed_java.as_deref());
+        let start = format!("#!/bin/sh\nif tmux has-session -t {} 2>/dev/null; then\n  if [ \"$(tmux display-message -p -t {} '#{{pane_dead}}')\" = 0 ]; then exit 0; fi\n  tmux kill-session -t {}\nfi\ntmux new-session -d -s {} -c {} {}\ntmux set-window-option -t {} remain-on-exit on\n",
+            shell_quote(&session_id), shell_quote(&session_id), shell_quote(&session_id), shell_quote(&session_id), shell_quote(&root), shell_quote(&launch_command), shell_quote(&session_id));
+        let stop = format!("#!/bin/sh\ntmux send-keys -t {} -l stop\ntmux send-keys -t {} Enter\n", shell_quote(&session_id), shell_quote(&session_id));
+        let plugin_config = format!("pluginVersion={SCERITE_VELOCITY_VERSION}\nserverName=backend\nbackendPort={backend_port}\nidleSeconds={}\nserverDirectory={root}\nstartScript={proxy_root}/start.sh\nstopScript={proxy_root}/stop.sh\n", u32::from(idle_minutes) * 60);
+        let proxy_config = velocity_download::proxy_config(public_port, backend_port);
+        velocity_write(&sftp, &format!("{proxy_root}/velocity.jar"), &velocity_jar)?;
+        velocity_write(&sftp, &format!("{proxy_root}/plugins/scerite-velocity.jar"), SCERITE_VELOCITY_JAR)?;
+        velocity_write(&sftp, &format!("{plugin_folder}/config.properties"), plugin_config.as_bytes())?;
+        velocity_write(&sftp, &format!("{proxy_root}/start.sh"), start.as_bytes())?;
+        velocity_write(&sftp, &format!("{proxy_root}/stop.sh"), stop.as_bytes())?;
+        velocity_write(&sftp, &format!("{proxy_root}/velocity.toml"), proxy_config.as_bytes())?;
+        velocity_write(&sftp, &format!("{proxy_root}/forwarding.secret"), secret.as_bytes())?;
+        let chmod = execute(session, &format!("chmod 600 -- {}", shell_quote(&format!("{proxy_root}/forwarding.secret"))))?;
+        if chmod.exit_code != 0 { return Err(remote_command_error("Could not protect Velocity's forwarding secret", chmod)); }
+        velocity_write(&sftp, &properties_path, manifest.patched_properties.as_bytes())?;
+        if let Err(error) = velocity_write(&sftp, &paper_path, manifest.patched_paper.as_bytes()) {
+            let _ = velocity_write(&sftp, &properties_path, manifest.original_properties.as_bytes());
+            return Err(error);
+        }
+        let start_result = (|| {
+            velocity_progress(&progress_app, profile.id, "Starting Velocity");
+            velocity_start_proxy(session, &proxy_root, &proxy_session, &java)?;
+            velocity_progress(&progress_app, profile.id, "Waiting for the proxy and plugin");
+            let mut port_open = false;
+            for _ in 0..30 {
+                let plugin_log = execute(session, &format!("tmux capture-pane -p -t {} -S -200 2>/dev/null | grep -F 'Scerite on-demand backend ready'",
+                    shell_quote(&proxy_session)))?;
+                port_open = remote_listening_ports(session)?.contains(&public_port);
+                if plugin_log.exit_code == 0 && port_open {
+                    return velocity_write(&sftp, &format!("{proxy_root}/manifest.json"),
+                        serde_json::to_string(&manifest).map_err(|error| error.to_string())?.as_bytes());
+                }
+                let pane = execute(session, &format!("tmux display-message -p -t {} '#{{pane_dead}}' 2>/dev/null", shell_quote(&proxy_session)))?;
+                if String::from_utf8_lossy(&pane.stdout).trim() == "1" { break; }
+                std::thread::sleep(Duration::from_secs(1));
+            }
+            let reason = if port_open { "Velocity opened its port, but the Scerite plugin did not initialize." }
+                else { "Velocity did not open its public port." };
+            let diagnostic = velocity_startup_diagnostic(session, &proxy_root, &proxy_session);
+            if diagnostic.is_empty() { Err(reason.into()) } else { Err(format!("{reason}\n{diagnostic}")) }
+        })();
+        if let Err(error) = start_result {
+            velocity_progress(&progress_app, profile.id, "Restoring server settings");
+            let _ = execute(session, &format!("tmux kill-session -t {} 2>/dev/null", shell_quote(&proxy_session)));
+            let properties_restore = velocity_write(&sftp, &properties_path, manifest.original_properties.as_bytes());
+            let paper_restore = velocity_write(&sftp, &paper_path, manifest.original_paper.as_bytes());
+            if properties_restore.is_err() || paper_restore.is_err() {
+                return Err(format!("{error} Could not restore all server settings; check server.properties and config/paper-global.yml before starting the server."));
+            }
+            return Err(error);
+        }
+        velocity_progress(&progress_app, profile.id, "Ready");
+        Ok(VelocityOnDemandStatus { enabled: true, public_port: Some(public_port), backend_port: Some(backend_port), proxy_running: true, idle_minutes, update_required: false })
+    }).await
+}
+
+#[tauri::command]
+pub async fn disable_velocity_on_demand(
+    profile_id: Uuid, profiles: State<'_, ServerProfileStore>,
+    remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<VelocityOnDemandStatus, String> {
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    run_remote(profile, environment.clone(), Arc::clone(remote_sessions.inner()), move |session, profile| {
+        if remote_is_running(session, profile)? != Some(false) {
+            return Err("Stop the server before disabling on-demand startup.".into());
+        }
+        let sftp = session.sftp()?;
+        let proxy_root = velocity_root(&sftp, profile, &environment)?;
+        let manifest_path = format!("{proxy_root}/manifest.json");
+        let manifest: VelocityManifest = serde_json::from_str(&velocity_read(&sftp, &manifest_path)?)
+            .map_err(|_| "The saved Velocity setup is invalid.".to_owned())?;
+        let root = remote_root_with_sftp(&sftp, configured_remote_root(profile)?)?;
+        let properties_path = format!("{root}/server.properties");
+        let paper_path = format!("{root}/config/paper-global.yml");
+        let current_properties = velocity_read(&sftp, &properties_path)?;
+        let current_paper = velocity_read(&sftp, &paper_path)?;
+        let restored_properties = velocity_download::restore_backend_properties(
+            &current_properties, &manifest.original_properties, &manifest.patched_properties)?;
+        let restored_paper = velocity_download::restore_paper_forwarding(
+            &current_paper, &manifest.original_paper, &manifest.patched_paper)?;
+        let proxy_session = format!("scerite-velocity-{}", profile.id.simple());
+        let active = execute(session, &format!("tmux has-session -t {} 2>/dev/null", shell_quote(&proxy_session)))?;
+        if active.exit_code == 0 {
+            let stop = execute(session, &format!("tmux send-keys -t {} -l end && tmux send-keys -t {} Enter",
+                shell_quote(&proxy_session), shell_quote(&proxy_session)))?;
+            if stop.exit_code != 0 { return Err(remote_command_error("Could not stop Velocity", stop)); }
+            for _ in 0..15 {
+                if !remote_listening_ports(session)?.contains(&manifest.public_port) { break; }
+                std::thread::sleep(Duration::from_secs(1));
+            }
+            if remote_listening_ports(session)?.contains(&manifest.public_port) {
+                return Err("Velocity did not stop. Try again after checking its console.".into());
+            }
+        }
+        if remote_listening_ports(session)?.contains(&manifest.public_port) {
+            return Err("The original Minecraft port is still in use. Stop that service before disabling Velocity.".into());
+        }
+        velocity_write(&sftp, &properties_path, restored_properties.as_bytes())?;
+        if let Err(error) = velocity_write(&sftp, &paper_path, restored_paper.as_bytes()) {
+            let _ = velocity_write(&sftp, &properties_path, current_properties.as_bytes());
+            return Err(error);
+        }
+        sftp.unlink(Path::new(&manifest_path)).map_err(|error| format!("Could not finish disabling Velocity: {error}"))?;
+        Ok(VelocityOnDemandStatus { enabled: false, public_port: None, backend_port: None, proxy_running: false, idle_minutes: 5, update_required: false })
     }).await
 }
 

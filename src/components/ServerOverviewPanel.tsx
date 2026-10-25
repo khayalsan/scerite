@@ -3,6 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 import type { ServerEnvironment, ServerProfile } from "../lib/serverProfiles";
 import { serverFiles } from "../lib/serverFiles";
 import { ServerIconControl } from "./ServerIconControl";
+import { velocityOnDemand } from "../lib/velocityOnDemand";
+import type { VelocityOnDemandStatus } from "../lib/velocityOnDemand";
 
 type Usage = { playersOnline: number | null; maxPlayers: number | null; cpuPercent: number | null; memoryBytes: number | null };
 
@@ -16,6 +18,14 @@ export function ServerOverviewPanel({ profile, environment, state }: { profile: 
   const [port, setPort] = useState<number | null>(null);
   const [usage, setUsage] = useState<Usage | null>(null);
   const [detectedVersion, setDetectedVersion] = useState<string | null>(null);
+  const [velocity, setVelocity] = useState<VelocityOnDemandStatus | null>(null);
+
+  useEffect(() => {
+    if (!remote || !["paper", "purpur"].includes(profile.installedSoftware ?? "")) return;
+    let active = true;
+    void velocityOnDemand.status(profile.id).then((value) => { if (active) setVelocity(value); }).catch(() => {});
+    return () => { active = false; };
+  }, [profile.id, profile.installedSoftware, remote]);
 
   useEffect(() => {
     let active = true;
@@ -57,7 +67,7 @@ export function ServerOverviewPanel({ profile, environment, state }: { profile: 
   }, [profile.id, port, state]);
 
   const host = remote ? environment?.host ?? "Unknown host" : "localhost";
-  const address = `${host.includes(":") && !host.startsWith("[") ? `[${host}]` : host}:${port ?? "…"}`;
+  const address = `${host.includes(":") && !host.startsWith("[") ? `[${host}]` : host}:${velocity?.enabled ? velocity.publicPort : port ?? "…"}`;
   const software = profile.installedSoftware ? profile.installedSoftware[0].toUpperCase() + profile.installedSoftware.slice(1) : "Unknown";
   const players = state === "offline" ? "0" : usage?.playersOnline == null ? "Unavailable" : `${usage.playersOnline} / ${usage.maxPlayers ?? "?"}`;
 

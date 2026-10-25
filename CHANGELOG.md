@@ -8,6 +8,39 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 ### Added
 
+- The Worlds tab can import a ZIP into a new named world folder on local or remote servers without replacing an existing world.
+- Server settings can set Java's active processor count for thread sizing; leaving it blank uses all cores available to the host.
+- Remote Paper and Purpur servers can opt in to a managed Velocity proxy that starts the server when an authenticated player joins and stops it after a configurable idle delay. The proxy keeps the server's public address, multiplayer description, and icon; the backend listens only on the same host.
+- The Velocity on-demand setting shows the proxy's CPU and RAM use while the server settings tab is open.
+- An Update proxy button refreshes the installed Velocity plugin without resetting the server's forwarding settings.
+- Remote environments can opt in to a user-owned Discord bot. Chat is two-way by default, with separate direction controls. Online, offline, joins, leaves, player deaths, and advancements can each use their own channel or share the server's default channel. It is off by default and installs on the remote host only when enabled.
+- Discord settings show when the remote bot needs an update and can redeploy it without re-entering the token or channels. Minecraft chat appears in Discord under each player's name and skin head when webhooks are available; joins, leaves, deaths, and advancements use embeds.
+- Advancement embeds put the player and advancement in the title, use a frame-specific color, and show the vanilla advancement description when it is available for that Minecraft version.
+- Discord messages in Minecraft default to `<🎮Name> message`, with the game icon in blue. Each server can customize the format and colors using `{username}` for the Discord username, `{name}` for the display name, `{message}` for the text, and `{color:blue}` for colors. Discord settings also show the bot's CPU and RAM use.
+- Each remote server has a Discord tab for its channels, message format, and notification controls. App settings keeps the shared bot token, on/off switch, update control, and resource usage.
+- Custom Discord emoji appear by name, such as `:wave:`, in Minecraft chat instead of showing their raw IDs.
+- Discord attachments appear in Minecraft chat as clickable media labels such as `[image]`, including messages without text.
+- Shared links, GIFs, and videos appear in Minecraft as short clickable labels. Discord's displayed title or attachment description is used when available; otherwise the site name is shown.
+- Installed mods and plugins now open a configuration panel. JSON, YAML, TOML, and properties files have form controls, with a Raw view for other files or precise edits.
+- Mods and plugins can be favourited with a heart. Favourites are saved on this device across servers and can be filtered in search results and installed lists.
+
+### Changed
+
+- Velocity setup now shows each installation step, reports proxy startup errors, and avoids Velocity's sample forced-host entries. Its card aligns with the other server settings.
+
+### Fixed
+
+- Long server navigation menus and the Server and Install tabs now scroll within the window.
+- Discord chat messages are sent to the Minecraft console in one tmux operation. A brief failed console check is retried, and failed deliveries are logged with the Discord message ID.
+- Discord messages appear in vanilla Minecraft without the automatic `[Server]` prefix by using a plain `tellraw` text component.
+- Cached map terrain appears immediately, then gets a fresh read before the app trusts its timestamp. Newly read region chunks are checked against their requested coordinates before their pixels are displayed or cached.
+- Offline player markers on the Map tab no longer show a person icon through the skin head.
+- Long folder listings in the Files tab now scroll inside the browser, with the search and editor kept accessible.
+
+## [1.0.0] - 2026-10-23
+
+### Added
+
 - The Mods tab can browse and install compatible Modrinth modpacks into a stopped server. Existing server files are preserved, and the install summary lists conflicting paths that were skipped. Mod search results show Required, Optional, and Server badges, which can also filter results.
 - A Map tab plots online players on an interactive, chunk-aligned X/Z grid over lightweight tiles from saved terrain. Terrain detail changes with zoom and refreshes after saves or on demand; ungenerated areas remain blank. Drag, scroll, or use the map controls to move and zoom. Offline players appear at their last saved position with greyed-out heads, grouped by dimension.
 - Remote maps now show locally cached terrain and the last map view while current tiles and player locations refresh. Recent logs and remote server icons also appear from the local cache before being updated. App settings shows the display cache size and lets you clear it.

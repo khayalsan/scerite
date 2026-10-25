@@ -3,7 +3,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type { FormEvent } from "react";
-import { ArrowLeft, Download, FileKey, FolderOpen, Globe2, MapPinned, Package, Palette, Plus, Puzzle, ScrollText, Server, Settings, SlidersHorizontal, Terminal, Users, X } from "lucide-react";
+import { ArrowLeft, Download, FileKey, FolderOpen, Globe2, MapPinned, MessageCircle, Package, Palette, Plus, Puzzle, ScrollText, Server, Settings, SlidersHorizontal, Terminal, Users, X } from "lucide-react";
 import { appSettings, localInstallRoot, serverEnvironments, serverProfiles } from "./lib/serverProfiles";
 import type { ServerEnvironment, ServerProfile, ServerTarget } from "./lib/serverProfiles";
 import { serverSessions } from "./lib/serverSessions";
@@ -15,8 +15,10 @@ import { ServerPropertiesPanel } from "./components/ServerPropertiesPanel";
 import { ServerInstallPanel } from "./components/ServerInstallPanel";
 import { PackagesPanel } from "./components/PackagesPanel";
 import { ServerOverviewPanel } from "./components/ServerOverviewPanel";
+import { VelocityOnDemandPanel } from "./components/VelocityOnDemandPanel";
 import { ServerListIcon } from "./components/ServerListIcon";
 import { DisplayCacheSettings } from "./components/DisplayCacheSettings";
+import { DiscordBridgeSettings, ServerDiscordPanel } from "./components/DiscordBridgeSettings";
 import { LogsPanel } from "./components/LogsPanel";
 import { SearchField } from "./components/SearchField";
 import { PlayersPanel } from "./components/PlayersPanel";
@@ -37,6 +39,7 @@ type ProfileDraft = {
   executable: string;
   arguments: string;
   ramMb: string;
+  cpuCores: string;
   environmentId: string;
   manualDirectory: boolean;
 };
@@ -72,7 +75,7 @@ function readSavedTheme(): ThemeId {
   }
 }
 
-type ServerTab = "server" | "console" | "players" | "map" | "logs" | "files" | "worlds" | "properties" | "mods" | "plugins" | "install" | "settings";
+type ServerTab = "server" | "console" | "players" | "map" | "logs" | "files" | "worlds" | "properties" | "mods" | "plugins" | "discord" | "install" | "settings";
 
 const emptyDraft: ProfileDraft = {
   name: "",
@@ -81,6 +84,7 @@ const emptyDraft: ProfileDraft = {
   executable: "",
   arguments: "",
   ramMb: "",
+  cpuCores: "",
   environmentId: "",
   manualDirectory: false,
 };
@@ -140,6 +144,18 @@ function withoutMaximumRam(arguments_: string[]): string[] {
   return arguments_.filter((argument) => !/^-Xmx\d+[mMgG]$/.test(argument));
 }
 
+function activeProcessorCount(arguments_: string[]): string {
+  const values = arguments_.flatMap((argument) => {
+    const match = /^-XX:ActiveProcessorCount=(\d+)$/.exec(argument);
+    return match ? [match[1]] : [];
+  });
+  return values.length ? values[values.length - 1] : "";
+}
+
+function withoutResourceLimits(arguments_: string[]): string[] {
+  return withoutMaximumRam(arguments_).filter((argument) => !/^-XX:ActiveProcessorCount=\d+$/.test(argument));
+}
+
 function serverFolderName(name: string): string {
   return Array.from(name.trim())
     .map((character) => /[\p{L}\p{N}]/u.test(character) ? character.toLowerCase() : "-")
@@ -151,8 +167,11 @@ function serverFolderName(name: string): string {
 function targetFor(draft: ProfileDraft, previous?: ServerProfile): ServerTarget {
   const launchArguments = parseLaunchArguments(draft.arguments);
   if (isJavaExecutable(draft.executable)) {
-    const withoutRam = withoutMaximumRam(launchArguments);
-    launchArguments.splice(0, launchArguments.length, ...(draft.ramMb ? [`-Xmx${draft.ramMb}M`] : []), ...withoutRam);
+    const withoutLimits = withoutResourceLimits(launchArguments);
+    launchArguments.splice(0, launchArguments.length,
+      ...(draft.ramMb ? [`-Xmx${draft.ramMb}M`] : []),
+      ...(draft.cpuCores ? [`-XX:ActiveProcessorCount=${draft.cpuCores}`] : []),
+      ...withoutLimits);
   }
   const managedJava = previous?.target.kind === draft.kind &&
     (draft.kind === "local" || previous.target.kind === "remote" && previous.target.environmentId === draft.environmentId)
@@ -194,8 +213,9 @@ function draftFor(profile: ServerProfile): ProfileDraft {
       directory: profile.target.directory,
       manualDirectory: true,
       executable: profile.target.launch.executable,
-      arguments: (javaLaunch ? withoutMaximumRam(arguments_) : arguments_).join("\n"),
+      arguments: (javaLaunch ? withoutResourceLimits(arguments_) : arguments_).join("\n"),
       ramMb: javaLaunch ? maximumRam(arguments_) : "",
+      cpuCores: javaLaunch ? activeProcessorCount(arguments_) : "",
     };
   }
 
@@ -204,8 +224,9 @@ function draftFor(profile: ServerProfile): ProfileDraft {
     name: profile.name,
     directory: profile.target.directory,
     executable: profile.target.launch.executable,
-    arguments: (javaLaunch ? withoutMaximumRam(arguments_) : arguments_).join("\n"),
+    arguments: (javaLaunch ? withoutResourceLimits(arguments_) : arguments_).join("\n"),
     ramMb: javaLaunch ? maximumRam(arguments_) : "",
+    cpuCores: javaLaunch ? activeProcessorCount(arguments_) : "",
   };
 }
 
@@ -291,10 +312,11 @@ function App() {
   }, [selectedProfile?.id, selectedProfile?.installedSoftware, selectedProfile?.target.directory, selectedRemoteConnected]);
 
   useEffect(() => {
-    if (packageSupport && ((activeServerTab === "mods" && !packageSupport.mods) || (activeServerTab === "plugins" && !packageSupport.plugins))) {
+    if ((packageSupport && ((activeServerTab === "mods" && !packageSupport.mods) || (activeServerTab === "plugins" && !packageSupport.plugins)))
+      || (activeServerTab === "discord" && selectedProfile?.target.kind === "local")) {
       setActiveServerTab("server");
     }
-  }, [activeServerTab, packageSupport?.mods, packageSupport?.plugins]);
+  }, [activeServerTab, packageSupport?.mods, packageSupport?.plugins, selectedProfile?.target.kind]);
   const visibleProfiles = !selectedProfileId && environmentFilterId
     ? profiles.filter((profile) => profile.target.kind === "remote" && profile.target.environmentId === environmentFilterId)
     : profiles;
@@ -783,6 +805,15 @@ function App() {
       setFormError("Set maximum RAM in the field below and remove -Xmx from launch arguments.");
       return;
     }
+    if (isJavaExecutable(draft.executable) && parseLaunchArguments(draft.arguments).some((argument) => argument.startsWith("-XX:ActiveProcessorCount="))) {
+      setFormError("Set Java's active processor count in the field below and remove it from launch arguments.");
+      return;
+    }
+    if (isJavaExecutable(draft.executable) && draft.cpuCores &&
+        (!/^\d+$/.test(draft.cpuCores) || Number(draft.cpuCores) < 1 || Number(draft.cpuCores) > 256)) {
+      setFormError("Choose an active processor count between 1 and 256.");
+      return;
+    }
     if (isJavaExecutable(draft.executable) && draft.ramMb &&
         (!/^\d+$/.test(draft.ramMb) || Number(draft.ramMb) < 256 || Number(draft.ramMb) > 1048576)) {
       setFormError("Choose a maximum RAM amount between 256 and 1048576 MB.");
@@ -1085,6 +1116,13 @@ function App() {
                 />
                 <small>Sets Java's maximum heap (-Xmx) on the next start. Leave blank to use Java's default. Custom launch scripts manage their own memory.</small>
               </label>
+              <label className="field field-wide">
+                <span>Java active processors</span>
+                <input type="number" min="1" max="256" step="1" value={draft.cpuCores}
+                  onChange={(event) => setDraft({ ...draft, cpuCores: event.currentTarget.value })}
+                  placeholder="Use all available cores" disabled={!isJavaExecutable(draft.executable)} />
+                <small>Sets -XX:ActiveProcessorCount on the next start. Leave blank to let Java use all cores available to the host. This changes Java's thread sizing; it cannot add CPU capacity to the machine.</small>
+              </label>
             </div>
 
             <div className="form-actions">
@@ -1212,6 +1250,9 @@ function App() {
               <button className={`server-tab${activeServerTab === "properties" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "properties" ? "page" : undefined} onClick={() => { setActiveServerTab("properties"); setPropertiesProfileId(selectedProfile.id); }}>
                 <SlidersHorizontal size={16} aria-hidden="true" /> Properties
               </button>
+              {!isLocal && <button className={`server-tab${activeServerTab === "discord" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "discord" ? "page" : undefined} onClick={() => setActiveServerTab("discord")}>
+                <MessageCircle size={16} aria-hidden="true" /> Discord
+              </button>}
               <button className={`server-tab${activeServerTab === "install" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "install" ? "page" : undefined} onClick={() => { setActiveServerTab("install"); setInstallProfileId(selectedProfile.id); }}>
                 <Download size={16} aria-hidden="true" /> Install
               </button>
@@ -1358,6 +1399,7 @@ function App() {
         )}
 
         {isAppSettings && <DisplayCacheSettings />}
+        {isAppSettings && <DiscordBridgeSettings environments={environments} profiles={profiles} />}
 
         {!selectedProfileId && !isAppSettings && environments.length > 0 && (
           <section className="environment-section" aria-label="Remote environments">
@@ -1460,6 +1502,7 @@ function App() {
             {visibleProfiles.map((profile) => {
               const target = profile.target;
               const isLocal = target.kind === "local";
+              const discordEnvironment = target.kind === "remote" ? environments.find((item) => item.id === target.environmentId) : undefined;
               const location = target.kind === "local"
                 ? target.directory
                 : `${environments.find((environment) => environment.id === target.environmentId)?.name ?? "Remote environment"}${target.directory ? ` · ${target.directory}` : ""}`;
@@ -1567,6 +1610,9 @@ function App() {
                             />
                           )}
                         </section>
+                        {!isLocal && <section className="server-tab-panel" hidden={activeServerTab !== "discord"} aria-label="Server Discord">
+                          {activeServerTab === "discord" && discordEnvironment && <ServerDiscordPanel key={profile.id} profile={profile} environment={discordEnvironment} profiles={profiles} />}
+                        </section>}
                         <section className="server-tab-panel" hidden={activeServerTab !== "install"} aria-label="Install Minecraft">
                           {installProfileId === profile.id && <ServerInstallPanel profileId={profile.id} remote={!isLocal} rootConfigured={isLocal ? !!localRoot : !!environments.find((environment) => environment.id === (target.kind === "remote" ? target.environmentId : ""))?.rootDirectory} canInstall={isLocal ? state === "stopped" : remoteState === "stopped"} onUpdated={async () => setProfiles(await serverProfiles.list())} />}
                         </section>
@@ -1577,6 +1623,8 @@ function App() {
                               <p>Stop the server before editing its profile.</p>
                             </div>
                           )}
+                          {activeServerTab === "settings" && !isLocal && (profile.installedSoftware === "paper" || profile.installedSoftware === "purpur") &&
+                            <VelocityOnDemandPanel key={profile.id} profileId={profile.id} canChange={remoteState === "stopped"} />}
                         </section>
                       </div>
                     </div>
