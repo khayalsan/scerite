@@ -17,6 +17,7 @@ type CachedTile = {
   resolution: TileResolution;
   canvas: HTMLCanvasElement | null;
   checkedAt: number;
+  verified: boolean;
 };
 
 const key = (dimension: string, x: number, z: number, resolution: TileResolution) => `${dimension}|${x}|${z}|${resolution}`;
@@ -61,7 +62,7 @@ export class TerrainTileCache {
     if (!context) return null;
     context.imageSmoothingEnabled = true;
     context.drawImage(original.canvas!, 0, 0, resolution, resolution);
-    const derived = { timestamp: original.timestamp, resolution, canvas, checkedAt: original.checkedAt };
+    const derived = { timestamp: original.timestamp, resolution, canvas, checkedAt: original.checkedAt, verified: original.verified };
     this.touch(key(dimension, x, z, resolution), derived);
     return derived;
   }
@@ -94,14 +95,15 @@ export class TerrainTileCache {
     const tileKey = key(dimension, x, z, resolution);
     if (!force && now - (this.errors.get(tileKey) ?? 0) < 15_000) return false;
     const tile = this.exact(dimension, x, z, resolution) ?? this.derive(dimension, x, z, resolution);
-    return force || !tile || now - tile.checkedAt >= 45_000;
+    return force || !tile || !tile.verified || now - tile.checkedAt >= 45_000;
   }
 
   knownTimestamp(dimension: string, x: number, z: number, resolution: TileResolution) {
-    return this.exact(dimension, x, z, resolution)?.timestamp ?? null;
+    const tile = this.exact(dimension, x, z, resolution);
+    return tile?.verified ? tile.timestamp : null;
   }
 
-  apply(dimension: string, result: TerrainResult) {
+  apply(dimension: string, result: TerrainResult, source: "remote" | "disk" = "remote") {
     const tileKey = key(dimension, result.x, result.z, result.resolution);
     const now = Date.now();
     if (result.status === "error") {
@@ -123,7 +125,7 @@ export class TerrainTileCache {
         for (const [cachedKey, tile] of cached) this.touch(cachedKey, { ...tile!, checkedAt: now });
         return false;
       }
-      this.touch(tileKey, { timestamp: null, resolution: result.resolution, canvas: null, checkedAt: now });
+      this.touch(tileKey, { timestamp: null, resolution: result.resolution, canvas: null, checkedAt: now, verified: true });
       return true;
     }
     if (!result.rgba || result.rgba.length !== result.resolution * result.resolution * 4) {
@@ -141,7 +143,7 @@ export class TerrainTileCache {
         this.touch(key(dimension, result.x, result.z, resolution), { ...existing, checkedAt: 0 });
       }
     }
-    this.touch(tileKey, { timestamp: result.timestamp, resolution: result.resolution, canvas, checkedAt: now });
+    this.touch(tileKey, { timestamp: result.timestamp, resolution: result.resolution, canvas, checkedAt: now, verified: source === "remote" });
     return true;
   }
 }
