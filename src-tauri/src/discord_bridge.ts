@@ -205,8 +205,9 @@ async function watchServers() {
 client.on(Events.MessageCreate, (message) => {
   if (!message.guild || message.author.bot || message.webhookId) return;
   if (!message.content.trim()) return;
+  const content = clean(message.content.replace(/<(?:a:|:)?([A-Za-z0-9_]+):\d+>/g, ":$1:"));
   for (const server of servers.filter((item) => item.chat_to_minecraft && channelFor(item, "chat_to_minecraft") === message.channel.id)) {
-    void sendToMinecraft(server, clean(message.author.username, 40), clean(message.author.displayName, 40), clean(message.content))
+    void sendToMinecraft(server, clean(message.author.username, 40), clean(message.author.displayName, 40), content)
       .catch((error) => console.error(`Could not deliver Discord message ${message.id} to ${server.name}: ${String(error)}`));
   }
 });
