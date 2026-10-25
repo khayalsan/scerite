@@ -2820,8 +2820,8 @@ pub async fn discord_bridge_status(
                         if !object.contains_key(field) { object.insert(field.into(), serde_json::Value::String(String::new())); }
                     }
                     if object.get("chatToMinecraftTemplate").and_then(serde_json::Value::as_str)
-                        .is_none_or(|value| matches!(value, "<🎮{username}> {message}" | "<🎮{color:blue}{name}{color:reset}> {message}")) {
-                        object.insert("chatToMinecraftTemplate".into(), serde_json::Value::String("<{color:blue}🎮{name}{color:reset}> {message}".into()));
+                        .is_none_or(|value| matches!(value, "<🎮{username}> {message}" | "<🎮{color:blue}{name}{color:reset}> {message}" | "<{color:blue}🎮{name}{color:reset}> {message}")) {
+                        object.insert("chatToMinecraftTemplate".into(), serde_json::Value::String("<{color:blue}🎮{color:reset}{name}> {message}".into()));
                     }
                     serde_json::from_value(item)
                         .map_err(|error| format!("Discord bridge settings are invalid: {error}"))
