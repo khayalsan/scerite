@@ -31,6 +31,7 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 ### Fixed
 
 - Discord chat messages are sent to the Minecraft console in one tmux operation. A brief failed console check is retried, and failed deliveries are logged with the Discord message ID.
+- Discord messages appear in vanilla Minecraft without the automatic `[Server]` prefix by using a plain `tellraw` text component.
 - Offline player markers on the Map tab no longer show a person icon through the skin head.
 - Long folder listings in the Files tab now scroll inside the browser, with the search and editor kept accessible.
 - Long world settings and file lists can now scroll within the Worlds tab.

@@ -47,7 +47,8 @@ async function sendToMinecraft(server: Server, author: string, content: string) 
     if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 500));
   }
   if (!available) throw new Error("Minecraft console was unavailable after three checks");
-  const command = `say ${clean(`[Discord] ${author}: ${content}`, 400)}`;
+  const message = clean(`[Discord] ${author}: ${content}`, 400).replace(/[\u0000-\u001f\u007f]/g, " ");
+  const command = `tellraw @a ${JSON.stringify({ text: message })}`;
   await run("tmux", ["send-keys", "-t", server.session, command, "Enter"], { timeout: 5000 });
 }
 
