@@ -2732,9 +2732,10 @@ fn bridge_session_name(environment_id: Uuid) -> String {
 fn bridge_directory(session: &RemoteConnection, environment: &ServerEnvironment) -> Result<String, String> {
     let root = remote_root(session, &environment.root_directory)?;
     let sftp = session.sftp()?;
-    let bridge_root = format!("{root}/runtimes/discord-bridge");
+    let environment_folder = environment.id.simple().to_string();
+    let bridge_root = format!("{root}/runtimes/discord-bridge/{environment_folder}");
     let mut path = root;
-    for part in ["runtimes", "discord-bridge"] {
+    for part in ["runtimes", "discord-bridge", environment_folder.as_str()] {
         path = format!("{path}/{part}");
         match sftp.lstat_optional(Path::new(&path)) {
             Ok(attrs) if attrs.file_type() == FileType::Dir => {},
@@ -2829,7 +2830,8 @@ pub async fn enable_discord_bridge(
     run_remote(profile, environment.clone(), Arc::clone(remote_sessions.inner()), move |session, _| {
         let sftp = session.sftp()?;
         let root = remote_root(session, &environment.root_directory)?;
-        let bridge_root = ensure_remote_managed_dirs(session, &sftp, &root, &["runtimes", "discord-bridge"])?;
+        let environment_folder = environment_id.simple().to_string();
+        let bridge_root = ensure_remote_managed_dirs(session, &sftp, &root, &["runtimes", "discord-bridge", &environment_folder])?;
         let token_path = format!("{bridge_root}/token");
         if token.is_empty() && !bridge_file_exists(&sftp, &token_path)? {
             return Err("Enter your Discord bot token to enable the bridge.".into());
