@@ -1297,6 +1297,12 @@
   margin-top: 8px;
 }
 
+.velocity-on-demand { display: grid; gap: 10px; width: min(100%, 760px); padding: 18px; border: 1px solid var(--app-line); border-radius: 10px; }
+.velocity-on-demand h3, .velocity-on-demand p { margin: 0; }
+.velocity-on-demand h3 { font-size: 16px; }
+.velocity-on-demand p { color: var(--app-muted); font-size: 13px; line-height: 1.5; }
+.velocity-on-demand label { display: flex; align-items: center; justify-content: space-between; gap: 16px; font-weight: 600; }
+
 .server-detail-shell .server-settings-editing {
   display: block;
   min-height: 0;

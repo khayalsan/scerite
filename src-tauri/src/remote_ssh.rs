@@ -41,12 +41,14 @@ use crate::server_port;
 use crate::terrain::{self, TerrainRequest, TerrainTile};
 use crate::server_files::validate_server_icon;
 use crate::world_management::{self, WorldBackup, WorldSettings};
+use crate::velocity_download;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_FILE_BYTES: u64 = 1024 * 1024;
 const MAX_CONSOLE_BYTES: u64 = 512 * 1024;
 const MAX_DIRECTORY_ENTRIES: usize = 1000;
 const CONNECTION_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+const SCERITE_VELOCITY_JAR: &[u8] = include_bytes!("../resources/scerite-velocity.jar");
 
 pub struct RemoteSessionManager {
     sessions: Mutex<HashMap<Uuid, CachedConnection>>,
@@ -3489,6 +3491,266 @@ pub async fn restore_remote_world_backup(
             return Err(format!("Could not restore the world: {error}.{recovery}"));
         }
         Ok(preserved.unwrap_or_default())
+    }).await
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct VelocityManifest {
+    public_port: u16,
+    backend_port: u16,
+    original_properties: String,
+    original_paper: String,
+    patched_properties: String,
+    patched_paper: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VelocityOnDemandStatus {
+    enabled: bool,
+    public_port: Option<u16>,
+    backend_port: Option<u16>,
+    proxy_running: bool,
+}
+
+fn velocity_root(sftp: &RemoteSftp, profile: &ServerProfile, environment: &ServerEnvironment) -> Result<String, String> {
+    let root = remote_root_with_sftp(sftp, &environment.root_directory)?;
+    let folder = profile.id.simple().to_string();
+    Ok(format!("{root}/runtimes/velocity/{folder}"))
+}
+
+fn velocity_read(sftp: &RemoteSftp, path: &str) -> Result<String, String> {
+    let metadata = sftp.lstat(Path::new(path)).map_err(|error| format!("Could not read Velocity setup: {error}"))?;
+    if metadata.file_type() != FileType::File || metadata.size.is_some_and(|size| size > MAX_FILE_BYTES) {
+        return Err("The Velocity setup file is not a regular text file under 1 MB.".into());
+    }
+    let bytes = sftp.read_prefix(Path::new(path), MAX_FILE_BYTES as usize + 1)?;
+    if bytes.len() as u64 > MAX_FILE_BYTES {
+        return Err("The Velocity setup file is too large to read.".into());
+    }
+    String::from_utf8(bytes).map_err(|_| "The Velocity setup file is not UTF-8 text.".into())
+}
+
+fn velocity_write(sftp: &RemoteSftp, path: &str, bytes: &[u8]) -> Result<(), String> {
+    let temporary = format!("{path}.{}.tmp", Uuid::new_v4().simple());
+    sftp.write_file_exclusive(Path::new(&temporary), bytes)?;
+    if let Err(error) = sftp.posix_rename(Path::new(&temporary), Path::new(path)) {
+        let _ = sftp.unlink(Path::new(&temporary));
+        return Err(format!("Could not save Velocity setup: {error}"));
+    }
+    Ok(())
+}
+
+fn remote_listening_ports(session: &RemoteConnection) -> Result<std::collections::HashSet<u16>, String> {
+    let sockets = execute(session, "cat /proc/net/tcp /proc/net/tcp6")?;
+    if sockets.exit_code != 0 { return Err("Could not inspect remote listening ports.".into()); }
+    Ok(String::from_utf8_lossy(&sockets.stdout).lines().filter_map(|line| {
+        let mut fields = line.split_whitespace();
+        fields.next()?;
+        let address = fields.next()?;
+        fields.next()?;
+        (fields.next()? == "0A").then(|| address.rsplit(':').next())
+            .flatten().and_then(|port| u16::from_str_radix(port, 16).ok())
+    }).collect())
+}
+
+#[tauri::command]
+pub async fn velocity_on_demand_status(
+    profile_id: Uuid, profiles: State<'_, ServerProfileStore>,
+    remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<VelocityOnDemandStatus, String> {
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    run_remote(profile, environment.clone(), Arc::clone(remote_sessions.inner()), move |session, profile| {
+        let sftp = session.sftp()?;
+        let root = velocity_root(&sftp, profile, &environment)?;
+        let path = format!("{root}/manifest.json");
+        match sftp.lstat_optional(Path::new(&path)) {
+            Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile => Ok(VelocityOnDemandStatus { enabled: false, public_port: None, backend_port: None, proxy_running: false }),
+            Ok(_) => {
+                let manifest: VelocityManifest = serde_json::from_str(&velocity_read(&sftp, &path)?)
+                    .map_err(|_| "The saved Velocity setup is invalid.".to_owned())?;
+                let proxy_session = format!("scerite-velocity-{}", profile.id.simple());
+                let proxy_running = execute(session, &format!("tmux has-session -t {} 2>/dev/null", shell_quote(&proxy_session)))?.exit_code == 0
+                    && remote_listening_ports(session)?.contains(&manifest.public_port);
+                Ok(VelocityOnDemandStatus { enabled: true, public_port: Some(manifest.public_port), backend_port: Some(manifest.backend_port), proxy_running })
+            }
+            Err(error) => Err(format!("Could not check Velocity setup: {error}")),
+        }
+    }).await
+}
+
+#[tauri::command]
+pub async fn enable_velocity_on_demand(
+    app: AppHandle, profile_id: Uuid, profiles: State<'_, ServerProfileStore>,
+    remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<VelocityOnDemandStatus, String> {
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    if !matches!(profile.installed_software.as_deref(), Some("paper" | "purpur")) {
+        return Err("On-demand Velocity start currently supports remote Paper and Purpur servers.".into());
+    }
+    let sessions = Arc::clone(remote_sessions.inner());
+    let preflight_environment = environment.clone();
+    run_remote(profile.clone(), environment.clone(), Arc::clone(&sessions), move |session, profile| {
+        if remote_is_running(session, profile)? != Some(false) {
+            return Err("Stop the server before enabling on-demand startup.".into());
+        }
+        let root = remote_root(session, configured_remote_root(profile)?)?;
+        if remote_directory_has_java_process(session, &root)? {
+            return Err("A Java process is still using this server folder. Stop it before enabling on-demand startup.".into());
+        }
+        let sftp = session.sftp()?;
+        let proxy_root = velocity_root(&sftp, profile, &preflight_environment)?;
+        match sftp.lstat_optional(Path::new(&format!("{proxy_root}/manifest.json"))) {
+            Ok(_) => return Err("On-demand startup is already enabled for this server.".into()),
+            Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile => {},
+            Err(error) => return Err(format!("Could not inspect Velocity setup: {error}")),
+        }
+        Ok(())
+    }).await?;
+
+    let client = crate::vanilla_install::client()?;
+    let java = crate::vanilla_install::install_remote_java(&client, &app, &profile, &environment, Arc::clone(&sessions), 25).await?;
+    let velocity_jar = velocity_download::stable_velocity_jar(&client).await?;
+    run_remote(profile, environment.clone(), sessions, move |session, profile| {
+        if remote_is_running(session, profile)? != Some(false) { return Err("Stop the server before enabling on-demand startup.".into()); }
+        let sftp = session.sftp()?;
+        let root = remote_root_with_sftp(&sftp, configured_remote_root(profile)?)?;
+        let environment_root = remote_root_with_sftp(&sftp, &environment.root_directory)?;
+        let folder = profile.id.simple().to_string();
+        let proxy_root = ensure_remote_managed_dirs(session, &sftp, &environment_root, &["runtimes", "velocity", &folder])?;
+        let plugin_folder = ensure_remote_managed_dirs(session, &sftp, &proxy_root, &["plugins", "sceritevelocity"])?;
+        if [root.as_str(), proxy_root.as_str()].iter().any(|path| path.contains(['\n', '\r'])) {
+            return Err("Remote paths with line breaks cannot be used for Velocity setup.".into());
+        }
+        let properties_path = format!("{root}/server.properties");
+        let paper_path = format!("{root}/config/paper-global.yml");
+        let original_properties = velocity_read(&sftp, &properties_path)?;
+        let original_paper = velocity_read(&sftp, &paper_path)?;
+        let spigot = velocity_read(&sftp, &format!("{root}/spigot.yml"))?;
+        if spigot.lines().any(|line| line.trim() == "bungeecord: true") {
+            return Err("Disable settings.bungeecord in spigot.yml before enabling Velocity forwarding.".into());
+        }
+        let public_port = server_port::configured_port(Some(&original_properties))?;
+        let used = remote_listening_ports(session)?;
+        if used.contains(&public_port) { return Err(format!("Port {public_port} is in use. Stop that service before enabling Velocity.")); }
+        let backend_port = server_port::available_port(public_port, |port| Ok(port == public_port || used.contains(&port)))?
+            .ok_or("Could not choose a backend port.")?;
+        let secret = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+        let patched_properties = velocity_download::backend_properties(&original_properties, backend_port);
+        let patched_paper = velocity_download::paper_forwarding(&original_paper, &secret)?;
+        let manifest = VelocityManifest { public_port, backend_port, original_properties, original_paper, patched_properties, patched_paper };
+        let session_id = session_name(profile.id);
+        let proxy_session = format!("scerite-velocity-{}", profile.id.simple());
+        let ServerTarget::Remote { launch, .. } = &profile.target else { unreachable!() };
+        let managed_java = if let Some(java) = launch.managed_java.as_deref() {
+            let actual = sftp.realpath(Path::new(java))?;
+            if !Path::new(&actual).starts_with(Path::new(&environment_root).join("runtimes/java")) {
+                return Err("The managed Java executable is outside the configured runtime folder.".into());
+            }
+            if execute(session, &format!("test -x {}", shell_quote(&actual)))?.exit_code != 0 {
+                return Err("The managed Java executable is missing or is not executable.".into());
+            }
+            Some(actual)
+        } else { None };
+        let launch_command = launch_command(launch, managed_java.as_deref());
+        let start = format!("#!/bin/sh\nif tmux has-session -t {} 2>/dev/null; then\n  if [ \"$(tmux display-message -p -t {} '#{{pane_dead}}')\" = 0 ]; then exit 0; fi\n  tmux kill-session -t {}\nfi\ntmux new-session -d -s {} -c {} {}\ntmux set-window-option -t {} remain-on-exit on\n",
+            shell_quote(&session_id), shell_quote(&session_id), shell_quote(&session_id), shell_quote(&session_id), shell_quote(&root), shell_quote(&launch_command), shell_quote(&session_id));
+        let stop = format!("#!/bin/sh\ntmux send-keys -t {} -l stop\ntmux send-keys -t {} Enter\n", shell_quote(&session_id), shell_quote(&session_id));
+        let plugin_config = format!("serverName=backend\nbackendPort={backend_port}\nidleSeconds=300\nstartScript={proxy_root}/start.sh\nstopScript={proxy_root}/stop.sh\n");
+        let proxy_config = format!("config-version = \"2.9\"\nbind = \"0.0.0.0:{public_port}\"\nonline-mode = true\nforce-key-authentication = true\nplayer-info-forwarding-mode = \"modern\"\nforwarding-secret-file = \"forwarding.secret\"\n[servers]\nbackend = \"127.0.0.1:{backend_port}\"\ntry = [\"backend\"]\n");
+        velocity_write(&sftp, &format!("{proxy_root}/velocity.jar"), &velocity_jar)?;
+        velocity_write(&sftp, &format!("{proxy_root}/plugins/scerite-velocity.jar"), SCERITE_VELOCITY_JAR)?;
+        velocity_write(&sftp, &format!("{plugin_folder}/config.properties"), plugin_config.as_bytes())?;
+        velocity_write(&sftp, &format!("{proxy_root}/start.sh"), start.as_bytes())?;
+        velocity_write(&sftp, &format!("{proxy_root}/stop.sh"), stop.as_bytes())?;
+        velocity_write(&sftp, &format!("{proxy_root}/velocity.toml"), proxy_config.as_bytes())?;
+        velocity_write(&sftp, &format!("{proxy_root}/forwarding.secret"), secret.as_bytes())?;
+        let chmod = execute(session, &format!("chmod 600 -- {}", shell_quote(&format!("{proxy_root}/forwarding.secret"))))?;
+        if chmod.exit_code != 0 { return Err(remote_command_error("Could not protect Velocity's forwarding secret", chmod)); }
+        velocity_write(&sftp, &properties_path, manifest.patched_properties.as_bytes())?;
+        if let Err(error) = velocity_write(&sftp, &paper_path, manifest.patched_paper.as_bytes()) {
+            let _ = velocity_write(&sftp, &properties_path, manifest.original_properties.as_bytes());
+            return Err(error);
+        }
+        let start_result = (|| {
+            let start_proxy = execute(session, &format!("tmux new-session -d -s {} -c {} {}",
+                shell_quote(&proxy_session), shell_quote(&proxy_root), shell_quote(&format!("{} -jar velocity.jar", shell_quote(&java)))))?;
+            if start_proxy.exit_code != 0 {
+                return Err(remote_command_error("Could not start Velocity", start_proxy));
+            }
+            for _ in 0..30 {
+                let plugin_log = execute(session, &format!("tmux capture-pane -p -t {} -S -200 2>/dev/null | grep -F 'Scerite on-demand backend ready'",
+                    shell_quote(&proxy_session)))?;
+                if plugin_log.exit_code == 0 && remote_listening_ports(session)?.contains(&public_port) {
+                    return velocity_write(&sftp, &format!("{proxy_root}/manifest.json"),
+                        serde_json::to_string(&manifest).map_err(|error| error.to_string())?.as_bytes());
+                }
+                std::thread::sleep(Duration::from_secs(1));
+            }
+            Err("Velocity did not open its public port. Check the Velocity console output.".into())
+        })();
+        if let Err(error) = start_result {
+            let _ = execute(session, &format!("tmux kill-session -t {} 2>/dev/null", shell_quote(&proxy_session)));
+            let properties_restore = velocity_write(&sftp, &properties_path, manifest.original_properties.as_bytes());
+            let paper_restore = velocity_write(&sftp, &paper_path, manifest.original_paper.as_bytes());
+            if properties_restore.is_err() || paper_restore.is_err() {
+                return Err(format!("{error} Could not restore all server settings; check server.properties and config/paper-global.yml before starting the server."));
+            }
+            return Err(error);
+        }
+        Ok(VelocityOnDemandStatus { enabled: true, public_port: Some(public_port), backend_port: Some(backend_port), proxy_running: true })
+    }).await
+}
+
+#[tauri::command]
+pub async fn disable_velocity_on_demand(
+    profile_id: Uuid, profiles: State<'_, ServerProfileStore>,
+    remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<VelocityOnDemandStatus, String> {
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    run_remote(profile, environment.clone(), Arc::clone(remote_sessions.inner()), move |session, profile| {
+        if remote_is_running(session, profile)? != Some(false) {
+            return Err("Stop the server before disabling on-demand startup.".into());
+        }
+        let sftp = session.sftp()?;
+        let proxy_root = velocity_root(&sftp, profile, &environment)?;
+        let manifest_path = format!("{proxy_root}/manifest.json");
+        let manifest: VelocityManifest = serde_json::from_str(&velocity_read(&sftp, &manifest_path)?)
+            .map_err(|_| "The saved Velocity setup is invalid.".to_owned())?;
+        let root = remote_root_with_sftp(&sftp, configured_remote_root(profile)?)?;
+        let properties_path = format!("{root}/server.properties");
+        let paper_path = format!("{root}/config/paper-global.yml");
+        let current_properties = velocity_read(&sftp, &properties_path)?;
+        let current_paper = velocity_read(&sftp, &paper_path)?;
+        let restored_properties = velocity_download::restore_backend_properties(
+            &current_properties, &manifest.original_properties, &manifest.patched_properties)?;
+        let restored_paper = velocity_download::restore_paper_forwarding(
+            &current_paper, &manifest.original_paper, &manifest.patched_paper)?;
+        let proxy_session = format!("scerite-velocity-{}", profile.id.simple());
+        let active = execute(session, &format!("tmux has-session -t {} 2>/dev/null", shell_quote(&proxy_session)))?;
+        if active.exit_code == 0 {
+            let stop = execute(session, &format!("tmux send-keys -t {} -l end && tmux send-keys -t {} Enter",
+                shell_quote(&proxy_session), shell_quote(&proxy_session)))?;
+            if stop.exit_code != 0 { return Err(remote_command_error("Could not stop Velocity", stop)); }
+            for _ in 0..15 {
+                if !remote_listening_ports(session)?.contains(&manifest.public_port) { break; }
+                std::thread::sleep(Duration::from_secs(1));
+            }
+            if remote_listening_ports(session)?.contains(&manifest.public_port) {
+                return Err("Velocity did not stop. Try again after checking its console.".into());
+            }
+        }
+        if remote_listening_ports(session)?.contains(&manifest.public_port) {
+            return Err("The original Minecraft port is still in use. Stop that service before disabling Velocity.".into());
+        }
+        velocity_write(&sftp, &properties_path, restored_properties.as_bytes())?;
+        if let Err(error) = velocity_write(&sftp, &paper_path, restored_paper.as_bytes()) {
+            let _ = velocity_write(&sftp, &properties_path, current_properties.as_bytes());
+            return Err(error);
+        }
+        sftp.unlink(Path::new(&manifest_path)).map_err(|error| format!("Could not finish disabling Velocity: {error}"))?;
+        Ok(VelocityOnDemandStatus { enabled: false, public_port: None, backend_port: None, proxy_running: false })
     }).await
 }
 

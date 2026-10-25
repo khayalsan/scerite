@@ -15,6 +15,7 @@ mod modpacks;
 mod server_overview;
 mod server_port;
 mod world_management;
+mod velocity_download;
 mod terrain;
 mod display_cache;
 
@@ -133,6 +134,9 @@ pub fn run() {
             remote_ssh::download_remote_world,
             remote_ssh::upload_remote_world,
             remote_ssh::import_remote_world,
+            remote_ssh::velocity_on_demand_status,
+            remote_ssh::enable_velocity_on_demand,
+            remote_ssh::disable_velocity_on_demand,
             remote_ssh::regenerate_remote_world,
             remote_ssh::read_remote_server_file,
             remote_ssh::read_remote_server_log_start,

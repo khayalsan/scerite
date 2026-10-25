@@ -15,6 +15,7 @@ import { ServerPropertiesPanel } from "./components/ServerPropertiesPanel";
 import { ServerInstallPanel } from "./components/ServerInstallPanel";
 import { PackagesPanel } from "./components/PackagesPanel";
 import { ServerOverviewPanel } from "./components/ServerOverviewPanel";
+import { VelocityOnDemandPanel } from "./components/VelocityOnDemandPanel";
 import { ServerListIcon } from "./components/ServerListIcon";
 import { DisplayCacheSettings } from "./components/DisplayCacheSettings";
 import { DiscordBridgeSettings, ServerDiscordPanel } from "./components/DiscordBridgeSettings";
@@ -1622,6 +1623,8 @@ function App() {
                               <p>Stop the server before editing its profile.</p>
                             </div>
                           )}
+                          {activeServerTab === "settings" && !isLocal && (profile.installedSoftware === "paper" || profile.installedSoftware === "purpur") &&
+                            <VelocityOnDemandPanel key={profile.id} profileId={profile.id} canChange={remoteState === "stopped"} />}
                         </section>
                       </div>
                     </div>
