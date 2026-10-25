@@ -4,6 +4,8 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-25
+
 ### Added
 
 - The Worlds tab can import a ZIP into a new named world folder on local or remote servers without replacing an existing world.
