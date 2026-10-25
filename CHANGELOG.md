@@ -6,6 +6,7 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 ### Added
 
+- Remote environments can opt in to a user-owned Discord bot. A TypeScript bridge runs beside the servers, linking each enabled server to its own channel for chat, online/offline notices, and player joins/leaves. It is off by default and installs on the remote host only when enabled.
 - Installed mods and plugins now open a configuration panel. JSON, YAML, TOML, and properties files have form controls, with a Raw view for other files or precise edits.
 - Mods and plugins can be favourited with a heart. Favourites are saved on this device across servers and can be filtered in search results and installed lists.
 - The Mods tab can browse and install compatible Modrinth modpacks into a stopped server. Existing server files are preserved, and the install summary lists conflicting paths that were skipped. Mod search results show Required, Optional, and Server badges, which can also filter results.
