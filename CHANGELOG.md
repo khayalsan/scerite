@@ -28,6 +28,7 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 ### Fixed
 
+- Long server navigation menus and the Server and Install tabs now scroll within the window.
 - Cached map terrain appears immediately, then gets a fresh read before the app trusts its timestamp. Newly read region chunks are checked against their requested coordinates before their pixels are displayed or cached.
 - Offline player markers on the Map tab no longer show a person icon through the skin head.
 - Long folder listings in the Files tab now scroll inside the browser, with the search and editor kept accessible.
