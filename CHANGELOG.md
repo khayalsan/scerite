@@ -12,6 +12,7 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 - Each remote server has a Discord tab for its channels, message format, and notification controls. App settings keeps the shared bot token, on/off switch, update control, and resource usage.
 - Custom Discord emoji appear by name, such as `:wave:`, in Minecraft chat instead of showing their raw IDs.
 - Discord attachments appear in Minecraft chat as clickable media labels such as `[image]`, including messages without text.
+- Shared links, GIFs, and videos appear in Minecraft as short clickable site labels such as `[YouTube]` or `[Tenor]`.
 - Installed mods and plugins now open a configuration panel. JSON, YAML, TOML, and properties files have form controls, with a Raw view for other files or precise edits.
 - Mods and plugins can be favourited with a heart. Favourites are saved on this device across servers and can be filtered in search results and installed lists.
 - The Mods tab can browse and install compatible Modrinth modpacks into a stopped server. Existing server files are preserved, and the install summary lists conflicting paths that were skipped. Mod search results show Required, Optional, and Server badges, which can also filter results.

@@ -51,6 +51,14 @@ function modernClickEvents(version?: string | null) {
   return major > 1 || major === 1 && (minor > 21 || minor === 21 && patch >= 5);
 }
 
+function siteName(url: URL) {
+  const host = url.hostname.toLowerCase().replace(/^www\./, "");
+  for (const [domain, name] of Object.entries({ "youtube.com": "YouTube", "youtu.be": "YouTube", "tenor.com": "Tenor", "giphy.com": "Giphy", "tiktok.com": "TikTok", "twitch.tv": "Twitch", "reddit.com": "Reddit", "discord.com": "Discord", "discordapp.com": "Discord", "discordapp.net": "Discord", "instagram.com": "Instagram", "x.com": "X", "twitter.com": "X" })) {
+    if (host === domain || host.endsWith(`.${domain}`)) return name;
+  }
+  return host;
+}
+
 function minecraftChat(template: string, username: string, name: string, content: string, attachments: AttachmentLink[], modern: boolean) {
   const extra: { text: string; color?: string; underlined?: boolean; click_event?: { action: string; url: string }; clickEvent?: { action: string; value: string } }[] = [];
   const tokens = /\{(username|name|message|color:[^{}]+)\}/g;
@@ -62,12 +70,41 @@ function minecraftChat(template: string, username: string, name: string, content
     const text = value.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").slice(0, remaining);
     if (text) { extra.push(color ? { text, color } : { text }); remaining -= text.length; }
   }
+  function addLink(text: string, url: string, limited = false) {
+    if (limited && remaining < text.length) return;
+    if (limited) remaining -= text.length;
+    const link = { text, color: "aqua", underlined: true };
+    extra.push(modern
+      ? { ...link, click_event: { action: "open_url", url } }
+      : { ...link, clickEvent: { action: "open_url", value: url } });
+  }
+  function addMessage(value: string) {
+    const urls = /https?:\/\/[^\s<>]+/gi;
+    let offset = 0;
+    let linkCount = 0;
+    for (const match of value.matchAll(urls)) {
+      add(value.slice(offset, match.index));
+      const raw = match[0];
+      const link = raw.replace(/[.,!?;:)\]}]+$/, "");
+      try {
+        const url = new URL(link);
+        if ((url.protocol === "http:" || url.protocol === "https:") && url.href.length <= 2048 && linkCount < 10) {
+          addLink(`[${siteName(url)}]`, url.href, true);
+          linkCount++;
+        }
+        else add(link);
+      } catch { add(link); }
+      add(raw.slice(link.length));
+      offset = match.index + raw.length;
+    }
+    add(value.slice(offset));
+  }
   for (const match of template.matchAll(tokens)) {
     add(template.slice(offset, match.index));
     const token = match[1];
     if (token === "username") add(username);
     else if (token === "name") add(name);
-    else if (token === "message") add(content);
+    else if (token === "message") addMessage(content);
     else {
       const next = token.slice("color:".length).toLowerCase();
       if (next === "reset") color = undefined;
@@ -79,10 +116,7 @@ function minecraftChat(template: string, username: string, name: string, content
   add(template.slice(offset));
   for (const attachment of attachments) {
     const separator = extra.length && !/\s$/.test(extra.at(-1)?.text ?? "") ? " " : "";
-    const link = { text: `${separator}[${attachment.label}]`, color: "aqua", underlined: true };
-    extra.push(modern
-      ? { ...link, click_event: { action: "open_url", url: attachment.url } }
-      : { ...link, clickEvent: { action: "open_url", value: attachment.url } });
+    addLink(`${separator}[${attachment.label}]`, attachment.url);
   }
   return { text: "", extra };
 }
@@ -219,17 +253,27 @@ async function watchServers() {
 
 client.on(Events.MessageCreate, (message) => {
   if (!message.guild || message.author.bot || message.webhookId) return;
-  if (!message.content.trim() && !message.attachments.size) return;
-  const content = clean(message.content.replace(/<(?:a:|:)?([A-Za-z0-9_]+):\d+>/g, ":$1:"));
+  if (!message.content.trim() && !message.attachments.size && !message.embeds.length) return;
+  const content = clean(message.content.replace(/<(?:a:|:)?([A-Za-z0-9_]+):\d+>/g, ":$1:"), 2000);
   const attachments = message.attachments.map((attachment) => {
     const type = attachment.contentType ?? "";
-    const label = type.startsWith("image/") || /\.(?:png|jpe?g|gif|webp|avif|bmp)$/i.test(attachment.name) ? "image"
+    const label = type === "image/gif" || /\.gif$/i.test(attachment.name) ? "GIF"
+      : type.startsWith("image/") || /\.(?:png|jpe?g|webp|avif|bmp)$/i.test(attachment.name) ? "image"
       : type.startsWith("video/") || /\.(?:mp4|mov|webm)$/i.test(attachment.name) ? "video"
       : type.startsWith("audio/") || /\.(?:mp3|ogg|wav|m4a)$/i.test(attachment.name) ? "audio" : "file";
     const url = attachment.proxyURL || attachment.url;
     try { return new URL(url).protocol === "https:" ? { label, url } : null; }
     catch { return null; }
   }).filter((attachment): attachment is AttachmentLink => attachment !== null);
+  if (!attachments.length && !/https?:\/\//i.test(content)) {
+    for (const embed of message.embeds) {
+      if (!embed.url) continue;
+      try {
+        const url = new URL(embed.url);
+        if (url.protocol === "http:" || url.protocol === "https:") attachments.push({ label: siteName(url), url: url.href });
+      } catch { /* Ignore invalid embed URLs. */ }
+    }
+  }
   if (!content && !attachments.length) return;
   for (const server of servers.filter((item) => item.chat_to_minecraft && channelFor(item, "chat_to_minecraft") === message.channel.id)) {
     void sendToMinecraft(server, clean(message.author.username, 40), clean(message.author.displayName, 40), content, attachments)
