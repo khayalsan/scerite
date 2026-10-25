@@ -59,7 +59,11 @@ function siteName(url: URL) {
   return host;
 }
 
-function minecraftChat(template: string, username: string, name: string, content: string, attachments: AttachmentLink[], modern: boolean) {
+function linkLabel(label: string | null | undefined, fallback: string) {
+  return clean(label?.replace(/[\[\]]/g, "") ?? "", 60) || fallback;
+}
+
+function minecraftChat(template: string, username: string, name: string, content: string, attachments: AttachmentLink[], linkLabels: Map<string, string>, modern: boolean) {
   const extra: { text: string; color?: string; underlined?: boolean; click_event?: { action: string; url: string }; clickEvent?: { action: string; value: string } }[] = [];
   const tokens = /\{(username|name|message|color:[^{}]+)\}/g;
   let color: string | undefined;
@@ -89,7 +93,7 @@ function minecraftChat(template: string, username: string, name: string, content
       try {
         const url = new URL(link);
         if ((url.protocol === "http:" || url.protocol === "https:") && url.href.length <= 2048 && linkCount < 10) {
-          addLink(`[${siteName(url)}]`, url.href, true);
+          addLink(`[${linkLabels.get(url.href) ?? siteName(url)}]`, url.href, true);
           linkCount++;
         }
         else add(link);
@@ -121,7 +125,7 @@ function minecraftChat(template: string, username: string, name: string, content
   return { text: "", extra };
 }
 
-async function sendToMinecraft(server: Server, username: string, name: string, content: string, attachments: AttachmentLink[]) {
+async function sendToMinecraft(server: Server, username: string, name: string, content: string, attachments: AttachmentLink[], linkLabels: Map<string, string>) {
   let available = false;
   for (let attempt = 0; attempt < 3; attempt++) {
     if (await hasSession(server.session)) { available = true; break; }
@@ -130,7 +134,7 @@ async function sendToMinecraft(server: Server, username: string, name: string, c
   if (!available) throw new Error("Minecraft console was unavailable after three checks");
   const savedTemplate = server.chat_to_minecraft_template;
   const template = !savedTemplate || legacyMinecraftTemplates.has(savedTemplate) ? defaultMinecraftTemplate : savedTemplate;
-  const command = `tellraw @a ${JSON.stringify(minecraftChat(template, username, name, content, attachments, modernClickEvents(server.minecraft_version)))}`;
+  const command = `tellraw @a ${JSON.stringify(minecraftChat(template, username, name, content, attachments, linkLabels, modernClickEvents(server.minecraft_version)))}`;
   await run("tmux", ["send-keys", "-t", server.session, command, "Enter"], { timeout: 5000 });
 }
 
@@ -255,6 +259,16 @@ client.on(Events.MessageCreate, (message) => {
   if (!message.guild || message.author.bot || message.webhookId) return;
   if (!message.content.trim() && !message.attachments.size && !message.embeds.length) return;
   const content = clean(message.content.replace(/<(?:a:|:)?([A-Za-z0-9_]+):\d+>/g, ":$1:"), 2000);
+  const linkLabels = new Map<string, string>();
+  for (const embed of message.embeds) {
+    if (!embed.url) continue;
+    try {
+      const url = new URL(embed.url);
+      if (url.protocol === "http:" || url.protocol === "https:") {
+        linkLabels.set(url.href, linkLabel(embed.title || (embed.data.type === "gifv" ? embed.description : null), siteName(url)));
+      }
+    } catch { /* Ignore invalid embed URLs. */ }
+  }
   const attachments = message.attachments.map((attachment) => {
     const type = attachment.contentType ?? "";
     const label = type === "image/gif" || /\.gif$/i.test(attachment.name) ? "GIF"
@@ -262,7 +276,7 @@ client.on(Events.MessageCreate, (message) => {
       : type.startsWith("video/") || /\.(?:mp4|mov|webm)$/i.test(attachment.name) ? "video"
       : type.startsWith("audio/") || /\.(?:mp3|ogg|wav|m4a)$/i.test(attachment.name) ? "audio" : "file";
     const url = attachment.proxyURL || attachment.url;
-    try { return new URL(url).protocol === "https:" ? { label, url } : null; }
+    try { return new URL(url).protocol === "https:" ? { label: linkLabel(attachment.description, label), url } : null; }
     catch { return null; }
   }).filter((attachment): attachment is AttachmentLink => attachment !== null);
   if (!attachments.length && !/https?:\/\//i.test(content)) {
@@ -270,13 +284,13 @@ client.on(Events.MessageCreate, (message) => {
       if (!embed.url) continue;
       try {
         const url = new URL(embed.url);
-        if (url.protocol === "http:" || url.protocol === "https:") attachments.push({ label: siteName(url), url: url.href });
+        if (url.protocol === "http:" || url.protocol === "https:") attachments.push({ label: linkLabels.get(url.href) ?? siteName(url), url: url.href });
       } catch { /* Ignore invalid embed URLs. */ }
     }
   }
   if (!content && !attachments.length) return;
   for (const server of servers.filter((item) => item.chat_to_minecraft && channelFor(item, "chat_to_minecraft") === message.channel.id)) {
-    void sendToMinecraft(server, clean(message.author.username, 40), clean(message.author.displayName, 40), content, attachments)
+    void sendToMinecraft(server, clean(message.author.username, 40), clean(message.author.displayName, 40), content, attachments, linkLabels)
       .catch((error) => console.error(`Could not deliver Discord message ${message.id} to ${server.name}: ${String(error)}`));
   }
 });
