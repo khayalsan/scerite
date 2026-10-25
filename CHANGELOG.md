@@ -7,6 +7,7 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 ### Added
 
 - Remote environments can opt in to a user-owned Discord bot without choosing a channel immediately. Chat is two-way by default, with separate direction controls. Online, offline, joins, leaves, player deaths (including PvP), and advancements can each use their own channel or share the server's default channel. It is off by default and installs on the remote host only when enabled.
+- Discord settings show when the remote bot needs an update and can redeploy it without re-entering the token or channels. Minecraft chat appears in Discord under each player's name and skin head when webhooks are available; joins, leaves, deaths, and advancements use embeds.
 - Installed mods and plugins now open a configuration panel. JSON, YAML, TOML, and properties files have form controls, with a Raw view for other files or precise edits.
 - Mods and plugins can be favourited with a heart. Favourites are saved on this device across servers and can be filtered in search results and installed lists.
 - The Mods tab can browse and install compatible Modrinth modpacks into a stopped server. Existing server files are preserved, and the install summary lists conflicting paths that were skipped. Mod search results show Required, Optional, and Server badges, which can also filter results.
