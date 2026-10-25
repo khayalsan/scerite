@@ -20,5 +20,6 @@ export const velocityOnDemand = {
   usage: (profileId: string) => invoke<VelocityProxyUsage>("velocity_proxy_usage", { profileId }),
   enable: (profileId: string, idleMinutes: number) => invoke<VelocityOnDemandStatus>("enable_velocity_on_demand", { profileId, idleMinutes }),
   setIdleMinutes: (profileId: string, idleMinutes: number) => invoke<void>("set_velocity_idle_minutes", { profileId, idleMinutes }),
+  update: (profileId: string) => invoke<void>("update_velocity_on_demand", { profileId }),
   disable: (profileId: string) => invoke<VelocityOnDemandStatus>("disable_velocity_on_demand", { profileId }),
 };

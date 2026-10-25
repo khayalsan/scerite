@@ -87,6 +87,23 @@ export function VelocityOnDemandPanel({ profileId, canChange }: { profileId: str
     }
   };
 
+  const updateProxy = async () => {
+    if (!status?.enabled || !canChange || busy) return;
+    setBusy(true);
+    setError("");
+    setStep("Checking Velocity");
+    try {
+      await velocityOnDemand.update(profileId);
+      setStatus(await velocityOnDemand.status(profileId));
+    } catch (reason) {
+      setError(String(reason));
+      try { setStatus(await velocityOnDemand.status(profileId)); } catch { /* Keep the current status if SSH is unavailable. */ }
+    } finally {
+      setBusy(false);
+      setStep("");
+    }
+  };
+
   return <section className="velocity-on-demand">
     <h3>Start when a player joins</h3>
     <p>Scerite installs a Velocity proxy on this remote host. Authenticated players can connect to the usual address; the Paper or Purpur server starts when they join and stops after the chosen idle delay. The proxy stays online.</p>
@@ -96,7 +113,7 @@ export function VelocityOnDemandPanel({ profileId, canChange }: { profileId: str
     {status?.enabled && <p>Public port: {status.publicPort}. Backend port: {status.backendPort} (local access only).</p>}
     {status?.enabled && <p>Velocity usage · CPU {usage?.cpuPercent != null ? `${usage.cpuPercent.toFixed(1)}%` : "Unavailable"} · RAM {usage?.memoryBytes != null ? `${(usage.memoryBytes / 1024 / 1024).toFixed(0)} MB` : "Unavailable"}</p>}
     {status?.enabled && !status.proxyRunning && <p className="form-error" role="alert">The Velocity proxy is not running. Players cannot join until it is restarted.</p>}
-    {status?.updateRequired && <p>The proxy was installed by an older Scerite build. Turn on-demand startup off and on to update its multiplayer description and icon.</p>}
+    {status?.updateRequired && <div className="velocity-update"><p>Proxy update available.</p><button className="button button-secondary" type="button" disabled={busy || !canChange || !status.proxyRunning} onClick={() => void updateProxy()}>Update proxy</button></div>}
     {busy && <p role="status">{step}…</p>}
     {error && <p className="form-error" role="alert">{error}</p>}
   </section>;

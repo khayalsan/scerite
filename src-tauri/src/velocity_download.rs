@@ -88,6 +88,11 @@ pub fn with_idle_minutes(content: &str, minutes: u16) -> Result<String, String> 
     Ok(set_property(content, "idleSeconds", &(u32::from(minutes) * 60).to_string()))
 }
 
+pub fn updated_plugin_config(content: &str, server_directory: &str, version: &str) -> String {
+    let updated = set_property(content, "serverDirectory", server_directory);
+    set_property(&updated, "pluginVersion", version)
+}
+
 pub fn restore_backend_properties(current: &str, original: &str, patched: &str) -> Result<String, String> {
     let mut restored = current.to_owned();
     for key in ["server-port", "server-ip", "online-mode"] {
@@ -241,6 +246,16 @@ mod tests {
         assert!(updated.contains("startScript=/srv/start.sh"));
         assert!(with_idle_minutes(config, 0).is_err());
         assert!(with_idle_minutes(config, 121).is_err());
+    }
+
+    #[test]
+    fn plugin_update_preserves_existing_settings() {
+        let config = "serverName=backend\nbackendPort=25566\nidleSeconds=720\nstartScript=/srv/start.sh\n";
+        let updated = updated_plugin_config(config, "/srv/server", "1.1.1");
+        assert!(updated.contains("serverDirectory=/srv/server\n"));
+        assert!(updated.contains("pluginVersion=1.1.1\n"));
+        assert!(updated.contains("idleSeconds=720\n"));
+        assert!(updated.contains("startScript=/srv/start.sh\n"));
     }
 
     #[test]

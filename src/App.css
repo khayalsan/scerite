@@ -1306,6 +1306,7 @@
 .velocity-idle-setting { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .velocity-idle-setting label { margin-right: auto; }
 .velocity-idle-setting input { width: 90px; }
+.velocity-update { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 
 .server-detail-shell .server-settings-editing {
   display: block;

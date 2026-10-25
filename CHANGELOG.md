@@ -10,6 +10,7 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 - Server settings can set Java's active processor count for thread sizing; leaving it blank uses all cores available to the host.
 - Remote Paper and Purpur servers can opt in to a managed Velocity proxy that starts the server when an authenticated player joins and stops it after a configurable idle delay. The proxy keeps the server's public address, multiplayer description, and icon; the backend listens only on the same host.
 - The Velocity on-demand setting shows the proxy's CPU and RAM use while the server settings tab is open.
+- An Update proxy button refreshes the installed Velocity plugin without resetting the server's forwarding settings.
 - Remote environments can opt in to a user-owned Discord bot without choosing a channel immediately. Chat is two-way by default, with separate direction controls. Online, offline, joins, leaves, player deaths, and advancements can each use their own channel or share the server's default channel. It is off by default and installs on the remote host only when enabled.
 - Discord settings show when the remote bot needs an update and can redeploy it without re-entering the token or channels. Minecraft chat appears in Discord under each player's name and skin head when webhooks are available; joins, leaves, deaths, and advancements use embeds.
 - Advancement embeds now put the player and advancement in the title, use a frame-specific color, and show the vanilla advancement description when it is available for that Minecraft version.
