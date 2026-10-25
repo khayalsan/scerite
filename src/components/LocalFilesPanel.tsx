@@ -138,15 +138,17 @@ export function LocalFilesPanel({ profileId, serverName, canEdit, remote = false
             <button className="button button-quiet" onClick={createFile} disabled={!canEdit}><FilePlus2 size={14} /> New file</button>
           </div>
           <SearchField id="files-search" label="Search this folder" placeholder="File or folder name" value={search} onChange={setSearch} />
-          {isLoading ? <p className="state-message">Loading files…</p> : visibleEntries.map((entry) => (
-            <button className={`file-entry${selectedPath === entry.path ? " file-entry-selected" : ""}`} key={entry.path} onClick={() => void openFile(entry)}>
-              {entry.directory ? <Folder size={15} /> : <File size={15} />}
-              <span>{entry.name}</span>
-              {!entry.directory && <small>{formatSize(entry.size)}</small>}
-            </button>
-          ))}
-          {!isLoading && entries.length === 0 && <p className="state-message">This folder is empty.</p>}
-          {!isLoading && entries.length > 0 && visibleEntries.length === 0 && <p className="state-message">No matching files or folders.</p>}
+          <div className="files-entries">
+            {isLoading ? <p className="state-message">Loading files…</p> : visibleEntries.map((entry) => (
+              <button className={`file-entry${selectedPath === entry.path ? " file-entry-selected" : ""}`} key={entry.path} onClick={() => void openFile(entry)}>
+                {entry.directory ? <Folder size={15} /> : <File size={15} />}
+                <span>{entry.name}</span>
+                {!entry.directory && <small>{formatSize(entry.size)}</small>}
+              </button>
+            ))}
+            {!isLoading && entries.length === 0 && <p className="state-message">This folder is empty.</p>}
+            {!isLoading && entries.length > 0 && visibleEntries.length === 0 && <p className="state-message">No matching files or folders.</p>}
+          </div>
         </div>
         <form className="file-editor" onSubmit={(event) => void saveFile(event)}>
           {selectedPath || fileName !== "" ? (
