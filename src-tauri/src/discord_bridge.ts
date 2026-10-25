@@ -105,8 +105,8 @@ async function watchServers() {
           if (left) { await announce(server, "leave", `${left[1]} left **${server.name}**.`); continue; }
           const achievement = line.match(/\]: ([A-Za-z0-9_]{1,16}) has (?:made the advancement|completed the challenge|reached the goal) \[([^\]]{1,100})\]$/);
           if (achievement) { await announce(server, "achievements", `🏆 **${achievement[1]}** earned **${clean(achievement[2], 100)}**.`); continue; }
-          const kill = line.match(/\]: ([A-Za-z0-9_]{1,16}) (?:was (?:slain|shot|killed|blown up|impaled|squashed|pummeled)|drowned|burned to death|fell from a high place|hit the ground too hard|experienced kinetic energy|tried to swim in lava|went up in flames|froze to death|withered away|was fireballed|was killed by magic|was poked to death|was struck by lightning) by ([A-Za-z0-9_]{1,16})(?: using .*)?$/);
-          if (kill && kill[1] !== kill[2] && knownPlayers.get(server.id)?.has(kill[2])) await announce(server, "kills", `⚔️ **${kill[2]}** killed **${kill[1]}** on **${server.name}**.`);
+          const death = line.match(/\]: ([A-Za-z0-9_]{1,16}) ((?:was |drowned|died|fell |hit |burned |went |tried |starved|suffocated|froze|walked |experienced |discovered |blew ).*)$/);
+          if (death && knownPlayers.get(server.id)?.has(death[1])) await announce(server, "kills", `☠️ **${death[1]}** ${clean(death[2])}`);
         }
       } catch (error) { console.error(`Could not read ${server.name}: ${String(error)}`); }
     }

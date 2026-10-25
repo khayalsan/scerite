@@ -12,7 +12,7 @@ const actions: { key: Action; label: string }[] = [
   { key: "offline", label: "Server offline" },
   { key: "join", label: "Player joined" },
   { key: "leave", label: "Player left" },
-  { key: "kills", label: "Player killed player" },
+  { key: "kills", label: "Player deaths (including PvP)" },
   { key: "achievements", label: "Advancement earned" },
 ];
 function defaultMapping(profileId: string): Mapping {
