@@ -2715,6 +2715,8 @@ pub struct DiscordBridgeStatus {
     running: bool,
     has_token: bool,
     update_available: bool,
+    cpu_percent: Option<f32>,
+    memory_bytes: Option<u64>,
     servers: Vec<DiscordBridgeServer>,
 }
 
@@ -2817,16 +2819,28 @@ pub async fn discord_bridge_status(
                     for field in ["chatToDiscordChannelId", "chatToMinecraftChannelId", "onlineChannelId", "offlineChannelId", "joinChannelId", "leaveChannelId", "killsChannelId", "achievementsChannelId"] {
                         if !object.contains_key(field) { object.insert(field.into(), serde_json::Value::String(String::new())); }
                     }
-                    if !object.contains_key("chatToMinecraftTemplate") {
-                        object.insert("chatToMinecraftTemplate".into(), serde_json::Value::String("<🎮{username}> {message}".into()));
+                    if object.get("chatToMinecraftTemplate").and_then(serde_json::Value::as_str).is_none_or(|value| value == "<🎮{username}> {message}") {
+                        object.insert("chatToMinecraftTemplate".into(), serde_json::Value::String("<🎮{color:blue}{name}{color:reset}> {message}".into()));
                     }
                     serde_json::from_value(item)
                         .map_err(|error| format!("Discord bridge settings are invalid: {error}"))
                 })
                 .collect::<Result<Vec<_>, _>>()?
         } else { Vec::new() };
-        let running = execute(session, &format!("tmux has-session -t {} 2>/dev/null", shell_quote(&session_name)))?.exit_code == 0;
-        Ok(DiscordBridgeStatus { enabled, running, has_token, update_available, servers })
+        let pane = execute(session, &format!("tmux display-message -p -t {} '#{{pane_pid}} #{{pane_dead}}' 2>/dev/null", shell_quote(&session_name)))?;
+        let pane_output = String::from_utf8_lossy(&pane.stdout);
+        let mut pane_parts = pane_output.split_whitespace();
+        let pid = pane_parts.next().and_then(|value| value.parse::<u32>().ok());
+        let running = pane.exit_code == 0 && pid.is_some() && pane_parts.next() == Some("0");
+        let (cpu_percent, memory_bytes) = if running {
+            let result = execute(session, &format!("ps -p {} -o %cpu=,rss=", pid.unwrap()))?;
+            if result.exit_code == 0 {
+                let output = String::from_utf8_lossy(&result.stdout);
+                let mut parts = output.split_whitespace();
+                (parts.next().and_then(|value| value.parse::<f32>().ok()), parts.next().and_then(|value| value.parse::<u64>().ok()).map(|value| value * 1024))
+            } else { (None, None) }
+        } else { (None, None) };
+        Ok(DiscordBridgeStatus { enabled, running, has_token, update_available, cpu_percent, memory_bytes, servers })
     }).await
 }
 

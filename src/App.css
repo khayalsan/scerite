@@ -233,6 +233,7 @@
 .discord-setup > p { margin: 0; color: var(--app-muted); font-size: 13px; }
 .discord-server { display: grid; gap: 8px; padding-top: 12px; border-top: 1px solid var(--app-line); }
 .discord-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.discord-usage { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; color: var(--app-muted); font-size: 13px; }
 .discord-event-list { display: grid; gap: 8px; }
 .discord-event-row { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(160px, 260px); align-items: center; gap: 12px; }
 .discord-event-row label { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }

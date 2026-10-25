@@ -1,11 +1,45 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { ServerEnvironment, ServerProfile } from "../lib/serverProfiles";
 
 type Action = "chatToDiscord" | "chatToMinecraft" | "online" | "offline" | "join" | "leave" | "kills" | "achievements";
 type Mapping = { profileId: string; channelId: string; chatToMinecraftTemplate: string } & Record<Action, boolean> & Record<`${Action}ChannelId`, string>;
-const defaultMinecraftTemplate = "<🎮{username}> {message}";
-type BridgeStatus = { enabled: boolean; running: boolean; hasToken: boolean; updateAvailable: boolean; servers: Mapping[] };
+const defaultMinecraftTemplate = "<🎮{color:blue}{name}{color:reset}> {message}";
+const previewColors: Record<string, string> = {
+  black: "#000000", dark_blue: "#0000aa", dark_green: "#00aa00", dark_aqua: "#00aaaa",
+  dark_red: "#aa0000", dark_purple: "#aa00aa", gold: "#ffaa00", gray: "#aaaaaa",
+  dark_gray: "#555555", blue: "#5555ff", green: "#55ff55", aqua: "#55ffff",
+  red: "#ff5555", light_purple: "#ff55ff", yellow: "#ffff55", white: "#ffffff",
+};
+
+function messagePreview(template: string) {
+  const pieces: ReactNode[] = [];
+  const tokens = /\{(username|name|message|color:[^{}]+)\}/g;
+  let color: string | undefined;
+  let offset = 0;
+  let key = 0;
+  function add(text: string) {
+    if (text) pieces.push(<span key={key++} style={color ? { color } : undefined}>{text}</span>);
+  }
+  for (const match of template.matchAll(tokens)) {
+    add(template.slice(offset, match.index));
+    const token = match[1];
+    if (token === "username") add("alex_123");
+    else if (token === "name") add("Alex");
+    else if (token === "message") add("Hello from Discord");
+    else {
+      const next = token.slice("color:".length).toLowerCase();
+      if (next === "reset") color = undefined;
+      else if (previewColors[next]) color = previewColors[next];
+      else if (/^#[0-9a-f]{6}$/.test(next)) color = next;
+      else add(match[0]);
+    }
+    offset = match.index + match[0].length;
+  }
+  add(template.slice(offset));
+  return pieces;
+}
+type BridgeStatus = { enabled: boolean; running: boolean; hasToken: boolean; updateAvailable: boolean; cpuPercent: number | null; memoryBytes: number | null; servers: Mapping[] };
 const actions: { key: Action; label: string }[] = [
   { key: "chatToDiscord", label: "Game chat → Discord" },
   { key: "chatToMinecraft", label: "Discord chat → game" },
@@ -107,6 +141,10 @@ function BridgeEnvironment({ environment, profiles }: { environment: ServerEnvir
         <span aria-hidden="true" />
       </label>
     </div>
+    {status?.enabled && <div className="discord-usage">
+      <span>Bot usage · CPU {status.running && status.cpuPercent != null ? `${status.cpuPercent.toFixed(1)}%` : "Unavailable"} · RAM {status.running && status.memoryBytes != null ? `${(status.memoryBytes / 1024 / 1024).toFixed(0)} MB` : "Unavailable"}</span>
+      <button className="button button-quiet" type="button" disabled={busy || editing} onClick={() => void refresh().catch((cause: unknown) => setError(String(cause)))}>Refresh usage</button>
+    </div>}
     {status?.enabled && !editing && <div className="discord-actions">
       <button className="button button-quiet" type="button" disabled={busy} onClick={() => setEditing(true)}>Edit channels or bot token</button>
       <button className="button button-secondary" type="button" disabled={busy || !status.updateAvailable} onClick={() => void updateBot()}>{busy ? "Updating bot…" : "Update bot"}</button>
@@ -124,7 +162,8 @@ function BridgeEnvironment({ environment, profiles }: { environment: ServerEnvir
           <label className="field"><span>Default channel ID (optional)</span><input inputMode="numeric" value={value.channelId} onChange={(event) => change(server.id, { channelId: event.currentTarget.value })} /></label>
           <label className="field"><span>Discord → game message format</span>
             <input value={value.chatToMinecraftTemplate} maxLength={200} onChange={(event) => change(server.id, { chatToMinecraftTemplate: event.currentTarget.value })} />
-            <small>Use {"{username}"} for the Discord display name and {"{message}"} for the message. Preview: {value.chatToMinecraftTemplate.replace(/\{username\}|\{message\}/g, (placeholder) => placeholder === "{username}" ? "Alex" : "Hello from Discord")}</small>
+            <small>{"{username}"} is the Discord username; {"{name}"} is the display name; {"{message}"} is the message. Set text colors with {"{color:blue}"}, {"{color:reset}"}, other Minecraft color names, or a hex color such as {"{color:#55aaff}"}.</small>
+            <small>Preview: {messagePreview(value.chatToMinecraftTemplate)}</small>
           </label>
           <div className="discord-event-list">
             {actions.map(({ key, label }) => {

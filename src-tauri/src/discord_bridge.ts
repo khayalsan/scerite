@@ -7,7 +7,9 @@ import { Client, EmbedBuilder, Events, GatewayIntentBits, TextChannel, type Webh
 
 type Action = "chat_to_discord" | "chat_to_minecraft" | "online" | "offline" | "join" | "leave" | "kills" | "achievements";
 type Server = { id: string; name: string; directory: string; session: string; channel_id: string; chat_to_minecraft_template?: string } & Record<Action, boolean> & Record<`${Action}_channel_id`, string>;
-const defaultMinecraftTemplate = "<🎮{username}> {message}";
+const defaultMinecraftTemplate = "<🎮{color:blue}{name}{color:reset}> {message}";
+const legacyMinecraftTemplate = "<🎮{username}> {message}";
+const minecraftColors = new Set(["black", "dark_blue", "dark_green", "dark_aqua", "dark_red", "dark_purple", "gold", "gray", "dark_gray", "blue", "green", "aqua", "red", "light_purple", "yellow", "white"]);
 const root = dirname(fileURLToPath(import.meta.url));
 const servers = JSON.parse(await readFile(join(root, "servers.json"), "utf8")) as Server[];
 const token = (await readFile(join(root, "token"), "utf8")).trim();
@@ -41,17 +43,45 @@ async function hasSession(name: string) {
   catch { return false; }
 }
 
-async function sendToMinecraft(server: Server, author: string, content: string) {
+function minecraftChat(template: string, username: string, name: string, content: string) {
+  const extra: { text: string; color?: string }[] = [];
+  const tokens = /\{(username|name|message|color:[^{}]+)\}/g;
+  let color: string | undefined;
+  let offset = 0;
+  let remaining = 400;
+  function add(value: string) {
+    if (remaining <= 0) return;
+    const text = value.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").slice(0, remaining);
+    if (text) { extra.push(color ? { text, color } : { text }); remaining -= text.length; }
+  }
+  for (const match of template.matchAll(tokens)) {
+    add(template.slice(offset, match.index));
+    const token = match[1];
+    if (token === "username") add(username);
+    else if (token === "name") add(name);
+    else if (token === "message") add(content);
+    else {
+      const next = token.slice("color:".length).toLowerCase();
+      if (next === "reset") color = undefined;
+      else if (minecraftColors.has(next) || /^#[0-9a-f]{6}$/.test(next)) color = next;
+      else add(match[0]);
+    }
+    offset = match.index + match[0].length;
+  }
+  add(template.slice(offset));
+  return { text: "", extra };
+}
+
+async function sendToMinecraft(server: Server, username: string, name: string, content: string) {
   let available = false;
   for (let attempt = 0; attempt < 3; attempt++) {
     if (await hasSession(server.session)) { available = true; break; }
     if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 500));
   }
   if (!available) throw new Error("Minecraft console was unavailable after three checks");
-  const template = server.chat_to_minecraft_template ?? defaultMinecraftTemplate;
-  const message = clean(template.replace(/\{username\}|\{message\}/g, (placeholder) => placeholder === "{username}" ? author : content), 400)
-    .replace(/[\u0000-\u001f\u007f]/g, " ");
-  const command = `tellraw @a ${JSON.stringify({ text: message })}`;
+  const savedTemplate = server.chat_to_minecraft_template;
+  const template = !savedTemplate || savedTemplate === legacyMinecraftTemplate ? defaultMinecraftTemplate : savedTemplate;
+  const command = `tellraw @a ${JSON.stringify(minecraftChat(template, username, name, content))}`;
   await run("tmux", ["send-keys", "-t", server.session, command, "Enter"], { timeout: 5000 });
 }
 
@@ -176,7 +206,7 @@ client.on(Events.MessageCreate, (message) => {
   if (!message.guild || message.author.bot || message.webhookId) return;
   if (!message.content.trim()) return;
   for (const server of servers.filter((item) => item.chat_to_minecraft && channelFor(item, "chat_to_minecraft") === message.channel.id)) {
-    void sendToMinecraft(server, clean(message.author.displayName, 40), clean(message.content))
+    void sendToMinecraft(server, clean(message.author.username, 40), clean(message.author.displayName, 40), clean(message.content))
       .catch((error) => console.error(`Could not deliver Discord message ${message.id} to ${server.name}: ${String(error)}`));
   }
 });
