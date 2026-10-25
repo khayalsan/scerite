@@ -21,6 +21,24 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 - Shared links, GIFs, and videos appear in Minecraft as short clickable labels. Discord's displayed title or attachment description is used when available; otherwise the site name is shown.
 - Installed mods and plugins now open a configuration panel. JSON, YAML, TOML, and properties files have form controls, with a Raw view for other files or precise edits.
 - Mods and plugins can be favourited with a heart. Favourites are saved on this device across servers and can be filtered in search results and installed lists.
+
+### Changed
+
+- Velocity setup now shows each installation step, reports proxy startup errors, and avoids Velocity's sample forced-host entries. Its card aligns with the other server settings.
+
+### Fixed
+
+- Long server navigation menus and the Server and Install tabs now scroll within the window.
+- Discord chat messages are sent to the Minecraft console in one tmux operation. A brief failed console check is retried, and failed deliveries are logged with the Discord message ID.
+- Discord messages appear in vanilla Minecraft without the automatic `[Server]` prefix by using a plain `tellraw` text component.
+- Cached map terrain appears immediately, then gets a fresh read before the app trusts its timestamp. Newly read region chunks are checked against their requested coordinates before their pixels are displayed or cached.
+- Offline player markers on the Map tab no longer show a person icon through the skin head.
+- Long folder listings in the Files tab now scroll inside the browser, with the search and editor kept accessible.
+
+## [1.0.0] - 2026-10-23
+
+### Added
+
 - The Mods tab can browse and install compatible Modrinth modpacks into a stopped server. Existing server files are preserved, and the install summary lists conflicting paths that were skipped. Mod search results show Required, Optional, and Server badges, which can also filter results.
 - A Map tab plots online players on an interactive, chunk-aligned X/Z grid over lightweight tiles from saved terrain. Terrain detail changes with zoom and refreshes after saves or on demand; ungenerated areas remain blank. Drag, scroll, or use the map controls to move and zoom. Offline players appear at their last saved position with greyed-out heads, grouped by dimension.
 - Remote maps now show locally cached terrain and the last map view while current tiles and player locations refresh. Recent logs and remote server icons also appear from the local cache before being updated. App settings shows the display cache size and lets you clear it.
@@ -32,7 +50,6 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 ### Changed
 
-- Velocity setup now shows each installation step, reports proxy startup errors, and avoids Velocity's sample forced-host entries. Its card aligns with the other server settings.
 - Remote environment cards and server navigation now show environment names without repeating SSH login details.
 - Player statistics are now grouped into separate panels by Minecraft category, including Custom, Dropped, Killed, Picked up, and Used.
 - Saved servers now show their Minecraft multiplayer icons in the Servers list when available.
@@ -42,12 +59,6 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 ### Fixed
 
-- Long server navigation menus and the Server and Install tabs now scroll within the window.
-- Discord chat messages are sent to the Minecraft console in one tmux operation. A brief failed console check is retried, and failed deliveries are logged with the Discord message ID.
-- Discord messages appear in vanilla Minecraft without the automatic `[Server]` prefix by using a plain `tellraw` text component.
-- Cached map terrain appears immediately, then gets a fresh read before the app trusts its timestamp. Newly read region chunks are checked against their requested coordinates before their pixels are displayed or cached.
-- Offline player markers on the Map tab no longer show a person icon through the skin head.
-- Long folder listings in the Files tab now scroll inside the browser, with the search and editor kept accessible.
 - Long world settings and file lists can now scroll within the Worlds tab.
 
 ## [0.4.1] - 2026-10-20
