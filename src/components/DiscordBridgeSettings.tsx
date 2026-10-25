@@ -50,7 +50,10 @@ function BridgeEnvironment({ environment, profiles }: { environment: ServerEnvir
       setToken("");
       await refresh();
       setEditing(false);
-    } catch (cause) { setError(String(cause)); }
+    } catch (cause) {
+      setError(String(cause));
+      try { await refresh(); } catch { /* Keep the setup open when SSH is unavailable. */ }
+    }
     finally { setBusy(false); }
   }
 
