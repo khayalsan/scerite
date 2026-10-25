@@ -105,6 +105,7 @@
 
 .primary-nav {
   display: grid;
+  flex: 1 1 auto;
   gap: 4px;
   min-height: 0;
   align-content: start;
@@ -883,7 +884,11 @@
 
 .server-tab-list {
   display: grid;
+  flex: 1 1 auto;
   gap: 4px;
+  min-height: 0;
+  align-content: start;
+  overflow-y: auto;
 }
 
 .server-tab {
@@ -924,6 +929,14 @@
   min-height: 0;
   flex: 1 1 auto;
   flex-direction: column;
+}
+
+.server-detail-shell .server-tab-panel[aria-label="Server overview"]:not([hidden]),
+.server-detail-shell .server-tab-panel[aria-label="Install Minecraft"]:not([hidden]) {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .server-detail-shell .server-tab-panel[aria-label="Server console"]:not([hidden]) {
@@ -2370,7 +2383,9 @@
 
   .server-detail-shell .server-tab-list {
     display: flex;
+    flex: none;
     overflow-x: auto;
+    overflow-y: hidden;
     padding-bottom: 5px;
     border-bottom: 1px solid var(--app-line);
   }
