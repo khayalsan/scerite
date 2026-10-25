@@ -3610,7 +3610,7 @@ pub async fn velocity_on_demand_status(
                     && remote_listening_ports(session)?.contains(&manifest.public_port);
                 let plugin_config = velocity_read(&sftp, &format!("{root}/plugins/sceritevelocity/config.properties"))?;
                 let idle_minutes = velocity_download::idle_minutes(&plugin_config)?;
-                let update_required = !plugin_config.lines().any(|line| line.starts_with("serverDirectory="));
+                let update_required = !plugin_config.lines().any(|line| line.trim() == "pluginVersion=1.1.1");
                 Ok(VelocityOnDemandStatus { enabled: true, public_port: Some(manifest.public_port), backend_port: Some(manifest.backend_port), proxy_running, idle_minutes, update_required })
             }
             Err(error) => Err(format!("Could not check Velocity setup: {error}")),
@@ -3748,7 +3748,7 @@ pub async fn enable_velocity_on_demand(
         let start = format!("#!/bin/sh\nif tmux has-session -t {} 2>/dev/null; then\n  if [ \"$(tmux display-message -p -t {} '#{{pane_dead}}')\" = 0 ]; then exit 0; fi\n  tmux kill-session -t {}\nfi\ntmux new-session -d -s {} -c {} {}\ntmux set-window-option -t {} remain-on-exit on\n",
             shell_quote(&session_id), shell_quote(&session_id), shell_quote(&session_id), shell_quote(&session_id), shell_quote(&root), shell_quote(&launch_command), shell_quote(&session_id));
         let stop = format!("#!/bin/sh\ntmux send-keys -t {} -l stop\ntmux send-keys -t {} Enter\n", shell_quote(&session_id), shell_quote(&session_id));
-        let plugin_config = format!("serverName=backend\nbackendPort={backend_port}\nidleSeconds={}\nserverDirectory={root}\nstartScript={proxy_root}/start.sh\nstopScript={proxy_root}/stop.sh\n", u32::from(idle_minutes) * 60);
+        let plugin_config = format!("pluginVersion=1.1.1\nserverName=backend\nbackendPort={backend_port}\nidleSeconds={}\nserverDirectory={root}\nstartScript={proxy_root}/start.sh\nstopScript={proxy_root}/stop.sh\n", u32::from(idle_minutes) * 60);
         let proxy_config = velocity_download::proxy_config(public_port, backend_port);
         velocity_write(&sftp, &format!("{proxy_root}/velocity.jar"), &velocity_jar)?;
         velocity_write(&sftp, &format!("{proxy_root}/plugins/scerite-velocity.jar"), SCERITE_VELOCITY_JAR)?;

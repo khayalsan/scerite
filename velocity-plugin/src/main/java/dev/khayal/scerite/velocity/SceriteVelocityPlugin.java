@@ -29,8 +29,9 @@ import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import org.slf4j.Logger;
 
-@Plugin(id = "sceritevelocity", name = "Scerite Velocity", version = "1.1.0")
+@Plugin(id = "sceritevelocity", name = "Scerite Velocity", version = "1.1.1")
 public final class SceriteVelocityPlugin {
+    private static final String DEFAULT_MOTD = "A Minecraft Server";
     private final ProxyServer proxy;
     private final Logger logger;
     private final Path dataDirectory;
@@ -46,7 +47,7 @@ public final class SceriteVelocityPlugin {
     private int idleSeconds;
     private Path settingsFile;
     private Path serverDirectory;
-    private volatile Component serverDescription;
+    private volatile Component serverDescription = Component.text(DEFAULT_MOTD);
     private volatile Favicon serverFavicon;
 
     @Inject
@@ -88,7 +89,7 @@ public final class SceriteVelocityPlugin {
         Favicon favicon = serverFavicon;
         if (serverDirectory == null) return;
         var builder = event.getPing().asBuilder();
-        if (description != null) builder.description(description);
+        builder.description(description);
         if (favicon != null) builder.favicon(favicon);
         else builder.clearFavicon();
         event.setPing(builder.build());
@@ -101,10 +102,10 @@ public final class SceriteVelocityPlugin {
             if (Files.isRegularFile(propertiesPath) && Files.size(propertiesPath) <= 1024 * 1024) {
                 Properties properties = new Properties();
                 try (Reader input = Files.newBufferedReader(propertiesPath, StandardCharsets.UTF_8)) { properties.load(input); }
-                String motd = properties.getProperty("motd");
-                if (motd != null) serverDescription = LegacyComponentSerializer.legacySection().deserialize(motd);
+                String motd = properties.getProperty("motd", DEFAULT_MOTD);
+                serverDescription = LegacyComponentSerializer.legacySection().deserialize(motd);
             } else {
-                serverDescription = null;
+                serverDescription = Component.text(DEFAULT_MOTD);
             }
         } catch (Exception error) {
             logger.warn("Could not read the backend MOTD", error);
