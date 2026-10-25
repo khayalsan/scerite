@@ -2713,6 +2713,7 @@ pub struct DiscordBridgeStatus {
     enabled: bool,
     running: bool,
     has_token: bool,
+    update_available: bool,
     servers: Vec<DiscordBridgeServer>,
 }
 
@@ -2794,6 +2795,10 @@ pub async fn discord_bridge_status(
         let token_path = format!("{root}/token");
         let enabled = bridge_file_exists(&sftp, &config_path)?;
         let has_token = bridge_file_exists(&sftp, &token_path)?;
+        let script_path = format!("{root}/discord_bridge.ts");
+        let bundled = include_bytes!("discord_bridge.ts");
+        let update_available = enabled && (!bridge_file_exists(&sftp, &script_path)?
+            || sftp.read_prefix(Path::new(&script_path), bundled.len() + 1)? != bundled);
         let servers = if enabled {
             let value: serde_json::Value = serde_json::from_slice(&sftp.read_file(Path::new(&config_path))?)
                 .map_err(|error| format!("Could not read Discord bridge settings: {error}"))?;
@@ -2817,7 +2822,7 @@ pub async fn discord_bridge_status(
                 .collect::<Result<Vec<_>, _>>()?
         } else { Vec::new() };
         let running = execute(session, &format!("tmux has-session -t {} 2>/dev/null", shell_quote(&session_name)))?.exit_code == 0;
-        Ok(DiscordBridgeStatus { enabled, running, has_token, servers })
+        Ok(DiscordBridgeStatus { enabled, running, has_token, update_available, servers })
     }).await
 }
 

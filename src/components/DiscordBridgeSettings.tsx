@@ -4,7 +4,7 @@ import type { ServerEnvironment, ServerProfile } from "../lib/serverProfiles";
 
 type Action = "chatToDiscord" | "chatToMinecraft" | "online" | "offline" | "join" | "leave" | "kills" | "achievements";
 type Mapping = { profileId: string; channelId: string } & Record<Action, boolean> & Record<`${Action}ChannelId`, string>;
-type BridgeStatus = { enabled: boolean; running: boolean; hasToken: boolean; servers: Mapping[] };
+type BridgeStatus = { enabled: boolean; running: boolean; hasToken: boolean; updateAvailable: boolean; servers: Mapping[] };
 const actions: { key: Action; label: string }[] = [
   { key: "chatToDiscord", label: "Game chat → Discord" },
   { key: "chatToMinecraft", label: "Discord chat → game" },
@@ -84,9 +84,20 @@ function BridgeEnvironment({ environment, profiles }: { environment: ServerEnvir
     finally { setBusy(false); }
   }
 
+  async function updateBot() {
+    if (!status?.enabled) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await invoke("enable_discord_bridge", { environmentId: environment.id, token: "", servers: status.servers });
+      await refresh();
+    } catch (cause) { setError(String(cause)); }
+    finally { setBusy(false); }
+  }
+
   return <div className="discord-environment">
     <div className="app-setting-row">
-      <span className="app-setting-copy"><strong>{environment.name}</strong><small>{!status ? "Checking bridge status…" : status.enabled ? status.running ? "Bridge running" : "Bridge configured but stopped" : "Off — bridge not running"}</small></span>
+      <span className="app-setting-copy"><strong>{environment.name}</strong><small>{!status ? "Checking bridge status…" : status.enabled ? status.updateAvailable ? "Bot update available" : status.running ? "Bridge running · up to date" : "Bridge configured but stopped" : "Off — bridge not running"}</small></span>
       <label className="property-switch" aria-label={`Enable Discord for ${environment.name}`}>
         <input type="checkbox" checked={(status?.enabled ?? false) || editing} disabled={busy || status === null} onChange={(event) => {
           if (status?.enabled) void disable();
@@ -95,9 +106,12 @@ function BridgeEnvironment({ environment, profiles }: { environment: ServerEnvir
         <span aria-hidden="true" />
       </label>
     </div>
-    {status?.enabled && !editing && <button className="button button-quiet" type="button" onClick={() => setEditing(true)}>Edit channels or bot token</button>}
+    {status?.enabled && !editing && <div className="discord-actions">
+      <button className="button button-quiet" type="button" disabled={busy} onClick={() => setEditing(true)}>Edit channels or bot token</button>
+      <button className="button button-secondary" type="button" disabled={busy || !status.updateAvailable} onClick={() => void updateBot()}>{busy ? "Updating bot…" : "Update bot"}</button>
+    </div>}
     {editing && <div className="discord-setup">
-      <p>Use a bot you own. Invite it to your Discord server and enable Message Content intent. You can add channel IDs now or later. Enable Discord Developer Mode to copy channel IDs. The token is stored on this remote environment.</p>
+      <p>Use a bot you own. Invite it to your Discord server, enable Message Content intent, and grant Manage Webhooks for player-style chat. You can add channel IDs now or later. Enable Discord Developer Mode to copy channel IDs. The token is stored on this remote environment.</p>
       <label className="field"><span>Bot token {status?.hasToken ? "(leave blank to keep the current token)" : ""}</span>
         <input type="password" autoComplete="off" value={token} onChange={(event) => setToken(event.currentTarget.value)} placeholder="Discord bot token" />
       </label>
