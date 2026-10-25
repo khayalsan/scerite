@@ -15,6 +15,7 @@ import { ServerPropertiesPanel } from "./components/ServerPropertiesPanel";
 import { ServerInstallPanel } from "./components/ServerInstallPanel";
 import { PackagesPanel } from "./components/PackagesPanel";
 import { ServerOverviewPanel } from "./components/ServerOverviewPanel";
+import { VelocityOnDemandPanel } from "./components/VelocityOnDemandPanel";
 import { ServerListIcon } from "./components/ServerListIcon";
 import { DisplayCacheSettings } from "./components/DisplayCacheSettings";
 import { DiscordBridgeSettings, ServerDiscordPanel } from "./components/DiscordBridgeSettings";
@@ -38,6 +39,7 @@ type ProfileDraft = {
   executable: string;
   arguments: string;
   ramMb: string;
+  cpuCores: string;
   environmentId: string;
   manualDirectory: boolean;
 };
@@ -82,6 +84,7 @@ const emptyDraft: ProfileDraft = {
   executable: "",
   arguments: "",
   ramMb: "",
+  cpuCores: "",
   environmentId: "",
   manualDirectory: false,
 };
@@ -141,6 +144,18 @@ function withoutMaximumRam(arguments_: string[]): string[] {
   return arguments_.filter((argument) => !/^-Xmx\d+[mMgG]$/.test(argument));
 }
 
+function activeProcessorCount(arguments_: string[]): string {
+  const values = arguments_.flatMap((argument) => {
+    const match = /^-XX:ActiveProcessorCount=(\d+)$/.exec(argument);
+    return match ? [match[1]] : [];
+  });
+  return values.length ? values[values.length - 1] : "";
+}
+
+function withoutResourceLimits(arguments_: string[]): string[] {
+  return withoutMaximumRam(arguments_).filter((argument) => !/^-XX:ActiveProcessorCount=\d+$/.test(argument));
+}
+
 function serverFolderName(name: string): string {
   return Array.from(name.trim())
     .map((character) => /[\p{L}\p{N}]/u.test(character) ? character.toLowerCase() : "-")
@@ -152,8 +167,11 @@ function serverFolderName(name: string): string {
 function targetFor(draft: ProfileDraft, previous?: ServerProfile): ServerTarget {
   const launchArguments = parseLaunchArguments(draft.arguments);
   if (isJavaExecutable(draft.executable)) {
-    const withoutRam = withoutMaximumRam(launchArguments);
-    launchArguments.splice(0, launchArguments.length, ...(draft.ramMb ? [`-Xmx${draft.ramMb}M`] : []), ...withoutRam);
+    const withoutLimits = withoutResourceLimits(launchArguments);
+    launchArguments.splice(0, launchArguments.length,
+      ...(draft.ramMb ? [`-Xmx${draft.ramMb}M`] : []),
+      ...(draft.cpuCores ? [`-XX:ActiveProcessorCount=${draft.cpuCores}`] : []),
+      ...withoutLimits);
   }
   const managedJava = previous?.target.kind === draft.kind &&
     (draft.kind === "local" || previous.target.kind === "remote" && previous.target.environmentId === draft.environmentId)
@@ -195,8 +213,9 @@ function draftFor(profile: ServerProfile): ProfileDraft {
       directory: profile.target.directory,
       manualDirectory: true,
       executable: profile.target.launch.executable,
-      arguments: (javaLaunch ? withoutMaximumRam(arguments_) : arguments_).join("\n"),
+      arguments: (javaLaunch ? withoutResourceLimits(arguments_) : arguments_).join("\n"),
       ramMb: javaLaunch ? maximumRam(arguments_) : "",
+      cpuCores: javaLaunch ? activeProcessorCount(arguments_) : "",
     };
   }
 
@@ -205,8 +224,9 @@ function draftFor(profile: ServerProfile): ProfileDraft {
     name: profile.name,
     directory: profile.target.directory,
     executable: profile.target.launch.executable,
-    arguments: (javaLaunch ? withoutMaximumRam(arguments_) : arguments_).join("\n"),
+    arguments: (javaLaunch ? withoutResourceLimits(arguments_) : arguments_).join("\n"),
     ramMb: javaLaunch ? maximumRam(arguments_) : "",
+    cpuCores: javaLaunch ? activeProcessorCount(arguments_) : "",
   };
 }
 
@@ -785,6 +805,15 @@ function App() {
       setFormError("Set maximum RAM in the field below and remove -Xmx from launch arguments.");
       return;
     }
+    if (isJavaExecutable(draft.executable) && parseLaunchArguments(draft.arguments).some((argument) => argument.startsWith("-XX:ActiveProcessorCount="))) {
+      setFormError("Set Java's active processor count in the field below and remove it from launch arguments.");
+      return;
+    }
+    if (isJavaExecutable(draft.executable) && draft.cpuCores &&
+        (!/^\d+$/.test(draft.cpuCores) || Number(draft.cpuCores) < 1 || Number(draft.cpuCores) > 256)) {
+      setFormError("Choose an active processor count between 1 and 256.");
+      return;
+    }
     if (isJavaExecutable(draft.executable) && draft.ramMb &&
         (!/^\d+$/.test(draft.ramMb) || Number(draft.ramMb) < 256 || Number(draft.ramMb) > 1048576)) {
       setFormError("Choose a maximum RAM amount between 256 and 1048576 MB.");
@@ -1086,6 +1115,13 @@ function App() {
                   disabled={!isJavaExecutable(draft.executable)}
                 />
                 <small>Sets Java's maximum heap (-Xmx) on the next start. Leave blank to use Java's default. Custom launch scripts manage their own memory.</small>
+              </label>
+              <label className="field field-wide">
+                <span>Java active processors</span>
+                <input type="number" min="1" max="256" step="1" value={draft.cpuCores}
+                  onChange={(event) => setDraft({ ...draft, cpuCores: event.currentTarget.value })}
+                  placeholder="Use all available cores" disabled={!isJavaExecutable(draft.executable)} />
+                <small>Sets -XX:ActiveProcessorCount on the next start. Leave blank to let Java use all cores available to the host. This changes Java's thread sizing; it cannot add CPU capacity to the machine.</small>
               </label>
             </div>
 
@@ -1587,6 +1623,8 @@ function App() {
                               <p>Stop the server before editing its profile.</p>
                             </div>
                           )}
+                          {activeServerTab === "settings" && !isLocal && (profile.installedSoftware === "paper" || profile.installedSoftware === "purpur") &&
+                            <VelocityOnDemandPanel key={profile.id} profileId={profile.id} canChange={remoteState === "stopped"} />}
                         </section>
                       </div>
                     </div>

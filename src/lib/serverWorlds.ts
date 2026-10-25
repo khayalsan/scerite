@@ -30,6 +30,8 @@ export const serverWorlds = {
     invoke<void>(command(remote, "download"), { profileId, worldName, destination }),
   upload: (remote: boolean, profileId: string, worldName: string, source: string) =>
     invoke<string>(command(remote, "upload"), { profileId, worldName, source }),
+  import: (remote: boolean, profileId: string, worldName: string, source: string) =>
+    invoke<string>(command(remote, "import"), { profileId, worldName, source }),
   regenerate: (remote: boolean, profileId: string, worldName: string, seed: string, levelType: string, generateStructures: boolean) =>
     invoke<string>(command(remote, "regenerate"), { profileId, worldName, seed, levelType, generateStructures }),
 };

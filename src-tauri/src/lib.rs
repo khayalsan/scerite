@@ -15,6 +15,7 @@ mod modpacks;
 mod server_overview;
 mod server_port;
 mod world_management;
+mod velocity_download;
 mod terrain;
 mod display_cache;
 
@@ -90,6 +91,7 @@ pub fn run() {
             world_management::auto_backup_local_world,
             world_management::download_local_world,
             world_management::upload_local_world,
+            world_management::import_local_world,
             world_management::regenerate_local_world,
             server_files::read_local_server_file,
             server_files::read_local_server_log_start,
@@ -131,6 +133,13 @@ pub fn run() {
             remote_ssh::auto_backup_remote_world,
             remote_ssh::download_remote_world,
             remote_ssh::upload_remote_world,
+            remote_ssh::import_remote_world,
+            remote_ssh::velocity_on_demand_status,
+            remote_ssh::set_velocity_idle_minutes,
+            remote_ssh::update_velocity_on_demand,
+            remote_ssh::velocity_proxy_usage,
+            remote_ssh::enable_velocity_on_demand,
+            remote_ssh::disable_velocity_on_demand,
             remote_ssh::regenerate_remote_world,
             remote_ssh::read_remote_server_file,
             remote_ssh::read_remote_server_log_start,

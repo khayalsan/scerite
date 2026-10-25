@@ -651,15 +651,28 @@ pub async fn upload_local_world(
     require_stopped(profile_id, &manager)?;
     let root = local_server_root(profile_id, &profiles)?;
     checked_local_world(&root, &world_name)?;
-    tauri::async_runtime::spawn_blocking(move || install_local_archive(&root, &world_name, Path::new(&source), true))
+    tauri::async_runtime::spawn_blocking(move || install_local_archive(&root, &world_name, Path::new(&source), true, false))
         .await.map_err(|error| error.to_string())?
 }
 
-fn install_local_archive(root: &Path, world_name: &str, source: &Path, require_existing: bool) -> Result<String, String> {
+#[tauri::command]
+pub async fn import_local_world(
+    profile_id: Uuid, world_name: String, source: String,
+    profiles: State<'_, ServerProfileStore>, manager: State<'_, LocalSessionManager>,
+) -> Result<String, String> {
+    if !valid_world_name(&world_name) { return Err("Choose a valid world folder name.".into()); }
+    require_stopped(profile_id, &manager)?;
+    let root = local_server_root(profile_id, &profiles)?;
+    tauri::async_runtime::spawn_blocking(move || install_local_archive(&root, &world_name, Path::new(&source), false, true))
+        .await.map_err(|error| error.to_string())?
+}
+
+fn install_local_archive(root: &Path, world_name: &str, source: &Path, require_existing: bool, require_absent: bool) -> Result<String, String> {
         let (mut archive, entries) = open_archive(source)?;
         let world = root.join(world_name);
         let existing = match fs::symlink_metadata(&world) {
             Ok(metadata) if metadata.file_type().is_dir() => {
+                if require_absent { return Err("A world folder with this name already exists.".into()); }
                 checked_local_world(root, world_name)?;
                 true
             }
@@ -722,7 +735,7 @@ pub async fn restore_local_world_backup(
     match backup_kind.as_str() {
         "zip" => {
             let source = checked_app_backup(&app, profile_id, &world_name, &backup_path)?;
-            tauri::async_runtime::spawn_blocking(move || install_local_archive(&root, &world_name, &source, false))
+            tauri::async_runtime::spawn_blocking(move || install_local_archive(&root, &world_name, &source, false, false))
                 .await.map_err(|error| error.to_string())?
         }
         "preserved" => {
@@ -922,4 +935,32 @@ fn generation_properties(
     }
     let updated = updated_properties(&content, name, seed, level_type, structures)?;
     Ok((properties, updated))
+}
+
+#[cfg(test)]
+mod import_tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn import_adds_a_world_and_refuses_to_replace_it() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!("scerite-world-import-{}", Uuid::new_v4()));
+        fs::create_dir(&root).unwrap();
+        let source = root.join("world.zip");
+        let result = (|| {
+            let mut zip = ZipWriter::new(File::create(&source).unwrap());
+            zip.start_file("uploaded/level.dat", SimpleFileOptions::default()).unwrap();
+            zip.write_all(b"original world").unwrap();
+            zip.finish().unwrap();
+
+            assert_eq!(install_local_archive(&root, "new-world", &source, false, true).unwrap(), "");
+            assert_eq!(fs::read(root.join("new-world/level.dat")).unwrap(), b"original world");
+            assert!(install_local_archive(&root, "new-world", &source, false, true).is_err());
+            assert_eq!(fs::read(root.join("new-world/level.dat")).unwrap(), b"original world");
+        })();
+        fs::remove_dir_all(root).unwrap();
+        result
+    }
 }
