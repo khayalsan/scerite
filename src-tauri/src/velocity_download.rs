@@ -72,6 +72,22 @@ pub fn proxy_config(public_port: u16, backend_port: u16) -> String {
     format!("config-version = \"2.9\"\nbind = \"0.0.0.0:{public_port}\"\nonline-mode = true\nforce-key-authentication = true\nplayer-info-forwarding-mode = \"modern\"\nforwarding-secret-file = \"forwarding.secret\"\n[servers]\nbackend = \"127.0.0.1:{backend_port}\"\ntry = [\"backend\"]\n[forced-hosts]\n")
 }
 
+pub fn idle_minutes(content: &str) -> Result<u16, String> {
+    let seconds = content.lines().filter_map(|line| {
+        let (key, value) = line.split_once('=')?;
+        (key.trim() == "idleSeconds").then_some(value.trim())
+    }).last().unwrap_or("300").parse::<u32>().map_err(|_| "The Velocity idle delay is invalid.".to_owned())?;
+    if !(60..=7200).contains(&seconds) || seconds % 60 != 0 {
+        return Err("The Velocity idle delay must be 1–120 whole minutes.".into());
+    }
+    Ok((seconds / 60) as u16)
+}
+
+pub fn with_idle_minutes(content: &str, minutes: u16) -> Result<String, String> {
+    if !(1..=120).contains(&minutes) { return Err("Choose an idle delay from 1 to 120 minutes.".into()); }
+    Ok(set_property(content, "idleSeconds", &(u32::from(minutes) * 60).to_string()))
+}
+
 pub fn restore_backend_properties(current: &str, original: &str, patched: &str) -> Result<String, String> {
     let mut restored = current.to_owned();
     for key in ["server-port", "server-ip", "online-mode"] {
@@ -215,6 +231,16 @@ mod tests {
         assert!(config.contains("[servers]\nbackend = \"127.0.0.1:25566\"\ntry = [\"backend\"]\n"));
         assert!(config.ends_with("[forced-hosts]\n"));
         assert!(!config.contains("lobby.example.com"));
+    }
+
+    #[test]
+    fn idle_delay_can_be_changed_without_replacing_other_plugin_settings() {
+        let config = "serverName=backend\nidleSeconds=300\nstartScript=/srv/start.sh\n";
+        let updated = with_idle_minutes(config, 12).unwrap();
+        assert_eq!(idle_minutes(&updated).unwrap(), 12);
+        assert!(updated.contains("startScript=/srv/start.sh"));
+        assert!(with_idle_minutes(config, 0).is_err());
+        assert!(with_idle_minutes(config, 121).is_err());
     }
 
     #[test]

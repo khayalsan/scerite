@@ -5,6 +5,8 @@ export interface VelocityOnDemandStatus {
   publicPort: number | null;
   backendPort: number | null;
   proxyRunning: boolean;
+  idleMinutes: number;
+  updateRequired: boolean;
 }
 
 export interface VelocityProxyUsage {
@@ -16,6 +18,7 @@ export interface VelocityProxyUsage {
 export const velocityOnDemand = {
   status: (profileId: string) => invoke<VelocityOnDemandStatus>("velocity_on_demand_status", { profileId }),
   usage: (profileId: string) => invoke<VelocityProxyUsage>("velocity_proxy_usage", { profileId }),
-  enable: (profileId: string) => invoke<VelocityOnDemandStatus>("enable_velocity_on_demand", { profileId }),
+  enable: (profileId: string, idleMinutes: number) => invoke<VelocityOnDemandStatus>("enable_velocity_on_demand", { profileId, idleMinutes }),
+  setIdleMinutes: (profileId: string, idleMinutes: number) => invoke<void>("set_velocity_idle_minutes", { profileId, idleMinutes }),
   disable: (profileId: string) => invoke<VelocityOnDemandStatus>("disable_velocity_on_demand", { profileId }),
 };

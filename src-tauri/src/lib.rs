@@ -135,6 +135,7 @@ pub fn run() {
             remote_ssh::upload_remote_world,
             remote_ssh::import_remote_world,
             remote_ssh::velocity_on_demand_status,
+            remote_ssh::set_velocity_idle_minutes,
             remote_ssh::velocity_proxy_usage,
             remote_ssh::enable_velocity_on_demand,
             remote_ssh::disable_velocity_on_demand,

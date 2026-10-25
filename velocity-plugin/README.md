@@ -1,6 +1,6 @@
 # Scerite Velocity plugin
 
-This plugin starts a managed Paper or Purpur backend after an authenticated player connects to Velocity, then stops the backend after five idle minutes. It uses the existing tmux session and a loopback backend port. No additional management service or port is needed.
+This plugin starts a managed Paper or Purpur backend after an authenticated player connects to Velocity, then stops the backend after the idle delay chosen in Scerite. It reads the backend's MOTD and server icon for Velocity's multiplayer listing. It uses the existing tmux session and a loopback backend port. No additional management service or port is needed.
 
 Build with JDK 25 and Gradle from this directory:
 

@@ -3512,6 +3512,8 @@ pub struct VelocityOnDemandStatus {
     public_port: Option<u16>,
     backend_port: Option<u16>,
     proxy_running: bool,
+    idle_minutes: u16,
+    update_required: bool,
 }
 
 #[derive(Serialize)]
@@ -3599,17 +3601,42 @@ pub async fn velocity_on_demand_status(
         let root = velocity_root(&sftp, profile, &environment)?;
         let path = format!("{root}/manifest.json");
         match sftp.lstat_optional(Path::new(&path)) {
-            Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile => Ok(VelocityOnDemandStatus { enabled: false, public_port: None, backend_port: None, proxy_running: false }),
+            Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile => Ok(VelocityOnDemandStatus { enabled: false, public_port: None, backend_port: None, proxy_running: false, idle_minutes: 5, update_required: false }),
             Ok(_) => {
                 let manifest: VelocityManifest = serde_json::from_str(&velocity_read(&sftp, &path)?)
                     .map_err(|_| "The saved Velocity setup is invalid.".to_owned())?;
                 let proxy_session = format!("scerite-velocity-{}", profile.id.simple());
                 let proxy_running = execute(session, &format!("tmux has-session -t {} 2>/dev/null", shell_quote(&proxy_session)))?.exit_code == 0
                     && remote_listening_ports(session)?.contains(&manifest.public_port);
-                Ok(VelocityOnDemandStatus { enabled: true, public_port: Some(manifest.public_port), backend_port: Some(manifest.backend_port), proxy_running })
+                let plugin_config = velocity_read(&sftp, &format!("{root}/plugins/sceritevelocity/config.properties"))?;
+                let idle_minutes = velocity_download::idle_minutes(&plugin_config)?;
+                let update_required = !plugin_config.lines().any(|line| line.starts_with("serverDirectory="));
+                Ok(VelocityOnDemandStatus { enabled: true, public_port: Some(manifest.public_port), backend_port: Some(manifest.backend_port), proxy_running, idle_minutes, update_required })
             }
             Err(error) => Err(format!("Could not check Velocity setup: {error}")),
         }
+    }).await
+}
+
+#[tauri::command]
+pub async fn set_velocity_idle_minutes(
+    profile_id: Uuid, idle_minutes: u16, profiles: State<'_, ServerProfileStore>,
+    remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<(), String> {
+    if !(1..=120).contains(&idle_minutes) { return Err("Choose an idle delay from 1 to 120 minutes.".into()); }
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    run_remote(profile, environment.clone(), Arc::clone(remote_sessions.inner()), move |session, profile| {
+        let sftp = session.sftp()?;
+        let root = velocity_root(&sftp, profile, &environment)?;
+        match sftp.lstat_optional(Path::new(&format!("{root}/manifest.json"))) {
+            Ok(_) => (),
+            Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile =>
+                return Err("Enable on-demand startup before changing its idle delay.".into()),
+            Err(error) => return Err(format!("Could not check Velocity setup: {error}")),
+        }
+        let path = format!("{root}/plugins/sceritevelocity/config.properties");
+        let config = velocity_read(&sftp, &path)?;
+        velocity_write(&sftp, &path, velocity_download::with_idle_minutes(&config, idle_minutes)?.as_bytes())
     }).await
 }
 
@@ -3640,9 +3667,10 @@ pub async fn velocity_proxy_usage(
 
 #[tauri::command]
 pub async fn enable_velocity_on_demand(
-    app: AppHandle, profile_id: Uuid, profiles: State<'_, ServerProfileStore>,
+    app: AppHandle, profile_id: Uuid, idle_minutes: u16, profiles: State<'_, ServerProfileStore>,
     remote_sessions: State<'_, Arc<RemoteSessionManager>>,
 ) -> Result<VelocityOnDemandStatus, String> {
+    if !(1..=120).contains(&idle_minutes) { return Err("Choose an idle delay from 1 to 120 minutes.".into()); }
     velocity_progress(&app, profile_id, "Checking the server");
     let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
     if !matches!(profile.installed_software.as_deref(), Some("paper" | "purpur")) {
@@ -3720,7 +3748,7 @@ pub async fn enable_velocity_on_demand(
         let start = format!("#!/bin/sh\nif tmux has-session -t {} 2>/dev/null; then\n  if [ \"$(tmux display-message -p -t {} '#{{pane_dead}}')\" = 0 ]; then exit 0; fi\n  tmux kill-session -t {}\nfi\ntmux new-session -d -s {} -c {} {}\ntmux set-window-option -t {} remain-on-exit on\n",
             shell_quote(&session_id), shell_quote(&session_id), shell_quote(&session_id), shell_quote(&session_id), shell_quote(&root), shell_quote(&launch_command), shell_quote(&session_id));
         let stop = format!("#!/bin/sh\ntmux send-keys -t {} -l stop\ntmux send-keys -t {} Enter\n", shell_quote(&session_id), shell_quote(&session_id));
-        let plugin_config = format!("serverName=backend\nbackendPort={backend_port}\nidleSeconds=300\nstartScript={proxy_root}/start.sh\nstopScript={proxy_root}/stop.sh\n");
+        let plugin_config = format!("serverName=backend\nbackendPort={backend_port}\nidleSeconds={}\nserverDirectory={root}\nstartScript={proxy_root}/start.sh\nstopScript={proxy_root}/stop.sh\n", u32::from(idle_minutes) * 60);
         let proxy_config = velocity_download::proxy_config(public_port, backend_port);
         velocity_write(&sftp, &format!("{proxy_root}/velocity.jar"), &velocity_jar)?;
         velocity_write(&sftp, &format!("{proxy_root}/plugins/scerite-velocity.jar"), SCERITE_VELOCITY_JAR)?;
@@ -3776,7 +3804,7 @@ pub async fn enable_velocity_on_demand(
             return Err(error);
         }
         velocity_progress(&progress_app, profile.id, "Ready");
-        Ok(VelocityOnDemandStatus { enabled: true, public_port: Some(public_port), backend_port: Some(backend_port), proxy_running: true })
+        Ok(VelocityOnDemandStatus { enabled: true, public_port: Some(public_port), backend_port: Some(backend_port), proxy_running: true, idle_minutes, update_required: false })
     }).await
 }
 
@@ -3827,7 +3855,7 @@ pub async fn disable_velocity_on_demand(
             return Err(error);
         }
         sftp.unlink(Path::new(&manifest_path)).map_err(|error| format!("Could not finish disabling Velocity: {error}"))?;
-        Ok(VelocityOnDemandStatus { enabled: false, public_port: None, backend_port: None, proxy_running: false })
+        Ok(VelocityOnDemandStatus { enabled: false, public_port: None, backend_port: None, proxy_running: false, idle_minutes: 5, update_required: false })
     }).await
 }
 

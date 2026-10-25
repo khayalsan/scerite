@@ -1303,6 +1303,9 @@
 .velocity-on-demand p { color: var(--app-muted); font-size: 13px; line-height: 1.5; }
 .velocity-on-demand label { display: flex; align-items: center; justify-content: space-between; gap: 16px; font-weight: 600; }
 .velocity-on-demand .form-error { white-space: pre-wrap; overflow-wrap: anywhere; }
+.velocity-idle-setting { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.velocity-idle-setting label { margin-right: auto; }
+.velocity-idle-setting input { width: 90px; }
 
 .server-detail-shell .server-settings-editing {
   display: block;

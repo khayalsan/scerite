@@ -6,24 +6,30 @@ import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.player.PlayerChooseInitialServerEvent;
 import com.velocitypowered.api.event.player.ServerPreConnectEvent;
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
+import com.velocitypowered.api.event.proxy.ProxyPingEvent;
 import com.velocitypowered.api.plugin.Plugin;
 import com.velocitypowered.api.plugin.annotation.DataDirectory;
 import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
 import com.velocitypowered.api.proxy.server.ServerInfo;
+import com.velocitypowered.api.util.Favicon;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.Reader;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Properties;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import org.slf4j.Logger;
 
-@Plugin(id = "sceritevelocity", name = "Scerite Velocity", version = "1.0.0")
+@Plugin(id = "sceritevelocity", name = "Scerite Velocity", version = "1.1.0")
 public final class SceriteVelocityPlugin {
     private final ProxyServer proxy;
     private final Logger logger;
@@ -38,6 +44,10 @@ public final class SceriteVelocityPlugin {
     private Path stopScript;
     private int backendPort;
     private int idleSeconds;
+    private Path settingsFile;
+    private Path serverDirectory;
+    private volatile Component serverDescription;
+    private volatile Favicon serverFavicon;
 
     @Inject
     public SceriteVelocityPlugin(ProxyServer proxy, Logger logger, @DataDirectory Path dataDirectory) {
@@ -49,13 +59,16 @@ public final class SceriteVelocityPlugin {
     @Subscribe
     public void initialize(ProxyInitializeEvent event) {
         Properties settings = new Properties();
-        try (InputStream input = Files.newInputStream(dataDirectory.resolve("config.properties"))) {
+        settingsFile = dataDirectory.resolve("config.properties");
+        try (InputStream input = Files.newInputStream(settingsFile)) {
             settings.load(input);
             String name = settings.getProperty("serverName");
             backendPort = Integer.parseInt(settings.getProperty("backendPort"));
             idleSeconds = Integer.parseInt(settings.getProperty("idleSeconds", "300"));
             startScript = Path.of(settings.getProperty("startScript")).toAbsolutePath();
             stopScript = Path.of(settings.getProperty("stopScript")).toAbsolutePath();
+            String directory = settings.getProperty("serverDirectory");
+            if (directory != null && !directory.isBlank()) serverDirectory = Path.of(directory).toAbsolutePath();
             if (name == null || name.isBlank() || backendPort < 1 || backendPort > 65535 || idleSeconds < 30) {
                 throw new IllegalArgumentException("Invalid server name, port, or idle delay");
             }
@@ -64,8 +77,59 @@ public final class SceriteVelocityPlugin {
             logger.error("Scerite Velocity configuration is invalid", error);
             return;
         }
+        refreshServerDetails();
         proxy.getScheduler().buildTask(this, this::checkIdle).repeat(10, TimeUnit.SECONDS).schedule();
         logger.info("Scerite on-demand backend ready");
+    }
+
+    @Subscribe
+    public void proxyPing(ProxyPingEvent event) {
+        Component description = serverDescription;
+        Favicon favicon = serverFavicon;
+        if (serverDirectory == null) return;
+        var builder = event.getPing().asBuilder();
+        if (description != null) builder.description(description);
+        if (favicon != null) builder.favicon(favicon);
+        else builder.clearFavicon();
+        event.setPing(builder.build());
+    }
+
+    private void refreshServerDetails() {
+        if (serverDirectory == null) return;
+        try {
+            Path propertiesPath = serverDirectory.resolve("server.properties");
+            if (Files.isRegularFile(propertiesPath) && Files.size(propertiesPath) <= 1024 * 1024) {
+                Properties properties = new Properties();
+                try (Reader input = Files.newBufferedReader(propertiesPath, StandardCharsets.UTF_8)) { properties.load(input); }
+                String motd = properties.getProperty("motd");
+                if (motd != null) serverDescription = LegacyComponentSerializer.legacySection().deserialize(motd);
+            } else {
+                serverDescription = null;
+            }
+        } catch (Exception error) {
+            logger.warn("Could not read the backend MOTD", error);
+        }
+        try {
+            Path iconPath = serverDirectory.resolve("server-icon.png");
+            if (Files.isRegularFile(iconPath) && Files.size(iconPath) <= 1024 * 1024) {
+                serverFavicon = Favicon.create(iconPath);
+            } else {
+                serverFavicon = null;
+            }
+        } catch (Exception error) {
+            logger.warn("Could not read the backend server icon", error);
+        }
+    }
+
+    private void refreshIdleDelay() {
+        try (InputStream input = Files.newInputStream(settingsFile)) {
+            Properties settings = new Properties();
+            settings.load(input);
+            int updated = Integer.parseInt(settings.getProperty("idleSeconds", "300"));
+            if (updated >= 60 && updated <= 7200) idleSeconds = updated;
+        } catch (Exception error) {
+            logger.warn("Could not read the idle delay", error);
+        }
     }
 
     @Subscribe
@@ -115,6 +179,8 @@ public final class SceriteVelocityPlugin {
     }
 
     private void checkIdle() {
+        refreshIdleDelay();
+        refreshServerDetails();
         if (backend == null || pendingJoins.get() > 0 || !backend.getPlayersConnected().isEmpty()) {
             emptySince = -1;
             return;
