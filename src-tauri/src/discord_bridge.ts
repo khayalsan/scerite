@@ -6,7 +6,8 @@ import { promisify } from "node:util";
 import { Client, EmbedBuilder, Events, GatewayIntentBits, TextChannel, type Webhook } from "discord.js";
 
 type Action = "chat_to_discord" | "chat_to_minecraft" | "online" | "offline" | "join" | "leave" | "kills" | "achievements";
-type Server = { id: string; name: string; directory: string; session: string; channel_id: string } & Record<Action, boolean> & Record<`${Action}_channel_id`, string>;
+type Server = { id: string; name: string; directory: string; session: string; channel_id: string; chat_to_minecraft_template?: string } & Record<Action, boolean> & Record<`${Action}_channel_id`, string>;
+const defaultMinecraftTemplate = "<🎮{username}> {message}";
 const root = dirname(fileURLToPath(import.meta.url));
 const servers = JSON.parse(await readFile(join(root, "servers.json"), "utf8")) as Server[];
 const token = (await readFile(join(root, "token"), "utf8")).trim();
@@ -47,7 +48,9 @@ async function sendToMinecraft(server: Server, author: string, content: string) 
     if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 500));
   }
   if (!available) throw new Error("Minecraft console was unavailable after three checks");
-  const message = clean(`[Discord] ${author}: ${content}`, 400).replace(/[\u0000-\u001f\u007f]/g, " ");
+  const template = server.chat_to_minecraft_template ?? defaultMinecraftTemplate;
+  const message = clean(template.replace(/\{username\}|\{message\}/g, (placeholder) => placeholder === "{username}" ? author : content), 400)
+    .replace(/[\u0000-\u001f\u007f]/g, " ");
   const command = `tellraw @a ${JSON.stringify({ text: message })}`;
   await run("tmux", ["send-keys", "-t", server.session, command, "Enter"], { timeout: 5000 });
 }

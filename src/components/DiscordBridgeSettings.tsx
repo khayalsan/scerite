@@ -3,7 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 import type { ServerEnvironment, ServerProfile } from "../lib/serverProfiles";
 
 type Action = "chatToDiscord" | "chatToMinecraft" | "online" | "offline" | "join" | "leave" | "kills" | "achievements";
-type Mapping = { profileId: string; channelId: string } & Record<Action, boolean> & Record<`${Action}ChannelId`, string>;
+type Mapping = { profileId: string; channelId: string; chatToMinecraftTemplate: string } & Record<Action, boolean> & Record<`${Action}ChannelId`, string>;
+const defaultMinecraftTemplate = "<🎮{username}> {message}";
 type BridgeStatus = { enabled: boolean; running: boolean; hasToken: boolean; updateAvailable: boolean; servers: Mapping[] };
 const actions: { key: Action; label: string }[] = [
   { key: "chatToDiscord", label: "Game chat → Discord" },
@@ -16,7 +17,7 @@ const actions: { key: Action; label: string }[] = [
   { key: "achievements", label: "Advancement earned" },
 ];
 function defaultMapping(profileId: string): Mapping {
-  return { profileId, channelId: "", chatToDiscord: true, chatToMinecraft: true, online: true, offline: true, join: true, leave: true, kills: true, achievements: true,
+  return { profileId, channelId: "", chatToMinecraftTemplate: defaultMinecraftTemplate, chatToDiscord: true, chatToMinecraft: true, online: true, offline: true, join: true, leave: true, kills: true, achievements: true,
     chatToDiscordChannelId: "", chatToMinecraftChannelId: "", onlineChannelId: "", offlineChannelId: "", joinChannelId: "", leaveChannelId: "", killsChannelId: "", achievementsChannelId: "" };
 }
 
@@ -121,6 +122,10 @@ function BridgeEnvironment({ environment, profiles }: { environment: ServerEnvir
         return <div className="discord-server" key={server.id}>
           <strong>{server.name}</strong>
           <label className="field"><span>Default channel ID (optional)</span><input inputMode="numeric" value={value.channelId} onChange={(event) => change(server.id, { channelId: event.currentTarget.value })} /></label>
+          <label className="field"><span>Discord → game message format</span>
+            <input value={value.chatToMinecraftTemplate} maxLength={200} onChange={(event) => change(server.id, { chatToMinecraftTemplate: event.currentTarget.value })} />
+            <small>Use {"{username}"} for the Discord display name and {"{message}"} for the message. Preview: {value.chatToMinecraftTemplate.replace(/\{username\}|\{message\}/g, (placeholder) => placeholder === "{username}" ? "Alex" : "Hello from Discord")}</small>
+          </label>
           <div className="discord-event-list">
             {actions.map(({ key, label }) => {
               const channelKey = `${key}ChannelId` as const;

@@ -2691,6 +2691,7 @@ pub struct DiscordBridgeServer {
     channel_id: String,
     chat_to_discord: bool,
     chat_to_minecraft: bool,
+    chat_to_minecraft_template: String,
     online: bool,
     offline: bool,
     join: bool,
@@ -2816,6 +2817,9 @@ pub async fn discord_bridge_status(
                     for field in ["chatToDiscordChannelId", "chatToMinecraftChannelId", "onlineChannelId", "offlineChannelId", "joinChannelId", "leaveChannelId", "killsChannelId", "achievementsChannelId"] {
                         if !object.contains_key(field) { object.insert(field.into(), serde_json::Value::String(String::new())); }
                     }
+                    if !object.contains_key("chatToMinecraftTemplate") {
+                        object.insert("chatToMinecraftTemplate".into(), serde_json::Value::String("<🎮{username}> {message}".into()));
+                    }
                     serde_json::from_value(item)
                         .map_err(|error| format!("Discord bridge settings are invalid: {error}"))
                 })
@@ -2845,6 +2849,11 @@ pub async fn enable_discord_bridge(
             if !channel.is_empty() && (!(15..=22).contains(&channel.len()) || !channel.bytes().all(|byte| byte.is_ascii_digit())) {
                 return Err("Enter a valid numeric Discord channel ID or leave it blank.".into());
             }
+        }
+        if !server.chat_to_minecraft_template.contains("{message}")
+            || server.chat_to_minecraft_template.chars().count() > 200
+            || server.chat_to_minecraft_template.chars().any(char::is_control) {
+            return Err("The Discord-to-game format must include {message}, be at most 200 characters, and stay on one line.".into());
         }
         if !candidates.iter().any(|candidate| candidate.id == server.profile_id && matches!(&candidate.target, ServerTarget::Remote { environment_id: id, .. } if *id == environment_id)) {
             return Err("A selected server does not belong to this environment.".into());
@@ -2881,6 +2890,8 @@ pub async fn enable_discord_bridge(
                 "channel_id": server.channel_id,
                 "chat_to_discord": server.chat_to_discord,
                 "chat_to_minecraft": server.chat_to_minecraft,
+                "chatToMinecraftTemplate": server.chat_to_minecraft_template,
+                "chat_to_minecraft_template": server.chat_to_minecraft_template,
                 "online": server.online,
                 "offline": server.offline,
                 "join": server.join,
