@@ -21,7 +21,7 @@ use russh_sftp::{
     client::{SftpSession, error::Error as SftpError, rawsession::RawSftpSession},
     protocol::{FileAttributes, FileType, OpenFlags, Packet, StatusCode},
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 use tokio::{
@@ -2682,6 +2682,322 @@ fn download_or_upload(
 
 fn session_name(profile_id: Uuid) -> String {
     format!("scerite-{}", profile_id.simple())
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscordBridgeServer {
+    profile_id: Uuid,
+    channel_id: String,
+    chat_to_discord: bool,
+    chat_to_minecraft: bool,
+    chat_to_minecraft_template: String,
+    online: bool,
+    offline: bool,
+    join: bool,
+    leave: bool,
+    kills: bool,
+    achievements: bool,
+    chat_to_discord_channel_id: String,
+    chat_to_minecraft_channel_id: String,
+    online_channel_id: String,
+    offline_channel_id: String,
+    join_channel_id: String,
+    leave_channel_id: String,
+    kills_channel_id: String,
+    achievements_channel_id: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscordBridgeStatus {
+    enabled: bool,
+    running: bool,
+    has_token: bool,
+    update_available: bool,
+    cpu_percent: Option<f32>,
+    memory_bytes: Option<u64>,
+    servers: Vec<DiscordBridgeServer>,
+}
+
+fn discord_bridge_profile(
+    profiles: &ServerProfileStore,
+    environment_id: Uuid,
+) -> Result<(ServerProfile, ServerEnvironment), String> {
+    let environment = profiles.environment(environment_id)?;
+    let profile = profiles.list()?.into_iter().find(|profile| {
+        matches!(&profile.target, ServerTarget::Remote { environment_id: id, .. } if *id == environment_id)
+    }).unwrap_or_else(|| ServerProfile {
+        id: environment_id,
+        name: environment.name.clone(),
+        target: ServerTarget::Remote {
+            environment_id,
+            directory: environment.root_directory.clone(),
+            launch: LocalLaunchConfig::default(),
+        },
+        installed_software: None,
+        installed_version: None,
+        installed_packages: Vec::new(),
+    });
+    Ok((profile, environment))
+}
+
+fn bridge_session_name(environment_id: Uuid) -> String {
+    format!("scerite-discord-{}", environment_id.simple())
+}
+
+fn bridge_directory(session: &RemoteConnection, environment: &ServerEnvironment) -> Result<String, String> {
+    let root = remote_root(session, &environment.root_directory)?;
+    let sftp = session.sftp()?;
+    let environment_folder = environment.id.simple().to_string();
+    let bridge_root = format!("{root}/runtimes/discord-bridge/{environment_folder}");
+    let mut path = root;
+    for part in ["runtimes", "discord-bridge", environment_folder.as_str()] {
+        path = format!("{path}/{part}");
+        match sftp.lstat_optional(Path::new(&path)) {
+            Ok(attrs) if attrs.file_type() == FileType::Dir => {},
+            Ok(_) => return Err("A Discord bridge folder is not a regular directory.".into()),
+            Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile => break,
+            Err(error) => return Err(format!("Could not inspect the Discord bridge folder: {error}")),
+        }
+    }
+    Ok(bridge_root)
+}
+
+fn bridge_file_exists(sftp: &RemoteSftp, path: &str) -> Result<bool, String> {
+    match sftp.lstat_optional(Path::new(path)) {
+        Ok(attrs) if attrs.file_type() == FileType::File => Ok(true),
+        Ok(_) => Err("A Discord bridge file is not a regular file.".into()),
+        Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile => Ok(false),
+        Err(error) => Err(format!("Could not inspect Discord bridge file: {error}")),
+    }
+}
+
+fn bridge_write(sftp: &RemoteSftp, path: &str, content: &[u8]) -> Result<(), String> {
+    let temporary = format!("{path}.{}.tmp", Uuid::new_v4().simple());
+    sftp.write_file_exclusive(Path::new(&temporary), content)?;
+    if let Err(error) = sftp.posix_rename(Path::new(&temporary), Path::new(path)) {
+        let _ = sftp.unlink(Path::new(&temporary));
+        return Err(format!("Could not save Discord bridge setup: {error}"));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn discord_bridge_status(
+    environment_id: Uuid,
+    profiles: State<'_, ServerProfileStore>,
+    remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<DiscordBridgeStatus, String> {
+    let (profile, environment) = discord_bridge_profile(&profiles, environment_id)?;
+    let session_name = bridge_session_name(environment_id);
+    run_remote(profile, environment.clone(), Arc::clone(remote_sessions.inner()), move |session, _| {
+        let root = bridge_directory(session, &environment)?;
+        let sftp = session.sftp()?;
+        let config_path = format!("{root}/servers.json");
+        let token_path = format!("{root}/token");
+        let enabled = bridge_file_exists(&sftp, &config_path)?;
+        let has_token = bridge_file_exists(&sftp, &token_path)?;
+        let script_path = format!("{root}/discord_bridge.ts");
+        let bundled = include_bytes!("discord_bridge.ts");
+        let update_available = enabled && (!bridge_file_exists(&sftp, &script_path)?
+            || sftp.read_prefix(Path::new(&script_path), bundled.len() + 1)? != bundled);
+        let servers = if enabled {
+            let value: serde_json::Value = serde_json::from_slice(&sftp.read_file(Path::new(&config_path))?)
+                .map_err(|error| format!("Could not read Discord bridge settings: {error}"))?;
+            value.as_array().ok_or_else(|| "Discord bridge settings are invalid.".to_owned())?
+                .iter().map(|item| {
+                    let mut item = item.clone();
+                    let object = item.as_object_mut().ok_or_else(|| "Discord bridge settings are invalid.".to_owned())?;
+                    let defaults = [("chatToDiscord", "chat"), ("chatToMinecraft", "chat"), ("online", "status"), ("offline", "status"), ("join", "joins"), ("leave", "joins")];
+                    for (field, legacy) in defaults {
+                        if !object.contains_key(field) { object.insert(field.into(), object.get(legacy).cloned().unwrap_or(serde_json::Value::Bool(true))); }
+                    }
+                    for field in ["kills", "achievements"] {
+                        if !object.contains_key(field) { object.insert(field.into(), serde_json::Value::Bool(true)); }
+                    }
+                    for field in ["chatToDiscordChannelId", "chatToMinecraftChannelId", "onlineChannelId", "offlineChannelId", "joinChannelId", "leaveChannelId", "killsChannelId", "achievementsChannelId"] {
+                        if !object.contains_key(field) { object.insert(field.into(), serde_json::Value::String(String::new())); }
+                    }
+                    if object.get("chatToMinecraftTemplate").and_then(serde_json::Value::as_str)
+                        .is_none_or(|value| matches!(value, "<🎮{username}> {message}" | "<🎮{color:blue}{name}{color:reset}> {message}" | "<{color:blue}🎮{name}{color:reset}> {message}")) {
+                        object.insert("chatToMinecraftTemplate".into(), serde_json::Value::String("<{color:blue}🎮{color:reset}{name}> {message}".into()));
+                    }
+                    serde_json::from_value(item)
+                        .map_err(|error| format!("Discord bridge settings are invalid: {error}"))
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        } else { Vec::new() };
+        let pane = execute(session, &format!("tmux display-message -p -t {} '#{{pane_pid}} #{{pane_dead}}' 2>/dev/null", shell_quote(&session_name)))?;
+        let pane_output = String::from_utf8_lossy(&pane.stdout);
+        let mut pane_parts = pane_output.split_whitespace();
+        let pid = pane_parts.next().and_then(|value| value.parse::<u32>().ok());
+        let running = pane.exit_code == 0 && pid.is_some() && pane_parts.next() == Some("0");
+        let (cpu_percent, memory_bytes) = if running {
+            let result = execute(session, &format!("ps -p {} -o %cpu=,rss=", pid.unwrap()))?;
+            if result.exit_code == 0 {
+                let output = String::from_utf8_lossy(&result.stdout);
+                let mut parts = output.split_whitespace();
+                (parts.next().and_then(|value| value.parse::<f32>().ok()), parts.next().and_then(|value| value.parse::<u64>().ok()).map(|value| value * 1024))
+            } else { (None, None) }
+        } else { (None, None) };
+        Ok(DiscordBridgeStatus { enabled, running, has_token, update_available, cpu_percent, memory_bytes, servers })
+    }).await
+}
+
+#[tauri::command]
+pub async fn enable_discord_bridge(
+    environment_id: Uuid,
+    token: String,
+    servers: Vec<DiscordBridgeServer>,
+    profiles: State<'_, ServerProfileStore>,
+    remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<(), String> {
+    let (profile, environment) = discord_bridge_profile(&profiles, environment_id)?;
+    let candidates = profiles.list()?;
+    let mut seen_profiles = std::collections::HashSet::new();
+    for server in &servers {
+        if !seen_profiles.insert(server.profile_id) {
+            return Err("Each server must appear only once.".into());
+        }
+        for channel in [&server.channel_id, &server.chat_to_discord_channel_id, &server.chat_to_minecraft_channel_id, &server.online_channel_id, &server.offline_channel_id, &server.join_channel_id, &server.leave_channel_id, &server.kills_channel_id, &server.achievements_channel_id] {
+            if !channel.is_empty() && (!(15..=22).contains(&channel.len()) || !channel.bytes().all(|byte| byte.is_ascii_digit())) {
+                return Err("Enter a valid numeric Discord channel ID or leave it blank.".into());
+            }
+        }
+        if !server.chat_to_minecraft_template.contains("{message}")
+            || server.chat_to_minecraft_template.chars().count() > 200
+            || server.chat_to_minecraft_template.chars().any(char::is_control) {
+            return Err("The Discord-to-game format must include {message}, be at most 200 characters, and stay on one line.".into());
+        }
+        if !candidates.iter().any(|candidate| candidate.id == server.profile_id && matches!(&candidate.target, ServerTarget::Remote { environment_id: id, .. } if *id == environment_id)) {
+            return Err("A selected server does not belong to this environment.".into());
+        }
+    }
+    let token = token.trim().to_owned();
+    if !token.is_empty() && (token.len() > 512 || !token.bytes().all(|byte| byte.is_ascii_graphic())) {
+        return Err("The Discord bot token has an invalid format.".into());
+    }
+    let bridge_servers = servers.into_iter().map(|server| {
+        let selected = candidates.iter().find(|candidate| candidate.id == server.profile_id).unwrap();
+        (server, selected.clone())
+    }).collect::<Vec<_>>();
+    let bridge_name = bridge_session_name(environment_id);
+    run_remote(profile, environment.clone(), Arc::clone(remote_sessions.inner()), move |session, _| {
+        let sftp = session.sftp()?;
+        let root = remote_root(session, &environment.root_directory)?;
+        let environment_folder = environment_id.simple().to_string();
+        let bridge_root = ensure_remote_managed_dirs(session, &sftp, &root, &["runtimes", "discord-bridge", &environment_folder])?;
+        let token_path = format!("{bridge_root}/token");
+        if token.is_empty() && !bridge_file_exists(&sftp, &token_path)? {
+            return Err("Enter your Discord bot token to enable the bridge.".into());
+        }
+        let mut config = Vec::new();
+        for (server, selected) in bridge_servers {
+            let directory = remote_root(session, configured_remote_root(&selected)?)?;
+            config.push(serde_json::json!({
+                "id": server.profile_id,
+                "name": selected.name,
+                "minecraft_version": selected.installed_version,
+                "directory": directory,
+                "session": session_name(server.profile_id),
+                "profileId": server.profile_id,
+                "channelId": server.channel_id,
+                "channel_id": server.channel_id,
+                "chat_to_discord": server.chat_to_discord,
+                "chat_to_minecraft": server.chat_to_minecraft,
+                "chatToMinecraftTemplate": server.chat_to_minecraft_template,
+                "chat_to_minecraft_template": server.chat_to_minecraft_template,
+                "online": server.online,
+                "offline": server.offline,
+                "join": server.join,
+                "leave": server.leave,
+                "kills": server.kills,
+                "achievements": server.achievements,
+                "chat_to_discord_channel_id": server.chat_to_discord_channel_id,
+                "chat_to_minecraft_channel_id": server.chat_to_minecraft_channel_id,
+                "online_channel_id": server.online_channel_id,
+                "offline_channel_id": server.offline_channel_id,
+                "join_channel_id": server.join_channel_id,
+                "leave_channel_id": server.leave_channel_id,
+                "kills_channel_id": server.kills_channel_id,
+                "achievements_channel_id": server.achievements_channel_id,
+            }));
+        }
+        let architecture = execute(session, "uname -m")?;
+        if architecture.exit_code != 0 { return Err(remote_command_error("Could not detect remote CPU architecture", architecture)); }
+        let (arch, expected_hash) = match String::from_utf8_lossy(&architecture.stdout).trim() {
+            "x86_64" | "amd64" => ("x64", "6c172a9ab6718f7b801fb5a7bd486af2ee5e32758086a04b84fcce2aa77095e6"),
+            "aarch64" | "arm64" => ("arm64", "dbabf7a1cbf947e6059ffad2c27b80041db97dea1e553b62afdee7f13fca336e"),
+            _ => return Err("The Discord bridge supports remote Linux x64 and arm64 hosts.".into()),
+        };
+        let folder = format!("node-v24.22.1-linux-{arch}");
+        let node = format!("{bridge_root}/{folder}/bin/node");
+        if execute(session, &format!("test -x {}", shell_quote(&node)))?.exit_code != 0 {
+            let archive = format!("{bridge_root}/{folder}.tar.xz");
+            let url = format!("https://nodejs.org/dist/v24.22.1/{folder}.tar.xz");
+            download_or_upload(session, &sftp, &archive, &url, None)?;
+            let checksum = execute(session, &format!("sha256sum -- {}", shell_quote(&archive)))?;
+            if checksum.exit_code != 0 || !String::from_utf8_lossy(&checksum.stdout).starts_with(expected_hash) {
+                let _ = sftp.unlink(Path::new(&archive));
+                return Err("The downloaded Node.js runtime failed SHA-256 verification.".into());
+            }
+            let unpack = execute(session, &format!("tar -xJf {} -C {}", shell_quote(&archive), shell_quote(&bridge_root)))?;
+            let _ = sftp.unlink(Path::new(&archive));
+            if unpack.exit_code != 0 || execute(session, &format!("test -x {}", shell_quote(&node)))?.exit_code != 0 {
+                return Err("Could not unpack the Discord bridge's Node.js runtime.".into());
+            }
+        }
+        let npm = format!("{bridge_root}/{folder}/lib/node_modules/npm/bin/npm-cli.js");
+        bridge_write(&sftp, &format!("{bridge_root}/package.json"), br#"{"name":"scerite-discord-bridge","private":true,"type":"module","dependencies":{"discord.js":"14.27.0"}}"#)?;
+        let install = execute(session, &format!(
+            "{} {} install --no-audit --no-fund --ignore-scripts --silent --prefix {} --save-exact 'discord.js@14.27.0'",
+            shell_quote(&node), shell_quote(&npm), shell_quote(&bridge_root)
+        ))?;
+        if install.exit_code != 0 { return Err("Could not install discord.js. The remote host needs outbound HTTPS access to npm.".into()); }
+        let script_path = format!("{bridge_root}/discord_bridge.ts");
+        bridge_write(&sftp, &script_path, include_str!("discord_bridge.ts").as_bytes())?;
+        bridge_write(&sftp, &format!("{bridge_root}/servers.json"), &serde_json::to_vec(&config).map_err(|error| error.to_string())?)?;
+        if !token.is_empty() { bridge_write(&sftp, &token_path, token.as_bytes())?; }
+        let _ = execute(session, &format!("tmux kill-session -t {} 2>/dev/null", shell_quote(&bridge_name)));
+        let launch = format!(
+            "umask 077; exec {} {} >> {} 2>&1",
+            shell_quote(&node), shell_quote(&script_path), shell_quote(&format!("{bridge_root}/bridge.log"))
+        );
+        let started = execute(session, &format!(
+            "tmux new-session -d -s {} -c {} {}",
+            shell_quote(&bridge_name), shell_quote(&bridge_root), shell_quote(&launch)
+        ))?;
+        if started.exit_code != 0 { return Err(remote_command_error("Could not start the Discord bridge", started)); }
+        std::thread::sleep(Duration::from_secs(2));
+        if execute(session, &format!("tmux has-session -t {} 2>/dev/null", shell_quote(&bridge_name)))?.exit_code != 0 {
+            return Err(format!("The Discord bridge exited during startup. Check {bridge_root}/bridge.log on the remote host."));
+        }
+        Ok(())
+    }).await
+}
+
+#[tauri::command]
+pub async fn disable_discord_bridge(
+    environment_id: Uuid,
+    profiles: State<'_, ServerProfileStore>,
+    remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<(), String> {
+    let (profile, environment) = discord_bridge_profile(&profiles, environment_id)?;
+    let bridge_name = bridge_session_name(environment_id);
+    run_remote(profile, environment.clone(), Arc::clone(remote_sessions.inner()), move |session, _| {
+        let root = bridge_directory(session, &environment)?;
+        let sftp = session.sftp()?;
+        let stopped = execute(session, &format!("tmux kill-session -t {} 2>/dev/null", shell_quote(&bridge_name)))?;
+        if stopped.exit_code != 0 && stopped.exit_code != 1 {
+            return Err(remote_command_error("Could not stop the Discord bridge", stopped));
+        }
+        for name in ["token", "servers.json"] {
+            let path = format!("{root}/{name}");
+            if bridge_file_exists(&sftp, &path)? { sftp.unlink(Path::new(&path))?; }
+        }
+        Ok(())
+    }).await
 }
 
 fn configured_remote_root(profile: &ServerProfile) -> Result<&str, String> {

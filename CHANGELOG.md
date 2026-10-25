@@ -6,6 +6,14 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 ### Added
 
+- Remote environments can opt in to a user-owned Discord bot without choosing a channel immediately. Chat is two-way by default, with separate direction controls. Online, offline, joins, leaves, player deaths, and advancements can each use their own channel or share the server's default channel. It is off by default and installs on the remote host only when enabled.
+- Discord settings show when the remote bot needs an update and can redeploy it without re-entering the token or channels. Minecraft chat appears in Discord under each player's name and skin head when webhooks are available; joins, leaves, deaths, and advancements use embeds.
+- Advancement embeds now put the player and advancement in the title, use a frame-specific color, and show the vanilla advancement description when it is available for that Minecraft version.
+- Discord messages in Minecraft default to `<🎮Name> message`, with the game icon in blue. Each server can customize the format and colors using `{username}` for the Discord username, `{name}` for the display name, and `{message}` for the text. Discord settings also show the bot's CPU and RAM use.
+- Each remote server has a Discord tab for its channels, message format, and notification controls. App settings keeps the shared bot token, on/off switch, update control, and resource usage.
+- Custom Discord emoji appear by name, such as `:wave:`, in Minecraft chat instead of showing their raw IDs.
+- Discord attachments appear in Minecraft chat as clickable media labels such as `[image]`, including messages without text.
+- Shared links, GIFs, and videos appear in Minecraft as short clickable labels. Discord's displayed title or attachment description is used when available; otherwise the site name is shown.
 - Installed mods and plugins now open a configuration panel. JSON, YAML, TOML, and properties files have form controls, with a Raw view for other files or precise edits.
 - Mods and plugins can be favourited with a heart. Favourites are saved on this device across servers and can be filtered in search results and installed lists.
 - The Mods tab can browse and install compatible Modrinth modpacks into a stopped server. Existing server files are preserved, and the install summary lists conflicting paths that were skipped. Mod search results show Required, Optional, and Server badges, which can also filter results.
@@ -28,6 +36,8 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 ### Fixed
 
+- Discord chat messages are sent to the Minecraft console in one tmux operation. A brief failed console check is retried, and failed deliveries are logged with the Discord message ID.
+- Discord messages appear in vanilla Minecraft without the automatic `[Server]` prefix by using a plain `tellraw` text component.
 - Cached map terrain appears immediately, then gets a fresh read before the app trusts its timestamp. Newly read region chunks are checked against their requested coordinates before their pixels are displayed or cached.
 - Offline player markers on the Map tab no longer show a person icon through the skin head.
 - Long folder listings in the Files tab now scroll inside the browser, with the search and editor kept accessible.

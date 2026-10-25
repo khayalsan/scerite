@@ -3,7 +3,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type { FormEvent } from "react";
-import { ArrowLeft, Download, FileKey, FolderOpen, Globe2, MapPinned, Package, Palette, Plus, Puzzle, ScrollText, Server, Settings, SlidersHorizontal, Terminal, Users, X } from "lucide-react";
+import { ArrowLeft, Download, FileKey, FolderOpen, Globe2, MapPinned, MessageCircle, Package, Palette, Plus, Puzzle, ScrollText, Server, Settings, SlidersHorizontal, Terminal, Users, X } from "lucide-react";
 import { appSettings, localInstallRoot, serverEnvironments, serverProfiles } from "./lib/serverProfiles";
 import type { ServerEnvironment, ServerProfile, ServerTarget } from "./lib/serverProfiles";
 import { serverSessions } from "./lib/serverSessions";
@@ -17,6 +17,7 @@ import { PackagesPanel } from "./components/PackagesPanel";
 import { ServerOverviewPanel } from "./components/ServerOverviewPanel";
 import { ServerListIcon } from "./components/ServerListIcon";
 import { DisplayCacheSettings } from "./components/DisplayCacheSettings";
+import { DiscordBridgeSettings, ServerDiscordPanel } from "./components/DiscordBridgeSettings";
 import { LogsPanel } from "./components/LogsPanel";
 import { SearchField } from "./components/SearchField";
 import { PlayersPanel } from "./components/PlayersPanel";
@@ -72,7 +73,7 @@ function readSavedTheme(): ThemeId {
   }
 }
 
-type ServerTab = "server" | "console" | "players" | "map" | "logs" | "files" | "worlds" | "properties" | "mods" | "plugins" | "install" | "settings";
+type ServerTab = "server" | "console" | "players" | "map" | "logs" | "files" | "worlds" | "properties" | "mods" | "plugins" | "discord" | "install" | "settings";
 
 const emptyDraft: ProfileDraft = {
   name: "",
@@ -291,10 +292,11 @@ function App() {
   }, [selectedProfile?.id, selectedProfile?.installedSoftware, selectedProfile?.target.directory, selectedRemoteConnected]);
 
   useEffect(() => {
-    if (packageSupport && ((activeServerTab === "mods" && !packageSupport.mods) || (activeServerTab === "plugins" && !packageSupport.plugins))) {
+    if ((packageSupport && ((activeServerTab === "mods" && !packageSupport.mods) || (activeServerTab === "plugins" && !packageSupport.plugins)))
+      || (activeServerTab === "discord" && selectedProfile?.target.kind === "local")) {
       setActiveServerTab("server");
     }
-  }, [activeServerTab, packageSupport?.mods, packageSupport?.plugins]);
+  }, [activeServerTab, packageSupport?.mods, packageSupport?.plugins, selectedProfile?.target.kind]);
   const visibleProfiles = !selectedProfileId && environmentFilterId
     ? profiles.filter((profile) => profile.target.kind === "remote" && profile.target.environmentId === environmentFilterId)
     : profiles;
@@ -1212,6 +1214,9 @@ function App() {
               <button className={`server-tab${activeServerTab === "properties" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "properties" ? "page" : undefined} onClick={() => { setActiveServerTab("properties"); setPropertiesProfileId(selectedProfile.id); }}>
                 <SlidersHorizontal size={16} aria-hidden="true" /> Properties
               </button>
+              {!isLocal && <button className={`server-tab${activeServerTab === "discord" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "discord" ? "page" : undefined} onClick={() => setActiveServerTab("discord")}>
+                <MessageCircle size={16} aria-hidden="true" /> Discord
+              </button>}
               <button className={`server-tab${activeServerTab === "install" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "install" ? "page" : undefined} onClick={() => { setActiveServerTab("install"); setInstallProfileId(selectedProfile.id); }}>
                 <Download size={16} aria-hidden="true" /> Install
               </button>
@@ -1358,6 +1363,7 @@ function App() {
         )}
 
         {isAppSettings && <DisplayCacheSettings />}
+        {isAppSettings && <DiscordBridgeSettings environments={environments} profiles={profiles} />}
 
         {!selectedProfileId && !isAppSettings && environments.length > 0 && (
           <section className="environment-section" aria-label="Remote environments">
@@ -1460,6 +1466,7 @@ function App() {
             {visibleProfiles.map((profile) => {
               const target = profile.target;
               const isLocal = target.kind === "local";
+              const discordEnvironment = target.kind === "remote" ? environments.find((item) => item.id === target.environmentId) : undefined;
               const location = target.kind === "local"
                 ? target.directory
                 : `${environments.find((environment) => environment.id === target.environmentId)?.name ?? "Remote environment"}${target.directory ? ` · ${target.directory}` : ""}`;
@@ -1567,6 +1574,9 @@ function App() {
                             />
                           )}
                         </section>
+                        {!isLocal && <section className="server-tab-panel" hidden={activeServerTab !== "discord"} aria-label="Server Discord">
+                          {activeServerTab === "discord" && discordEnvironment && <ServerDiscordPanel key={profile.id} profile={profile} environment={discordEnvironment} profiles={profiles} />}
+                        </section>}
                         <section className="server-tab-panel" hidden={activeServerTab !== "install"} aria-label="Install Minecraft">
                           {installProfileId === profile.id && <ServerInstallPanel profileId={profile.id} remote={!isLocal} rootConfigured={isLocal ? !!localRoot : !!environments.find((environment) => environment.id === (target.kind === "remote" ? target.environmentId : ""))?.rootDirectory} canInstall={isLocal ? state === "stopped" : remoteState === "stopped"} onUpdated={async () => setProfiles(await serverProfiles.list())} />}
                         </section>
