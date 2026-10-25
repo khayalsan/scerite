@@ -1,6 +1,7 @@
 name: Build desktop release
 
 on:
+  workflow_dispatch:
   pull_request_target:
     types:
       - closed
@@ -13,7 +14,7 @@ concurrency:
 
 jobs:
   prepare:
-    if: github.event.pull_request.merged == true
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -22,7 +23,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && 'main' || github.event.pull_request.merge_commit_sha }}
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
