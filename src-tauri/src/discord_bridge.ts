@@ -1,8 +1,9 @@
 import { execFile } from "node:child_process";
-import { readFile, open, stat } from "node:fs/promises";
+import { readFile, open, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { inflateRawSync } from "node:zlib";
 import { Client, EmbedBuilder, Events, GatewayIntentBits, TextChannel, type Webhook } from "discord.js";
 
 type Action = "chat_to_discord" | "chat_to_minecraft" | "online" | "offline" | "join" | "leave" | "kills" | "achievements";
@@ -25,6 +26,8 @@ const ready = new Map<string, boolean>();
 const knownPlayers = new Map<string, Set<string>>();
 const playerIds = new Map<string, Map<string, string>>();
 const webhooks = new Map<string, Promise<Webhook>>();
+const advancementDescriptions = new Map<string, Promise<Map<string, string>>>();
+const serverVersions = new Map<string, Promise<string | null>>();
 
 for (const server of servers) {
   try {
@@ -35,6 +38,107 @@ for (const server of servers) {
 }
 
 function clean(value: string, limit = 300) { return value.replace(/\s+/g, " ").trim().slice(0, limit); }
+
+async function mojangBytes(url: string, limit: number) {
+  const target = new URL(url);
+  if (target.protocol !== "https:" || !target.hostname.endsWith(".mojang.com")) throw new Error("Unexpected Minecraft metadata URL");
+  const response = await fetch(target, { signal: AbortSignal.timeout(60000) });
+  if (!response.ok || !response.body) throw new Error(`Minecraft metadata returned ${response.status}`);
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.length;
+    if (size > limit) { await reader.cancel(); throw new Error("Minecraft metadata is too large"); }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks);
+}
+
+function zipEntry(archive: Buffer, name: string) {
+  let end = -1;
+  for (let offset = archive.length - 22; offset >= Math.max(0, archive.length - 65557); offset--) {
+    if (archive.readUInt32LE(offset) === 0x06054b50 && offset + 22 + archive.readUInt16LE(offset + 20) === archive.length) { end = offset; break; }
+  }
+  if (end < 0) throw new Error("Minecraft client archive is invalid");
+  const directory = archive.readUInt32LE(end + 16);
+  const directoryEnd = directory + archive.readUInt32LE(end + 12);
+  if (directoryEnd > end) throw new Error("Minecraft client archive directory is invalid");
+  for (let offset = directory; offset < directoryEnd;) {
+    if (offset + 46 > directoryEnd || archive.readUInt32LE(offset) !== 0x02014b50) break;
+    const filenameLength = archive.readUInt16LE(offset + 28);
+    const next = offset + 46 + filenameLength + archive.readUInt16LE(offset + 30) + archive.readUInt16LE(offset + 32);
+    if (next > directoryEnd) break;
+    if (archive.toString("utf8", offset + 46, offset + 46 + filenameLength) === name) {
+      const compressedSize = archive.readUInt32LE(offset + 20);
+      const originalSize = archive.readUInt32LE(offset + 24);
+      if (originalSize > 2 * 1024 * 1024) throw new Error("Minecraft language file is too large");
+      const local = archive.readUInt32LE(offset + 42);
+      if (local + 30 > archive.length || archive.readUInt32LE(local) !== 0x04034b50) break;
+      const start = local + 30 + archive.readUInt16LE(local + 26) + archive.readUInt16LE(local + 28);
+      if (start + compressedSize > archive.length) break;
+      const data = archive.subarray(start, start + compressedSize);
+      const method = archive.readUInt16LE(offset + 10);
+      const plain = method === 8 ? inflateRawSync(data, { maxOutputLength: 2 * 1024 * 1024 }) : method === 0 ? data : null;
+      if (!plain || plain.length !== originalSize) throw new Error("Minecraft language file is invalid");
+      return plain.toString("utf8");
+    }
+    offset = next;
+  }
+  throw new Error("Minecraft English language file was not found");
+}
+
+async function loadAdvancementDescriptions(version: string) {
+  const cache = join(root, `advancements-${version}.json`);
+  try {
+    const entries = JSON.parse(await readFile(cache, "utf8")) as [string, string][];
+    if (Array.isArray(entries) && entries.every((entry) => Array.isArray(entry) && entry.length === 2 && entry.every((item) => typeof item === "string"))) return new Map(entries);
+  } catch { /* Fetch the matching language file when the cache is absent. */ }
+  const manifest = JSON.parse((await mojangBytes("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json", 2 * 1024 * 1024)).toString("utf8")) as { versions: { id: string; url: string }[] };
+  const versionUrl = manifest.versions.find((item) => item.id === version)?.url;
+  if (!versionUrl) throw new Error(`Minecraft version ${version} was not found`);
+  const details = JSON.parse((await mojangBytes(versionUrl, 1024 * 1024)).toString("utf8")) as { downloads: { client: { url: string } } };
+  const language = JSON.parse(zipEntry(await mojangBytes(details.downloads.client.url, 120 * 1024 * 1024), "assets/minecraft/lang/en_us.json")) as Record<string, unknown>;
+  const descriptions = new Map<string, string>();
+  for (const [key, title] of Object.entries(language)) {
+    if (!/^advancements\..+\.title$/.test(key) || typeof title !== "string") continue;
+    const description = language[key.replace(/\.title$/, ".description")];
+    if (typeof description === "string") descriptions.set(title, description);
+  }
+  await writeFile(cache, JSON.stringify([...descriptions])).catch(() => {});
+  return descriptions;
+}
+
+function descriptionFor(version: string | null | undefined, title: string) {
+  if (!version || !/^[A-Za-z0-9._-]{1,50}$/.test(version)) return Promise.resolve(null);
+  let pending = advancementDescriptions.get(version);
+  if (!pending) {
+    pending = loadAdvancementDescriptions(version);
+    advancementDescriptions.set(version, pending);
+    void pending.catch(() => advancementDescriptions.delete(version));
+  }
+  return pending.then((descriptions) => descriptions.get(title) ?? null);
+}
+
+function versionFor(server: Server) {
+  if (server.minecraft_version && /^[A-Za-z0-9._-]{1,50}$/.test(server.minecraft_version)) return Promise.resolve(server.minecraft_version);
+  let pending = serverVersions.get(server.id);
+  if (!pending) {
+    pending = (async () => {
+      const file = await open(join(server.directory, "logs", "latest.log"), "r");
+      try {
+        const bytes = Buffer.alloc(64 * 1024);
+        const { bytesRead } = await file.read(bytes, 0, bytes.length, 0);
+        return /Starting minecraft server version ([A-Za-z0-9._-]{1,50})/.exec(bytes.toString("utf8", 0, bytesRead))?.[1] ?? null;
+      } finally { await file.close(); }
+    })().catch(() => null);
+    serverVersions.set(server.id, pending);
+    void pending.then((version) => { if (!version) serverVersions.delete(server.id); });
+  }
+  return pending;
+}
 
 async function hasSession(name: string) {
   try {
@@ -158,7 +262,8 @@ async function announceEmbed(server: Server, action: Action, title: string, desc
   try {
     const channel = await client.channels.fetch(channelId);
     if (!channel?.isTextBased() || !("send" in channel)) return;
-    const embed = new EmbedBuilder().setTitle(title).setDescription(description).setColor(color);
+    const embed = new EmbedBuilder().setTitle(title).setColor(color);
+    if (description) embed.setDescription(description);
     await (channel as TextChannel).send({ embeds: [embed], allowedMentions: { parse: [] } });
   } catch (error) { console.error(`Could not post to ${server.name}'s Discord channel: ${String(error)}`); }
 }
@@ -244,8 +349,17 @@ async function watchServers() {
           if (joined) { knownPlayers.get(server.id)?.add(joined[1]); await announceEmbed(server, "join", "Player joined", `**${joined[1]}** joined **${server.name}**.`, 0x57b87b); continue; }
           const left = line.match(/\]: ([A-Za-z0-9_]{1,16}) left the game$/);
           if (left) { await announceEmbed(server, "leave", "Player left", `**${left[1]}** left **${server.name}**.`, 0xe2aa55); continue; }
-          const achievement = line.match(/\]: ([A-Za-z0-9_]{1,16}) has (?:made the advancement|completed the challenge|reached the goal) \[([^\]]{1,100})\]$/);
-          if (achievement) { await announceEmbed(server, "achievements", "Advancement earned", `**${achievement[1]}** earned **${clean(achievement[2], 100)}**.`, 0xd5aa38); continue; }
+          const achievement = line.match(/\]: ([A-Za-z0-9_]{1,16}) has (made the advancement|completed the challenge|reached the goal) \[([^\]]{1,100})\]$/);
+          if (achievement) {
+            if (!server.achievements || !channelFor(server, "achievements")) continue;
+            const [, player, kind, name] = achievement;
+            const color = kind === "completed the challenge" ? 0xaa00aa : kind === "reached the goal" ? 0xffaa00 : 0x55aa55;
+            const marker = kind === "completed the challenge" ? "🟣" : kind === "reached the goal" ? "🟡" : "🟢";
+            void versionFor(server).then((version) => descriptionFor(version, name))
+              .catch((error) => { console.error(`Could not read advancement descriptions for ${server.name}: ${String(error)}`); return null; })
+              .then((description) => announceEmbed(server, "achievements", `${player} has ${kind} ${marker} ${clean(name, 100)}`, description ?? "", color));
+            continue;
+          }
           const death = line.match(/\]: ([A-Za-z0-9_]{1,16}) ((?:was |drowned|died|fell |hit |burned |went |tried |starved|suffocated|froze|walked |experienced |discovered |blew ).*)$/);
           if (death && knownPlayers.get(server.id)?.has(death[1])) await announceEmbed(server, "kills", "Player death", `**${death[1]}** ${clean(death[2])}`, 0xd06363);
         }

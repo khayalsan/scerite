@@ -8,6 +8,7 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 - Remote environments can opt in to a user-owned Discord bot without choosing a channel immediately. Chat is two-way by default, with separate direction controls. Online, offline, joins, leaves, player deaths, and advancements can each use their own channel or share the server's default channel. It is off by default and installs on the remote host only when enabled.
 - Discord settings show when the remote bot needs an update and can redeploy it without re-entering the token or channels. Minecraft chat appears in Discord under each player's name and skin head when webhooks are available; joins, leaves, deaths, and advancements use embeds.
+- Advancement embeds now put the player and advancement in the title, use a frame-specific color, and show the vanilla advancement description when it is available for that Minecraft version.
 - Discord messages in Minecraft default to `<🎮Name> message`, with the game icon in blue. Each server can customize the format and colors using `{username}` for the Discord username, `{name}` for the display name, and `{message}` for the text. Discord settings also show the bot's CPU and RAM use.
 - Each remote server has a Discord tab for its channels, message format, and notification controls. App settings keeps the shared bot token, on/off switch, update control, and resource usage.
 - Custom Discord emoji appear by name, such as `:wave:`, in Minecraft chat instead of showing their raw IDs.
