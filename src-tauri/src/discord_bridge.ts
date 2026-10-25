@@ -38,10 +38,14 @@ async function hasSession(name: string) {
 }
 
 async function sendToMinecraft(server: Server, author: string, content: string) {
-  if (!await hasSession(server.session)) return;
+  let available = false;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (await hasSession(server.session)) { available = true; break; }
+    if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  if (!available) throw new Error("Minecraft console was unavailable after three checks");
   const command = `say ${clean(`[Discord] ${author}: ${content}`, 400)}`;
-  await run("tmux", ["send-keys", "-t", server.session, "-l", command], { timeout: 5000 });
-  await run("tmux", ["send-keys", "-t", server.session, "Enter"], { timeout: 5000 });
+  await run("tmux", ["send-keys", "-t", server.session, command, "Enter"], { timeout: 5000 });
 }
 
 function channelFor(server: Server, action: Action) {
@@ -119,7 +123,7 @@ client.on(Events.MessageCreate, (message) => {
   if (!message.content.trim()) return;
   for (const server of servers.filter((item) => item.chat_to_minecraft && channelFor(item, "chat_to_minecraft") === message.channel.id)) {
     void sendToMinecraft(server, clean(message.author.displayName, 40), clean(message.content))
-      .catch((error) => console.error(`Could not deliver Discord chat to ${server.name}: ${String(error)}`));
+      .catch((error) => console.error(`Could not deliver Discord message ${message.id} to ${server.name}: ${String(error)}`));
   }
 });
 client.once(Events.ClientReady, () => { void watchServers(); });
