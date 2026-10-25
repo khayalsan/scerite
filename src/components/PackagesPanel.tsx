@@ -11,6 +11,7 @@ import { serverProfiles } from "../lib/serverProfiles";
 import type { InstalledPackage } from "../lib/serverProfiles";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { SearchField } from "./SearchField";
+import { PackageConfigPanel } from "./PackageConfigPanel";
 
 type Project = { id: string; title: string; description: string; author: string; iconUrl: string | null; downloads: number; badges?: ("required" | "optional" | "server")[] };
 type Version = { id: string; name: string; versionNumber: string; requiredDependencies: number };
@@ -87,6 +88,7 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software, i
   const [installed, setInstalled] = useState<ServerFileEntry[]>([]);
   const [installedSearch, setInstalledSearch] = useState("");
   const [installedPackages, setInstalledPackages] = useState<InstalledPackage[]>([]);
+  const [configPackage, setConfigPackage] = useState<{ title: string; filename: string } | null>(null);
   const [plan, setPlan] = useState<PlanEntry[]>([]);
   const [loadingPlan, setLoadingPlan] = useState(false);
   const [loadingInstalled, setLoadingInstalled] = useState(true);
@@ -298,7 +300,8 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software, i
 
   function installedRow(entry: ServerFileEntry) {
     const record = installedPackages.find((item) => item.kind === kind && item.filename === entry.name);
-    return <li key={entry.path}><Package size={16} aria-hidden="true" /><span className="packages-installed-copy" title={entry.name}><strong>{record?.title ?? entry.name}</strong>{record && <small>{entry.name}</small>}{record?.requiredBy.length ? <em className="packages-tag packages-tag-dependency">Dependency for {record.requiredBy.join(", ")}</em> : null}</span><small>{formatSize(entry.size)}</small>{record && <span className="packages-installed-actions"><button type="button" className="button button-quiet" aria-label={`Update ${record.title}`} disabled={busy || !gameVersion || record.requiredBy.length > 0} onClick={() => void chooseProject({ id: record.projectId, title: record.title, description: "", author: "", iconUrl: null, downloads: 0 })}>Update</button><button type="button" className="button button-quiet" aria-label={`Remove ${record.title}`} disabled={busy || !canInstall || (kind === "plugin" && record.requiredBy.length > 0)} onClick={() => void removePackage(record)}>Remove</button></span>}</li>;
+    const title = record?.title ?? entry.name;
+    return <li key={entry.path}><Package size={16} aria-hidden="true" /><span className="packages-installed-copy" title={entry.name}><button type="button" className="packages-installed-open" onClick={() => setConfigPackage({ title, filename: entry.name })} aria-label={`Configure ${title}`}>{title}</button>{record && <small>{entry.name}</small>}{record?.requiredBy.length ? <em className="packages-tag packages-tag-dependency">Dependency for {record.requiredBy.join(", ")}</em> : null}</span><small>{formatSize(entry.size)}</small>{record && <span className="packages-installed-actions"><button type="button" className="button button-quiet" aria-label={`Update ${record.title}`} disabled={busy || !gameVersion || record.requiredBy.length > 0} onClick={() => void chooseProject({ id: record.projectId, title: record.title, description: "", author: "", iconUrl: null, downloads: 0 })}>Update</button><button type="button" className="button button-quiet" aria-label={`Remove ${record.title}`} disabled={busy || !canInstall || (kind === "plugin" && record.requiredBy.length > 0)} onClick={() => void removePackage(record)}>Remove</button></span>}</li>;
   }
 
   useEffect(() => {
@@ -319,6 +322,8 @@ export function PackagesPanel({ profileId, remote, canInstall, kind, software, i
       .finally(() => { if (request === planRequest.current) setLoadingPlan(false); });
     return () => { planRequest.current += 1; };
   }, [profileId, kind, catalogKind, gameVersion, loader, selectedProject?.id, selectedVersionId]);
+
+  if (configPackage) return <section className="packages-panel" aria-label={`${configPackage.title} configuration`}><PackageConfigPanel profileId={profileId} remote={remote} canEdit={canInstall} kind={kind} title={configPackage.title} filename={configPackage.filename} onClose={() => setConfigPackage(null)} /></section>;
 
   return <section className="packages-panel" aria-label={kind === "mod" ? "Mods" : "Plugins"}>
     <header className="packages-header">
