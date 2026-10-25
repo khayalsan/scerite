@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "tsc -p tsconfig.bridge.json && tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri"
   },
@@ -39,6 +39,7 @@
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^6.0.2",
+    "discord.js": "14.27.0",
     "typescript": "~6.0.3",
     "vite": "^8.0.16"
   }
