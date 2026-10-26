@@ -1,10 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { ServerEnvironment, ServerProfile } from "../lib/serverProfiles";
 import { serverFiles } from "../lib/serverFiles";
 import { ServerIconControl } from "./ServerIconControl";
 import { velocityOnDemand } from "../lib/velocityOnDemand";
 import type { VelocityOnDemandStatus } from "../lib/velocityOnDemand";
+import { ConnectionMethodBanners } from "./ConnectionMethodPanel";
+import type { ConnectionMethod } from "./ConnectionMethodPanel";
 
 type Usage = { playersOnline: number | null; maxPlayers: number | null; cpuPercent: number | null; memoryBytes: number | null };
 
@@ -13,17 +15,12 @@ function memoryLabel(bytes: number | null | undefined): string {
   return `${(bytes / 1024 / 1024).toFixed(0)} MB`;
 }
 
-export function ServerOverviewPanel({ profile, environment, state }: { profile: ServerProfile; environment?: ServerEnvironment; state: "online" | "offline" | "checking" }) {
+export function ServerOverviewPanel({ profile, environment, state, onOpenConnectionMethod }: { profile: ServerProfile; environment?: ServerEnvironment; state: "online" | "offline" | "checking"; onOpenConnectionMethod: (method: ConnectionMethod) => void }) {
   const remote = profile.target.kind === "remote";
   const [port, setPort] = useState<number | null>(null);
   const [usage, setUsage] = useState<Usage | null>(null);
   const [detectedVersion, setDetectedVersion] = useState<string | null>(null);
   const [velocity, setVelocity] = useState<VelocityOnDemandStatus | null>(null);
-  const [publicPortDraft, setPublicPortDraft] = useState("");
-  const [reachability, setReachability] = useState<{ port: number; reachable: boolean } | null>(null);
-  const [reachabilityError, setReachabilityError] = useState<string | null>(null);
-  const [checkingReachability, setCheckingReachability] = useState(false);
-  const reachabilityRequest = useRef(0);
 
   useEffect(() => {
     setVelocity(null);
@@ -78,34 +75,6 @@ export function ServerOverviewPanel({ profile, environment, state }: { profile: 
   const software = profile.installedSoftware ? profile.installedSoftware[0].toUpperCase() + profile.installedSoftware.slice(1) : "Unknown";
   const players = state === "offline" ? "0" : usage?.playersOnline == null ? "Unavailable" : `${usage.playersOnline} / ${usage.maxPlayers ?? "?"}`;
 
-  useEffect(() => {
-    reachabilityRequest.current += 1;
-    setPublicPortDraft(publicPort === null ? "" : String(publicPort));
-    setReachability(null);
-    setReachabilityError(null);
-    setCheckingReachability(false);
-  }, [profile.id, publicPort]);
-
-  async function checkReachability() {
-    const checkPort = Number(publicPortDraft);
-    if (!Number.isInteger(checkPort) || checkPort < 1 || checkPort > 65535) {
-      setReachabilityError("Enter a port between 1 and 65535.");
-      return;
-    }
-    const request = ++reachabilityRequest.current;
-    setCheckingReachability(true);
-    setReachability(null);
-    setReachabilityError(null);
-    try {
-      const reachable = await invoke<boolean>(remote ? "check_remote_public_port" : "check_local_public_port", remote ? { profileId: profile.id, port: checkPort } : { port: checkPort });
-      if (request === reachabilityRequest.current) setReachability({ port: checkPort, reachable });
-    } catch (reason) {
-      if (request === reachabilityRequest.current) setReachabilityError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      if (request === reachabilityRequest.current) setCheckingReachability(false);
-    }
-  }
-
   return <section className="server-overview" aria-label="Server overview">
     <header><h2>Server</h2><p>Current status and setup</p></header>
     <dl className="server-overview-details">
@@ -117,18 +86,7 @@ export function ServerOverviewPanel({ profile, environment, state }: { profile: 
       <div><dt>CPU</dt><dd>{state === "online" && usage?.cpuPercent != null ? `${usage.cpuPercent.toFixed(1)}%` : state === "offline" ? "0%" : "Unavailable"}</dd></div>
       <div><dt>RAM</dt><dd>{state === "offline" ? "0 MB" : memoryLabel(usage?.memoryBytes)}</dd></div>
     </dl>
-    <section className="server-reachability" aria-labelledby="server-reachability-title">
-      <h3 id="server-reachability-title">Public port check</h3>
-      <p>Check whether this {remote ? "remote host's" : "computer's"} public IP accepts TCP connections on a port.</p>
-      <div className="server-reachability-actions">
-        <label htmlFor="server-public-port">Port</label>
-        <input id="server-public-port" type="number" min="1" max="65535" value={publicPortDraft} onChange={(event) => { reachabilityRequest.current += 1; setPublicPortDraft(event.currentTarget.value); setReachability(null); setReachabilityError(null); setCheckingReachability(false); }} />
-        <button className="button button-secondary" type="button" disabled={checkingReachability} onClick={() => void checkReachability()}>{checkingReachability ? "Checking…" : "Check"}</button>
-      </div>
-      {reachability && <p role="status" className={reachability.reachable ? "server-reachability-success" : "server-reachability-failure"}>Port {reachability.port} is {reachability.reachable ? "reachable" : "not reachable"} from the public checker.</p>}
-      {reachabilityError && <p className="form-error" role="alert">{reachabilityError}</p>}
-      <small>A reachable TCP port does not confirm Minecraft is accepting players.</small>
-    </section>
+    <ConnectionMethodBanners onSelect={onOpenConnectionMethod} />
     <ServerIconControl key={profile.id} profileId={profile.id} remote={remote} running={state !== "offline"} />
   </section>;
 }
