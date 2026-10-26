@@ -6,6 +6,7 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 ### Added
 
+- The Server tab offers Direct, Tailscale, and Playit connection guides as equal choices. Opening one shows connection subtabs beneath Server until you leave that section; the public port check is in Direct.
 - The Server tab can check whether a chosen TCP port is publicly reachable. Remote checks run from the server host, and the result identifies what the check does and does not verify.
 - The Worlds tab can import a ZIP into a new named world folder on local or remote servers without replacing an existing world.
 - Server settings can set Java's active processor count for thread sizing; leaving it blank uses all cores available to the host.
