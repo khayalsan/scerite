@@ -121,13 +121,13 @@ export function ServerOverviewPanel({ profile, environment, state }: { profile: 
       <h3 id="server-reachability-title">Public port check</h3>
       <p>Check whether this {remote ? "remote host's" : "computer's"} public IP accepts TCP connections on a port.</p>
       <div className="server-reachability-actions">
-        <label htmlFor="server-public-port">Public port</label>
+        <label htmlFor="server-public-port">Port</label>
         <input id="server-public-port" type="number" min="1" max="65535" value={publicPortDraft} onChange={(event) => { reachabilityRequest.current += 1; setPublicPortDraft(event.currentTarget.value); setReachability(null); setReachabilityError(null); setCheckingReachability(false); }} />
-        <button className="button button-secondary" type="button" disabled={checkingReachability} onClick={() => void checkReachability()}>{checkingReachability ? "Checking…" : "Check port"}</button>
+        <button className="button button-secondary" type="button" disabled={checkingReachability} onClick={() => void checkReachability()}>{checkingReachability ? "Checking…" : "Check"}</button>
       </div>
       {reachability && <p role="status" className={reachability.reachable ? "server-reachability-success" : "server-reachability-failure"}>Port {reachability.port} is {reachability.reachable ? "reachable" : "not reachable"} from the public checker.</p>}
       {reachabilityError && <p className="form-error" role="alert">{reachabilityError}</p>}
-      <small>The checker tests the public IP this {remote ? "remote host" : "computer"} uses for outgoing requests. This may differ from the address players use. A reachable TCP port does not confirm Minecraft is accepting players.</small>
+      <small>A reachable TCP port does not confirm Minecraft is accepting players.</small>
     </section>
     <ServerIconControl key={profile.id} profileId={profile.id} remote={remote} running={state !== "offline"} />
   </section>;
