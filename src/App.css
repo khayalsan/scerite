@@ -1064,6 +1064,20 @@
 .logs-chat-toggle .property-switch { transform: scale(.82); transform-origin: right center; }
 .logs-header h2 { margin: 0 0 4px; font-size: 20px; }
 .logs-header p { margin: 0; color: var(--app-muted); font-size: 13px; }
+.logs-problems { border: 1px solid var(--app-line); border-radius: 9px; background: var(--app-ground); }
+.logs-problems summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px; cursor: pointer; font-size: 16px; font-weight: 600; list-style: none; }
+.logs-problems summary::-webkit-details-marker { display: none; }
+.logs-problems summary:focus-visible { outline: 3px solid var(--app-accent); outline-offset: -3px; }
+.logs-problems summary svg { transition: transform .15s ease; }
+.logs-problems:not([open]) summary svg { transform: rotate(-90deg); }
+.logs-problems-count { color: var(--app-muted); }
+.logs-problems-content { display: grid; gap: 10px; max-height: 220px; overflow-y: auto; padding: 0 12px 12px; }
+.logs-problems-content > p { margin: 0; color: var(--app-muted); font-size: 12px; }
+.logs-problem { border: 1px solid var(--app-line); border-radius: 8px; overflow: hidden; }
+.logs-problem-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 10px; color: var(--destructive); background: var(--danger-surface); }
+.logs-problem-heading .button { flex: none; }
+.logs-problem ul { margin: 0; padding: 8px 12px 8px 30px; color: var(--app-muted); font-size: 13px; }
+.logs-problem li + li { margin-top: 4px; }
 .logs-layout { display: grid; min-height: 0; flex: 1 1 auto; grid-template-columns: minmax(155px, 210px) minmax(0, 1fr); gap: 12px; }
 .logs-list { display: flex; min-height: 0; flex-direction: column; gap: 4px; overflow-y: auto; }
 .logs-item { min-height: 36px; padding: 7px 10px; border: 0; border-radius: 8px; color: var(--app-muted); background: transparent; cursor: pointer; font: inherit; text-align: left; overflow-wrap: anywhere; }
@@ -1073,6 +1087,7 @@
 .logs-reader-heading { display: flex; justify-content: space-between; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--app-line); }
 .logs-reader-heading span { color: var(--app-muted); font-size: 12px; }
 .logs-reader pre { min-height: 0; flex: 1 1 auto; margin: 0; padding: 14px; overflow: auto; font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.logs-highlighted-line { background: var(--app-accent-soft); }
 @media (max-width: 640px) { .logs-header { flex-wrap: wrap; } .logs-layout { grid-template-columns: 1fr; grid-template-rows: minmax(80px, 140px) minmax(0, 1fr); } }
 
 .server-detail-shell .server-tab-empty {

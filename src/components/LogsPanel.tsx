@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { ChevronDown } from "lucide-react";
 import { serverFiles } from "../lib/serverFiles";
 import { serverLogs } from "../lib/serverLogs";
 import type { ServerLogSnapshot } from "../lib/serverLogs";
@@ -6,6 +7,7 @@ import { displayCache } from "../lib/displayCache";
 import type { CachedLogs } from "../lib/displayCache";
 import { SearchField } from "./SearchField";
 import { ConsoleLogLine, isChatConsoleLine, plainConsoleLine } from "./ConsoleLogLine";
+import { detectLogProblems } from "../lib/logProblems";
 
 interface LogsPanelProps {
   profileId: string;
@@ -28,6 +30,9 @@ export function LogsPanel({ profileId, remote, running }: LogsPanelProps) {
   const [revision, setRevision] = useState(0);
   const [showingCached, setShowingCached] = useState(false);
   const cachedLogsRef = useRef<CachedLogs>({ names: [], latest: null });
+  const readerRef = useRef<HTMLPreElement>(null);
+  const [highlightedLine, setHighlightedLine] = useState<number | null>(null);
+  const [jumpRevision, setJumpRevision] = useState(0);
 
   function saveCache(next: Partial<CachedLogs>) {
     cachedLogsRef.current = { ...cachedLogsRef.current, ...next };
@@ -90,9 +95,23 @@ export function LogsPanel({ profileId, remote, running }: LogsPanelProps) {
   }, [profileId, remote, running, selected, revision]);
 
   const normalizedSearch = search.trim().toLowerCase();
+  const problems = snapshot ? detectLogProblems(snapshot.text) : [];
   const visibleLines = snapshot ? snapshot.text.split(/\r?\n/)
-    .filter((line) => !chatOnly || isChatConsoleLine(line))
-    .filter((line) => !normalizedSearch || plainConsoleLine(line).toLowerCase().includes(normalizedSearch)) : [];
+    .map((line, index) => ({ line, number: index + 1 }))
+    .filter(({ line }) => !chatOnly || isChatConsoleLine(line))
+    .filter(({ line }) => !normalizedSearch || plainConsoleLine(line).toLowerCase().includes(normalizedSearch)) : [];
+
+  useEffect(() => {
+    if (highlightedLine === null) return;
+    readerRef.current?.querySelector(`[data-log-line="${highlightedLine}"]`)?.scrollIntoView({ block: "center" });
+  }, [highlightedLine, jumpRevision, chatOnly, search, snapshot]);
+
+  function jumpToLine(line: number) {
+    setSearch("");
+    setChatOnly(false);
+    setHighlightedLine(line);
+    setJumpRevision((value) => value + 1);
+  }
 
   return <div className="logs-panel">
     <header className="logs-header">
@@ -104,6 +123,16 @@ export function LogsPanel({ profileId, remote, running }: LogsPanelProps) {
     </header>
     <SearchField id="logs-search" label="Search selected log" placeholder="Find matching log lines" value={search} onChange={setSearch} />
     {error && <p className="notice notice-error" role="alert">{error}</p>}
+    {problems.length > 0 && <details className="logs-problems" open>
+      <summary><span>Detected problems <span className="logs-problems-count">{problems.length}</span></span><ChevronDown size={18} aria-hidden="true" /></summary>
+      <div className="logs-problems-content">
+        {problems.map((problem) => <article className="logs-problem" key={problem.key}>
+          <div className="logs-problem-heading"><strong>{problem.title}</strong><button className="button button-quiet" type="button" onClick={() => jumpToLine(problem.line)}>Line {problem.line}</button></div>
+          <ul>{problem.suggestions.map((suggestion) => <li key={suggestion}>{suggestion}</li>)}</ul>
+        </article>)}
+        {snapshot?.truncated && <p>Suggestions are based on the loaded portion of this log.</p>}
+      </div>
+    </details>}
     {loading ? <p className="state-message">Loading logs…</p> : names.length === 0 ? <p className="state-message">No server logs are available yet.</p> :
       <div className="logs-layout">
         <nav className="logs-list" aria-label="Available logs">
@@ -111,7 +140,7 @@ export function LogsPanel({ profileId, remote, running }: LogsPanelProps) {
         </nav>
         <section className="logs-reader" aria-label={selected ? `${selected} contents` : "Log contents"}>
           <div className="logs-reader-heading"><strong>{selected}</strong><span>{showingCached ? "Cached · updating…" : normalizedSearch && snapshot ? `${visibleLines.length} matching lines${snapshot.truncated ? " · last 256 KB" : ""}` : snapshot?.truncated ? "Showing the last 256 KB" : ""}</span></div>
-          <pre>{snapshot ? visibleLines.length ? visibleLines.map((line, index) => <ConsoleLogLine key={index} line={line} trailingNewline={index < visibleLines.length - 1} />) : chatOnly ? "No chat messages found in this log." : normalizedSearch ? "No matching lines in this log." : "" : "Loading log…"}</pre>
+          <pre ref={readerRef}>{snapshot ? visibleLines.length ? visibleLines.map(({ line, number }, index) => <span key={number} data-log-line={number} className={highlightedLine === number ? "logs-highlighted-line" : undefined}><ConsoleLogLine line={line} trailingNewline={index < visibleLines.length - 1} /></span>) : chatOnly ? "No chat messages found in this log." : normalizedSearch ? "No matching lines in this log." : "" : "Loading log…"}</pre>
         </section>
       </div>}
   </div>;
