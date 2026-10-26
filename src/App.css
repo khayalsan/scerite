@@ -2178,6 +2178,9 @@
 .worlds-gamerule { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 8px; min-width: 0; padding: 12px; border: 1px solid var(--app-line); border-radius: 9px; background: var(--app-paper); }
 .worlds-gamerule label { grid-column: 1 / -1; min-width: 0; overflow-wrap: anywhere; font-size: 12px; }
 .worlds-gamerule .button { white-space: nowrap; }
+.worlds-gamerule-boolean { display: flex; align-items: center; justify-content: space-between; min-height: 58px; }
+.worlds-gamerule-boolean > span { min-width: 0; overflow-wrap: anywhere; font-size: 12px; }
+.worlds-gamerule-boolean .property-switch { margin-left: 12px; }
 @media (max-width: 680px) {
   .worlds-generation-fields, .worlds-gamerule-grid { grid-template-columns: 1fr; }
 }

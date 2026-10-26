@@ -34,6 +34,11 @@ function validRuleValue(value: string) {
     (!/^-?\d/.test(value) || (Number.isSafeInteger(Number(value)) && Math.abs(Number(value)) <= 2147483647));
 }
 
+function ruleLabel(name: string) {
+  const words = name.replace(/^minecraft:/, "").replace(/([a-z\d])([A-Z])/g, "$1 $2").replace(/[_-]+/g, " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
 const worldTypes = [
   { value: "minecraft:normal", label: "Default" },
   { value: "minecraft:flat", label: "Superflat" },
@@ -269,11 +274,13 @@ export function WorldsPanel({ profileId, remote, canEdit, running, backupRevisio
     finally { setBusy(null); }
   }
 
-  async function applyRule(name: string) {
-    const value = ruleValues[name]?.trim() ?? "";
+  async function applyRule(name: string, changedValue?: string) {
+    const value = changedValue ?? ruleValues[name]?.trim() ?? "";
     if (!selectedWorld || !/^(?:[A-Za-z0-9_]{1,64}|[a-z0-9_.-]+:[a-z0-9_/.-]+)$/.test(name) || !validRuleValue(value)) {
       setError("Enter a true/false value or a whole number for this gamerule."); return;
     }
+    const previousValue = ruleValues[name] ?? settings?.gamerules.find((rule) => rule.name === name)?.value ?? "";
+    if (changedValue !== undefined) setRuleValues((current) => ({ ...current, [name]: changedValue }));
     setBusy(name); setError(null); setMessage(null);
     try {
       if (running) {
@@ -286,7 +293,10 @@ export function WorldsPanel({ profileId, remote, canEdit, running, backupRevisio
         setSettings((current) => current && ({ ...current, gamerules: current.gamerules.map((rule) => rule.name === name ? { ...rule, value } : rule) }));
         setMessage(`Saved gamerule ${name} ${value}. It will apply on the next server start.`);
       }
-    } catch (reason) { setError(`Could not update ${name}: ${errorText(reason)}`); }
+    } catch (reason) {
+      if (changedValue !== undefined) setRuleValues((current) => ({ ...current, [name]: previousValue }));
+      setError(`Could not update ${name}: ${errorText(reason)}`);
+    }
     finally { setBusy(null); }
   }
 
@@ -382,13 +392,28 @@ export function WorldsPanel({ profileId, remote, canEdit, running, backupRevisio
           <section className="worlds-gamerules" aria-label="Gamerules">
             <div><h4>Gamerules</h4><p>Running servers receive changes through the console. Stopped servers save changes for the next start.</p></div>
             <SearchField id="world-gamerule-search" label="Search gamerules" placeholder="Find a gamerule" value={ruleSearch} onChange={setRuleSearch} />
-            <div className="worlds-gamerule-grid">{settings.gamerules.filter((rule) => rule.name.toLowerCase().includes(ruleSearch.trim().toLowerCase())).map((rule) => <div className="worlds-gamerule" key={rule.name}>
-              <label htmlFor={`world-rule-${rule.name}`}>{rule.name}</label>
-              {rule.value === "true" || rule.value === "false" ? <select id={`world-rule-${rule.name}`} className="worlds-rule-input" value={ruleValues[rule.name] ?? rule.value} onChange={(event) => setRuleValues((current) => ({ ...current, [rule.name]: event.currentTarget.value }))} disabled={!canChangeRules || !!busy}><option value="true">true</option><option value="false">false</option></select> : <input id={`world-rule-${rule.name}`} className="worlds-rule-input" value={ruleValues[rule.name] ?? rule.value} onChange={(event) => setRuleValues((current) => ({ ...current, [rule.name]: event.currentTarget.value }))} disabled={!canChangeRules || !!busy} />}
-              <button className="button button-quiet" type="button" disabled={!canChangeRules || !!busy || (ruleValues[rule.name] ?? rule.value) === rule.value || !validRuleValue(ruleValues[rule.name] ?? "")} onClick={() => void applyRule(rule.name)}>{busy === rule.name ? (running ? "Sending…" : "Saving…") : "Apply"}</button>
-            </div>)}</div>
+            <div className="worlds-gamerule-grid">{settings.gamerules.filter((rule) => {
+              const query = ruleSearch.trim().toLowerCase();
+              return rule.name.toLowerCase().includes(query) || ruleLabel(rule.name).toLowerCase().includes(query);
+            }).map((rule) => {
+              const label = ruleLabel(rule.name);
+              const boolean = rule.value === "true" || rule.value === "false";
+              return <div className={`worlds-gamerule${boolean ? " worlds-gamerule-boolean" : ""}`} key={rule.name}>
+                {boolean ? <>
+                  <span title={rule.name}>{label}</span>
+                  <label className="property-switch" aria-label={label}>
+                    <input type="checkbox" role="switch" checked={(ruleValues[rule.name] ?? rule.value) === "true"} disabled={!canChangeRules || !!busy} onChange={(event) => void applyRule(rule.name, String(event.currentTarget.checked))} />
+                    <span aria-hidden="true" />
+                  </label>
+                </> : <>
+                  <label htmlFor={`world-rule-${rule.name}`} title={rule.name}>{label}</label>
+                  <input id={`world-rule-${rule.name}`} className="worlds-rule-input" value={ruleValues[rule.name] ?? rule.value} onChange={(event) => setRuleValues((current) => ({ ...current, [rule.name]: event.currentTarget.value }))} disabled={!canChangeRules || !!busy} />
+                  <button className="button button-quiet" type="button" disabled={!canChangeRules || !!busy || (ruleValues[rule.name] ?? rule.value) === rule.value || !validRuleValue(ruleValues[rule.name] ?? "")} onClick={() => void applyRule(rule.name)}>{busy === rule.name ? (running ? "Sending…" : "Saving…") : "Apply"}</button>
+                </>}
+              </div>;
+            })}</div>
             {settings.gamerules.length === 0 && <p className="state-message">No gamerules were found in the saved world data.</p>}
-            {settings.gamerules.length > 0 && !settings.gamerules.some((rule) => rule.name.toLowerCase().includes(ruleSearch.trim().toLowerCase())) && <p className="state-message">No matching gamerules.</p>}
+            {settings.gamerules.length > 0 && !settings.gamerules.some((rule) => rule.name.toLowerCase().includes(ruleSearch.trim().toLowerCase()) || ruleLabel(rule.name).toLowerCase().includes(ruleSearch.trim().toLowerCase())) && <p className="state-message">No matching gamerules.</p>}
           </section>
         </>}
       </div>}

@@ -26,6 +26,7 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 ### Changed
 
 - World generation offers a dropdown of world types, and gamerules use compact cards instead of full-width rows.
+- Boolean gamerules use switches, and rule names display as readable labels without the Minecraft namespace.
 - Velocity setup now shows each installation step, reports proxy startup errors, and avoids Velocity's sample forced-host entries. Its card aligns with the other server settings.
 
 ### Fixed
