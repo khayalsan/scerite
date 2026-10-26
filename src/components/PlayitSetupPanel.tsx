@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { ask } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 type PlayitStatus = { installed: boolean; enabled: boolean; running: boolean; claimed: boolean; claimUrl: string | null; claimSetupRunning: boolean; connected: boolean; needsAttention: boolean };
@@ -40,10 +41,17 @@ export function PlayitSetupPanel({ profileId, port }: { profileId: string; port:
   }
 
   async function remove() {
-    if (!window.confirm("Delete the Playit agent and saved account link from this remote environment? This disconnects Playit tunnels for every server here. Tunnels in your Playit account will remain.")) return;
     setBusy(true);
     setError(null);
-    try { setStatus(await invoke<PlayitStatus>("delete_playit_agent", { profileId })); }
+    try {
+      if (!await ask("Delete the Playit agent and saved account link from this remote environment? This disconnects Playit tunnels for every server here. Tunnels in your Playit account will remain.", {
+        title: "Delete Playit",
+        kind: "warning",
+        okLabel: "Delete Playit",
+        cancelLabel: "Cancel",
+      })) return;
+      setStatus(await invoke<PlayitStatus>("delete_playit_agent", { profileId }));
+    }
     catch (cause) { setError(String(cause)); }
     finally { setBusy(false); }
   }
