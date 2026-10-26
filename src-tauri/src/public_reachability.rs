@@ -3,6 +3,7 @@ use std::time::Duration;
 use serde::Deserialize;
 
 const CHECKER: &str = "https://pong.khayal.dev";
+pub(crate) const RATE_LIMIT_MESSAGE: &str = "The connectivity checker is rate limiting requests. Wait and try again.";
 
 #[derive(Deserialize)]
 struct CheckerResponse {
@@ -25,6 +26,11 @@ pub(crate) fn parse_response(bytes: &[u8]) -> Result<bool, String> {
         .map_err(|_| "The connectivity checker returned an invalid response.".into())
 }
 
+pub(crate) fn remote_rate_limited(stderr: &[u8]) -> bool {
+    let message = String::from_utf8_lossy(stderr);
+    message.contains("returned error: 429") || message.contains("ERROR 429:") || message.contains(" 429 Too Many Requests")
+}
+
 #[tauri::command]
 pub async fn check_local_public_port(port: u16) -> Result<bool, String> {
     let url = checker_url(port)?;
@@ -33,9 +39,12 @@ pub async fn check_local_public_port(port: u16) -> Result<bool, String> {
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|error| format!("Could not prepare the connectivity check: {error}"))?;
-    let mut response = client.get(url).send().await
-        .map_err(|error| format!("Could not reach the connectivity checker: {error}"))?
-        .error_for_status()
+    let response = client.get(url).send().await
+        .map_err(|error| format!("Could not reach the connectivity checker: {error}"))?;
+    if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return Err(RATE_LIMIT_MESSAGE.into());
+    }
+    let mut response = response.error_for_status()
         .map_err(|error| format!("The connectivity checker rejected the request: {error}"))?;
     let mut bytes = Vec::new();
     while let Some(chunk) = response.chunk().await
@@ -62,5 +71,12 @@ mod tests {
     #[test]
     fn rejects_zero_port() {
         assert!(checker_url(0).is_err());
+    }
+
+    #[test]
+    fn recognizes_remote_rate_limit() {
+        assert!(remote_rate_limited(b"curl: (22) The requested URL returned error: 429"));
+        assert!(remote_rate_limited(b"ERROR 429: Too Many Requests."));
+        assert!(!remote_rate_limited(b"curl: (7) Failed to connect"));
     }
 }

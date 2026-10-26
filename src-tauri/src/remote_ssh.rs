@@ -205,13 +205,16 @@ pub async fn check_remote_public_port(
     run_remote(profile, environment, Arc::clone(remote_sessions.inner()), move |session, _| {
         let url = shell_quote(&url);
         let command = format!(
-            "if command -v curl >/dev/null 2>&1; then curl --fail --silent --show-error --connect-timeout 3 --max-time 8 --proto '=https' --url {url}; elif command -v wget >/dev/null 2>&1; then wget -q -T 8 -O - {url}; else exit 127; fi"
+            "if command -v curl >/dev/null 2>&1; then curl --fail --silent --show-error --connect-timeout 3 --max-time 8 --proto '=https' --url {url}; elif command -v wget >/dev/null 2>&1; then wget -S -T 8 -O - {url}; else exit 127; fi"
         );
         let result = execute(session, &command)?;
         if result.exit_code == 127 {
             return Ok(Err("The remote host needs curl or wget to run the public port check.".into()));
         }
         if result.exit_code != 0 {
+            if public_reachability::remote_rate_limited(&result.stderr) {
+                return Ok(Err(public_reachability::RATE_LIMIT_MESSAGE.into()));
+            }
             return Ok(Err(remote_command_error("Could not reach the connectivity checker from the remote host", result)));
         }
         Ok(public_reachability::parse_response(&result.stdout))
