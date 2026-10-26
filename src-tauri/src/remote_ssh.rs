@@ -3283,6 +3283,50 @@ pub async fn read_remote_world_settings(
 }
 
 #[tauri::command]
+pub async fn update_remote_world_gamerule(
+    profile_id: Uuid, world_name: String, name: String, value: String,
+    profiles: State<'_, ServerProfileStore>, remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<(), String> {
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    run_remote(profile, environment, Arc::clone(remote_sessions.inner()), move |session, profile| {
+        match remote_is_running(session, profile)? {
+            Some(false) => {}
+            Some(true) => return Err("Stop the server before editing saved gamerules.".into()),
+            None => return Err("tmux is required to confirm the server is stopped.".into()),
+        }
+        let sftp = session.sftp().map_err(|error| format!("Could not open SFTP: {error}"))?;
+        let root = remote_root_with_sftp(&sftp, configured_remote_root(profile)?)?;
+        if remote_directory_has_java_process(session, &root)? {
+            return Err("A Java process is using the server folder. Stop it before editing gamerules.".into());
+        }
+        let world = checked_remote_world(&sftp, &root, &world_name)?;
+        let separate = format!("{world}/data/minecraft/game_rules.dat");
+        let (path, is_separate) = match sftp.lstat_optional(Path::new(&separate)) {
+            Ok(metadata) if metadata.file_type() == FileType::File => (separate, true),
+            Ok(_) => return Err("game_rules.dat is not a regular file.".into()),
+            Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile => (format!("{world}/level.dat"), false),
+            Err(error) => return Err(format!("Could not inspect game_rules.dat: {error}")),
+        };
+        reject_remote_symlink_path(&sftp, &root, &path)?;
+        canonical_inside(&sftp, &root, &path)?;
+        let metadata = sftp.lstat(Path::new(&path))?;
+        if metadata.file_type() != FileType::File || metadata.size.is_some_and(|size| size > world_management::MAX_LEVEL_BYTES) {
+            return Err("World data is not a regular file under 16 MB.".into());
+        }
+        let bytes = sftp.read_prefix(Path::new(&path), world_management::MAX_LEVEL_BYTES as usize + 1)?;
+        if bytes.len() as u64 > world_management::MAX_LEVEL_BYTES { return Err("World data is too large to edit.".into()); }
+        let updated = world_management::updated_gamerule_file(&bytes, is_separate, &name, &value)?;
+        let temporary = format!("{path}.{}.tmp", Uuid::new_v4().simple());
+        sftp.write_file_exclusive(Path::new(&temporary), &updated)?;
+        if let Err(error) = sftp.posix_rename(Path::new(&temporary), Path::new(&path)) {
+            let _ = sftp.unlink(Path::new(&temporary));
+            return Err(format!("Could not save world data: {error}"));
+        }
+        Ok(())
+    }).await
+}
+
+#[tauri::command]
 pub async fn list_remote_world_backups(
     app: AppHandle, profile_id: Uuid,
     profiles: State<'_, ServerProfileStore>, remote_sessions: State<'_, Arc<RemoteSessionManager>>,

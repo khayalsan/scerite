@@ -34,6 +34,14 @@ function validRuleValue(value: string) {
     (!/^-?\d/.test(value) || (Number.isSafeInteger(Number(value)) && Math.abs(Number(value)) <= 2147483647));
 }
 
+const worldTypes = [
+  { value: "minecraft:normal", label: "Default" },
+  { value: "minecraft:flat", label: "Superflat" },
+  { value: "minecraft:large_biomes", label: "Large biomes" },
+  { value: "minecraft:amplified", label: "Amplified" },
+  { value: "minecraft:single_biome_surface", label: "Single biome" },
+];
+
 export function WorldsPanel({ profileId, remote, canEdit, running, backupRevision }: WorldsPanelProps) {
   const [worlds, setWorlds] = useState<ServerFileEntry[]>([]);
   const [backups, setBackups] = useState<WorldBackup[]>([]);
@@ -83,7 +91,7 @@ export function WorldsPanel({ profileId, remote, canEdit, running, backupRevisio
       if (active) {
         setActiveWorldName(worldName(properties));
         setSeed(property(properties, "level-seed"));
-        setLevelType(property(properties, "level-type") || "minecraft:normal");
+        setLevelType(property(properties, "level-type").replace(/\\:/g, ":") || "minecraft:normal");
         setStructures(property(properties, "generate-structures") !== "false");
       }
     })().catch((reason: unknown) => { if (active) setError(errorText(reason)); })
@@ -263,14 +271,21 @@ export function WorldsPanel({ profileId, remote, canEdit, running, backupRevisio
 
   async function applyRule(name: string) {
     const value = ruleValues[name]?.trim() ?? "";
-    if (!running || !/^(?:[A-Za-z0-9_]{1,64}|[a-z0-9_.-]+:[a-z0-9_/.-]+)$/.test(name) || !validRuleValue(value)) {
+    if (!selectedWorld || !/^(?:[A-Za-z0-9_]{1,64}|[a-z0-9_.-]+:[a-z0-9_/.-]+)$/.test(name) || !validRuleValue(value)) {
       setError("Enter a true/false value or a whole number for this gamerule."); return;
     }
     setBusy(name); setError(null); setMessage(null);
     try {
-      if (remote) await serverSessions.sendRemoteInput(profileId, `gamerule ${name} ${value}`);
-      else await serverSessions.sendInput(profileId, `gamerule ${name} ${value}`);
-      setMessage(`Sent gamerule ${name} ${value}. Check the console for the result; refresh after Minecraft saves the world.`);
+      if (running) {
+        if (selectedWorld !== activeWorldName) throw new Error("Select the active world to change a running server's gamerules.");
+        if (remote) await serverSessions.sendRemoteInput(profileId, `gamerule ${name} ${value}`);
+        else await serverSessions.sendInput(profileId, `gamerule ${name} ${value}`);
+        setMessage(`Sent gamerule ${name} ${value}. Check the console for the result; refresh after Minecraft saves the world.`);
+      } else {
+        await serverWorlds.updateRule(remote, profileId, selectedWorld, name, value);
+        setSettings((current) => current && ({ ...current, gamerules: current.gamerules.map((rule) => rule.name === name ? { ...rule, value } : rule) }));
+        setMessage(`Saved gamerule ${name} ${value}. It will apply on the next server start.`);
+      }
     } catch (reason) { setError(`Could not update ${name}: ${errorText(reason)}`); }
     finally { setBusy(null); }
   }
@@ -301,6 +316,7 @@ export function WorldsPanel({ profileId, remote, canEdit, running, backupRevisio
   }
 
   const parent = directory?.slice(0, directory.lastIndexOf("/")) ?? "";
+  const canChangeRules = running ? selectedWorld === activeWorldName : canEdit;
   const backupGroups = [...new Set(backups.map((backup) => backup.name))]
     .map((name) => ({ name, entries: backups.filter((backup) => backup.name === name) }));
 
@@ -353,7 +369,10 @@ export function WorldsPanel({ profileId, remote, canEdit, running, backupRevisio
           <div><h4>Generate again</h4><p>These settings apply on the next server start. The current world and any matching Nether and End folders are preserved on the server.</p></div>
           <div className="worlds-generation-fields">
             <label>New seed<input value={seed} maxLength={128} onChange={(event) => setSeed(event.currentTarget.value)} disabled={!canEdit || !!busy} placeholder="Leave blank for a random seed" /></label>
-            <label>World type<input value={levelType} maxLength={128} onChange={(event) => setLevelType(event.currentTarget.value)} disabled={!canEdit || !!busy} /></label>
+            <label>World type<select value={levelType} onChange={(event) => setLevelType(event.currentTarget.value)} disabled={!canEdit || !!busy}>
+              {!worldTypes.some((type) => type.value === levelType) && <option value={levelType}>{levelType} (current)</option>}
+              {worldTypes.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}
+            </select></label>
             <label className="worlds-checkbox"><input type="checkbox" checked={structures} onChange={(event) => setStructures(event.currentTarget.checked)} disabled={!canEdit || !!busy} /> Generate structures</label>
           </div>
           <button className="button button-primary" type="button" disabled={!canEdit || !!busy} onClick={() => void regenerateWorld()}><RotateCcw size={15} aria-hidden="true" /> {busy === "regenerate" ? "Preparing…" : "Generate again"}</button>
@@ -361,13 +380,13 @@ export function WorldsPanel({ profileId, remote, canEdit, running, backupRevisio
         {settingsLoading ? <p className="state-message">Reading world settings…</p> : settingsError ? <p className="files-error">Could not read world settings: {settingsError}</p> : settings && <>
           <div className="worlds-seed"><span>Current world seed</span><strong>{settings.actualSeed ?? "Unavailable"}</strong></div>
           <section className="worlds-gamerules" aria-label="Gamerules">
-            <div><h4>Gamerules</h4><p>Rules and values come from the last saved world data. Send changes to a running active world.</p></div>
+            <div><h4>Gamerules</h4><p>Running servers receive changes through the console. Stopped servers save changes for the next start.</p></div>
             <SearchField id="world-gamerule-search" label="Search gamerules" placeholder="Find a gamerule" value={ruleSearch} onChange={setRuleSearch} />
-            {settings.gamerules.filter((rule) => rule.name.toLowerCase().includes(ruleSearch.trim().toLowerCase())).map((rule) => <div className="worlds-gamerule" key={rule.name}>
+            <div className="worlds-gamerule-grid">{settings.gamerules.filter((rule) => rule.name.toLowerCase().includes(ruleSearch.trim().toLowerCase())).map((rule) => <div className="worlds-gamerule" key={rule.name}>
               <label htmlFor={`world-rule-${rule.name}`}>{rule.name}</label>
-              {rule.value === "true" || rule.value === "false" ? <select id={`world-rule-${rule.name}`} className="worlds-rule-input" value={ruleValues[rule.name] ?? rule.value} onChange={(event) => setRuleValues((current) => ({ ...current, [rule.name]: event.currentTarget.value }))} disabled={!running || selectedWorld !== activeWorldName || !!busy}><option value="true">true</option><option value="false">false</option></select> : <input id={`world-rule-${rule.name}`} className="worlds-rule-input" value={ruleValues[rule.name] ?? rule.value} onChange={(event) => setRuleValues((current) => ({ ...current, [rule.name]: event.currentTarget.value }))} disabled={!running || selectedWorld !== activeWorldName || !!busy} />}
-              <button className="button button-quiet" type="button" disabled={!running || selectedWorld !== activeWorldName || !!busy || ruleValues[rule.name] === rule.value || !validRuleValue(ruleValues[rule.name] ?? "")} onClick={() => void applyRule(rule.name)}>{busy === rule.name ? "Sending…" : "Apply"}</button>
-            </div>)}
+              {rule.value === "true" || rule.value === "false" ? <select id={`world-rule-${rule.name}`} className="worlds-rule-input" value={ruleValues[rule.name] ?? rule.value} onChange={(event) => setRuleValues((current) => ({ ...current, [rule.name]: event.currentTarget.value }))} disabled={!canChangeRules || !!busy}><option value="true">true</option><option value="false">false</option></select> : <input id={`world-rule-${rule.name}`} className="worlds-rule-input" value={ruleValues[rule.name] ?? rule.value} onChange={(event) => setRuleValues((current) => ({ ...current, [rule.name]: event.currentTarget.value }))} disabled={!canChangeRules || !!busy} />}
+              <button className="button button-quiet" type="button" disabled={!canChangeRules || !!busy || (ruleValues[rule.name] ?? rule.value) === rule.value || !validRuleValue(ruleValues[rule.name] ?? "")} onClick={() => void applyRule(rule.name)}>{busy === rule.name ? (running ? "Sending…" : "Saving…") : "Apply"}</button>
+            </div>)}</div>
             {settings.gamerules.length === 0 && <p className="state-message">No gamerules were found in the saved world data.</p>}
             {settings.gamerules.length > 0 && !settings.gamerules.some((rule) => rule.name.toLowerCase().includes(ruleSearch.trim().toLowerCase())) && <p className="state-message">No matching gamerules.</p>}
           </section>

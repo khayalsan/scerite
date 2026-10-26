@@ -18,6 +18,8 @@ export const serverWorlds = {
     invoke<void>("delete_world_zip_backup", { profileId, worldName: backup.name, backupPath: backup.path }),
   settings: (remote: boolean, profileId: string, worldName: string) =>
     invoke<WorldSettings>(`read_${remote ? "remote" : "local"}_world_settings`, { profileId, worldName }),
+  updateRule: (remote: boolean, profileId: string, worldName: string, name: string, value: string) =>
+    invoke<void>(`update_${remote ? "remote" : "local"}_world_gamerule`, { profileId, worldName, name, value }),
   backups: (remote: boolean, profileId: string) =>
     invoke<WorldBackup[]>(`list_${remote ? "remote" : "local"}_world_backups`, { profileId }),
   restore: (remote: boolean, profileId: string, backup: WorldBackup) =>
