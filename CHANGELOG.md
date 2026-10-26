@@ -28,10 +28,13 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 ### Changed
 
+- World generation offers a dropdown of world types, and gamerules use compact cards instead of full-width rows.
+- Boolean gamerules use switches, and rule names display as readable labels without the Minecraft namespace.
 - Velocity setup now shows each installation step, reports proxy startup errors, and avoids Velocity's sample forced-host entries. Its card aligns with the other server settings.
 
 ### Fixed
 
+- Fabric worlds with separately saved gamerules show their rules. Gamerules can also be changed while the server is stopped; those changes take effect on the next start.
 - Long server navigation menus and the Server and Install tabs now scroll within the window.
 - Discord chat messages are sent to the Minecraft console in one tmux operation. A brief failed console check is retried, and failed deliveries are logged with the Discord message ID.
 - Discord messages appear in vanilla Minecraft without the automatic `[Server]` prefix by using a plain `tellraw` text component.

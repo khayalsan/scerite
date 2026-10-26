@@ -1,13 +1,13 @@
 use std::{
     collections::{BTreeMap, HashMap},
     fs::{self, File},
-    io::{self, Read},
+    io::{self, Read, Write},
     path::{Component, Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use fastnbt::Value;
-use flate2::read::GzDecoder;
+use flate2::{read::GzDecoder, write::GzEncoder, Compression};
 use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 use uuid::Uuid;
@@ -136,12 +136,13 @@ pub(crate) fn decode_separate_rules(bytes: &[u8]) -> Result<Vec<WorldRule>, Stri
     }
     let root: HashMap<String, Value> = fastnbt::from_bytes(&decoded)
         .map_err(|error| format!("Could not decode game_rules.dat: {error}"))?;
-    let rules = root.get("data").and_then(|value| match value {
-        Value::Compound(data) => data.get("gamerules"),
-        _ => None,
-    });
-    let Some(Value::Compound(rules)) = rules else {
-        return Err("game_rules.dat does not contain gamerules.".into());
+    let Some(Value::Compound(data)) = root.get("data") else {
+        return Err("game_rules.dat does not contain world data.".into());
+    };
+    let rules = match data.get("gamerules") {
+        Some(Value::Compound(rules)) => rules,
+        Some(_) => return Err("game_rules.dat contains invalid gamerules.".into()),
+        None => data,
     };
     let mut result = Vec::new();
     for (name, value) in rules {
@@ -154,6 +155,108 @@ pub(crate) fn decode_separate_rules(bytes: &[u8]) -> Result<Vec<WorldRule>, Stri
     }
     result.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(result)
+}
+
+pub(crate) fn updated_gamerule_file(bytes: &[u8], separate: bool, name: &str, value: &str) -> Result<Vec<u8>, String> {
+    let mut decoded = Vec::new();
+    GzDecoder::new(bytes).take(MAX_LEVEL_BYTES + 1).read_to_end(&mut decoded)
+        .map_err(|error| format!("Could not read world data: {error}"))?;
+    if decoded.len() as u64 > MAX_LEVEL_BYTES { return Err("World data is too large to edit.".into()); }
+    let mut root: HashMap<String, Value> = fastnbt::from_bytes(&decoded)
+        .map_err(|error| format!("Could not decode world data: {error}"))?;
+    let root_key = if separate { "data" } else { "Data" };
+    let Some(Value::Compound(data)) = root.get_mut(root_key) else { return Err("World data is missing.".into()); };
+    let rules = if separate {
+        match data.get_mut("gamerules") {
+            Some(Value::Compound(rules)) => rules,
+            Some(_) => return Err("Saved gamerules are invalid.".into()),
+            None => data,
+        }
+    } else {
+        let key = if data.contains_key("game_rules") { "game_rules" } else { "GameRules" };
+        let Some(Value::Compound(rules)) = data.get_mut(key) else {
+            return Err("Saved gamerules are missing.".into());
+        };
+        rules
+    };
+    let current = rules.get_mut(name).ok_or("This gamerule is not present in the saved world.")?;
+    *current = match current {
+        Value::Byte(_) => Value::Byte(match value { "true" => 1, "false" => 0, _ => return Err("This gamerule requires true or false.".into()) }),
+        Value::Int(_) => Value::Int(value.parse::<i32>().map_err(|_| "This gamerule requires a whole number.".to_owned())?),
+        Value::String(previous) if previous == "true" || previous == "false" => {
+            if value != "true" && value != "false" { return Err("This gamerule requires true or false.".into()); }
+            Value::String(value.to_owned())
+        }
+        Value::String(_) => {
+            value.parse::<i32>().map_err(|_| "This gamerule requires a whole number.".to_owned())?;
+            Value::String(value.to_owned())
+        }
+        _ => return Err("This gamerule's saved value cannot be edited.".into()),
+    };
+    let nbt = fastnbt::to_bytes(&root).map_err(|error| format!("Could not encode world data: {error}"))?;
+    let mut gzip = GzEncoder::new(Vec::new(), Compression::default());
+    gzip.write_all(&nbt).map_err(|error| format!("Could not compress world data: {error}"))?;
+    gzip.finish().map_err(|error| format!("Could not finish world data: {error}"))
+}
+
+#[cfg(test)]
+mod gamerule_tests {
+    use super::*;
+    use flate2::{write::GzEncoder, Compression};
+    use std::io::Write;
+
+    fn game_rules_file(data: Value) -> Vec<u8> {
+        let nbt = fastnbt::to_bytes(&HashMap::from([("data", data)])).unwrap();
+        let mut gzip = GzEncoder::new(Vec::new(), Compression::default());
+        gzip.write_all(&nbt).unwrap();
+        gzip.finish().unwrap()
+    }
+
+    #[test]
+    fn reads_direct_and_nested_saved_gamerules() {
+        let rules = HashMap::from([
+            ("minecraft:keep_inventory".to_owned(), Value::Byte(1)),
+            ("minecraft:random_tick_speed".to_owned(), Value::Int(3)),
+        ]);
+        for data in [Value::Compound(rules.clone()), Value::Compound(HashMap::from([("gamerules".to_owned(), Value::Compound(rules.clone()))]))] {
+            let decoded = decode_separate_rules(&game_rules_file(data)).unwrap();
+            assert_eq!(decoded.len(), 2);
+            assert_eq!(decoded[0].name, "minecraft:keep_inventory");
+            assert_eq!(decoded[0].value, "true");
+            assert_eq!(decoded[1].name, "minecraft:random_tick_speed");
+            assert_eq!(decoded[1].value, "3");
+        }
+    }
+
+    #[test]
+    fn updates_one_direct_rule_and_preserves_other_data() {
+        let bytes = game_rules_file(Value::Compound(HashMap::from([
+            ("minecraft:keep_inventory".to_owned(), Value::Byte(1)),
+            ("minecraft:random_tick_speed".to_owned(), Value::Int(3)),
+        ])));
+        let updated = updated_gamerule_file(&bytes, true, "minecraft:keep_inventory", "false").unwrap();
+        let rules = decode_separate_rules(&updated).unwrap();
+        assert_eq!(rules.iter().find(|rule| rule.name == "minecraft:keep_inventory").unwrap().value, "false");
+        assert_eq!(rules.iter().find(|rule| rule.name == "minecraft:random_tick_speed").unwrap().value, "3");
+        assert!(updated_gamerule_file(&bytes, true, "minecraft:keep_inventory", "4").is_err());
+    }
+
+    #[test]
+    fn updates_legacy_level_rule_without_changing_seed() {
+        let data = Value::Compound(HashMap::from([
+            ("RandomSeed".to_owned(), Value::Long(42)),
+            ("GameRules".to_owned(), Value::Compound(HashMap::from([
+                ("keepInventory".to_owned(), Value::String("false".to_owned())),
+            ]))),
+        ]));
+        let nbt = fastnbt::to_bytes(&HashMap::from([("Data", data)])).unwrap();
+        let mut gzip = GzEncoder::new(Vec::new(), Compression::default());
+        gzip.write_all(&nbt).unwrap();
+        let updated = updated_gamerule_file(&gzip.finish().unwrap(), false, "keepInventory", "true").unwrap();
+        let settings = decode_settings(&updated).unwrap();
+        assert_eq!(settings.actual_seed.as_deref(), Some("42"));
+        assert_eq!(settings.gamerules[0].value, "true");
+    }
 }
 
 pub(crate) fn checked_local_world(root: &Path, name: &str) -> Result<PathBuf, String> {
@@ -192,6 +295,41 @@ pub fn read_local_world_settings(
         settings.gamerules = decode_separate_rules(&fs::read(separate).map_err(|error| format!("Could not read game_rules.dat: {error}"))?)?;
     }
     Ok(settings)
+}
+
+#[tauri::command]
+pub fn update_local_world_gamerule(
+    profile_id: Uuid, world_name: String, name: String, value: String,
+    profiles: State<'_, ServerProfileStore>, manager: State<'_, LocalSessionManager>,
+) -> Result<(), String> {
+    require_stopped(profile_id, &manager)?;
+    let root = local_server_root(profile_id, &profiles)?;
+    let world = checked_local_world(&root, &world_name)?;
+    let separate = world.join("data/minecraft/game_rules.dat");
+    let (path, is_separate) = if fs::symlink_metadata(&separate).is_ok_and(|metadata| metadata.file_type().is_file()) {
+        (resolve_existing(&root, &format!("{world_name}/data/minecraft/game_rules.dat"))?, true)
+    } else {
+        (resolve_existing(&root, &format!("{world_name}/level.dat"))?, false)
+    };
+    if fs::metadata(&path).map_err(|error| error.to_string())?.len() > MAX_LEVEL_BYTES {
+        return Err("World data is too large to edit.".into());
+    }
+    let bytes = fs::read(&path).map_err(|error| format!("Could not read world data: {error}"))?;
+    let updated = updated_gamerule_file(&bytes, is_separate, &name, &value)?;
+    let temporary = path.with_extension(format!("scerite-{}.tmp", Uuid::new_v4()));
+    let backup = path.with_extension(format!("scerite-{}.bak", Uuid::new_v4()));
+    fs::write(&temporary, updated).map_err(|error| format!("Could not prepare world data: {error}"))?;
+    if let Err(error) = fs::rename(&path, &backup) {
+        let _ = fs::remove_file(&temporary);
+        return Err(format!("Could not preserve world data: {error}"));
+    }
+    if let Err(error) = fs::rename(&temporary, &path) {
+        let recovery = fs::rename(&backup, &path).err().map(|reason| format!(" Recovery failed: {reason}. Backup: {}", backup.display())).unwrap_or_default();
+        let _ = fs::remove_file(&temporary);
+        return Err(format!("Could not save world data: {error}.{recovery}"));
+    }
+    let _ = fs::remove_file(backup);
+    Ok(())
 }
 
 fn require_stopped(

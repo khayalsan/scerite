@@ -2204,16 +2204,18 @@
 .worlds-generate p, .worlds-gamerules p { margin: 0; color: var(--app-muted); font-size: 12px; }
 .worlds-generation-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .worlds-generation-fields label { display: grid; gap: 6px; color: var(--app-ink); font-size: 12px; font-weight: 600; }
-.worlds-generation-fields input:not([type="checkbox"]), .worlds-rule-input { width: 100%; min-width: 0; padding: 9px 11px; border: 1px solid var(--app-line); border-radius: 7px; color: var(--app-ink); background: var(--app-paper); font: inherit; }
+.worlds-generation-fields input:not([type="checkbox"]), .worlds-generation-fields select, .worlds-rule-input { width: 100%; min-width: 0; padding: 9px 11px; border: 1px solid var(--app-line); border-radius: 7px; color: var(--app-ink); background: var(--app-paper); font: inherit; }
 .worlds-generation-fields .worlds-checkbox { display: flex; align-items: center; gap: 7px; font-weight: 400; }
 .worlds-generate > .button { justify-self: start; display: inline-flex; align-items: center; gap: 7px; }
-.worlds-gamerule { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(100px, 170px) auto; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--app-line); }
-.worlds-gamerule label { min-width: 0; overflow-wrap: anywhere; font-size: 12px; }
-.worlds-gamerule .button { justify-self: end; }
+.worlds-gamerule-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.worlds-gamerule { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 8px; min-width: 0; padding: 12px; border: 1px solid var(--app-line); border-radius: 9px; background: var(--app-paper); }
+.worlds-gamerule label { grid-column: 1 / -1; min-width: 0; overflow-wrap: anywhere; font-size: 12px; }
+.worlds-gamerule .button { white-space: nowrap; }
+.worlds-gamerule-boolean { display: flex; align-items: center; justify-content: space-between; min-height: 58px; }
+.worlds-gamerule-boolean > span { min-width: 0; overflow-wrap: anywhere; font-size: 12px; }
+.worlds-gamerule-boolean .property-switch { margin-left: 12px; }
 @media (max-width: 680px) {
-  .worlds-generation-fields { grid-template-columns: 1fr; }
-  .worlds-gamerule { grid-template-columns: minmax(0, 1fr) auto; }
-  .worlds-gamerule label { grid-column: 1 / -1; }
+  .worlds-generation-fields, .worlds-gamerule-grid { grid-template-columns: 1fr; }
 }
 
 .worlds-browser { min-width: 0; }
