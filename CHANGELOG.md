@@ -7,6 +7,7 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 ### Added
 
 - The Playit connection page can install and run an opt-in agent on remote Linux environments, guide account claiming, and show the tunnel's local target port.
+- Playit can be turned off while keeping its files and account link, or deleted from the remote environment after confirmation.
 - The Server tab offers Direct, Tailscale, and Playit connection guides as equal choices. Opening one shows connection subtabs beneath Server until you leave that section; the public port check is in Direct.
 - The Server tab can check whether a chosen TCP port is publicly reachable. Remote checks run from the server host, and the result identifies what the check does and does not verify.
 - The Worlds tab can import a ZIP into a new named world folder on local or remote servers without replacing an existing world.

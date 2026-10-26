@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
-type PlayitStatus = { enabled: boolean; running: boolean; claimed: boolean; claimUrl: string | null; claimSetupRunning: boolean; connected: boolean; needsAttention: boolean };
+type PlayitStatus = { installed: boolean; enabled: boolean; running: boolean; claimed: boolean; claimUrl: string | null; claimSetupRunning: boolean; connected: boolean; needsAttention: boolean };
 
 export function PlayitSetupPanel({ profileId, port }: { profileId: string; port: number | null }) {
   const [status, setStatus] = useState<PlayitStatus | null>(null);
@@ -39,6 +39,15 @@ export function PlayitSetupPanel({ profileId, port }: { profileId: string; port:
     finally { setBusy(false); }
   }
 
+  async function remove() {
+    if (!window.confirm("Delete the Playit agent and saved account link from this remote environment? This disconnects Playit tunnels for every server here. Tunnels in your Playit account will remain.")) return;
+    setBusy(true);
+    setError(null);
+    try { setStatus(await invoke<PlayitStatus>("delete_playit_agent", { profileId })); }
+    catch (cause) { setError(String(cause)); }
+    finally { setBusy(false); }
+  }
+
   async function openClaim() {
     if (!status?.claimUrl || !/^https:\/\/playit\.gg\/claim\/[a-fA-F0-9]{1,32}$/.test(status.claimUrl)) return;
     try { await openUrl(status.claimUrl); }
@@ -57,6 +66,7 @@ export function PlayitSetupPanel({ profileId, port }: { profileId: string; port:
         {busy ? "Working…" : !status?.enabled ? "Set up" : !status.running ? "Start again" : !status.claimed && !status.claimSetupRunning ? "Retry claim" : "Turn off"}
       </button>
     </div>
+    {status?.installed && !status.enabled && <p role="status">Agent turned off. Its files and account link are still saved.</p>}
     {status?.enabled && <>
       <p role="status">{!status.running ? "Agent stopped." : status.needsAttention ? "Playit needs attention. Check the agent on the remote host." : status.connected ? "Agent connected to Playit." : status.claimed ? "Account linked. Connecting to Playit…" : "Agent running. Claim it in your Playit account."}</p>
       {status.claimUrl && <button className="button button-secondary" type="button" onClick={() => void openClaim()}>Claim agent</button>}
@@ -66,6 +76,7 @@ export function PlayitSetupPanel({ profileId, port }: { profileId: string; port:
       {status.claimed && <button className="button button-secondary" type="button" onClick={() => void openTunnelSetup()}>Create tunnel</button>}
       <button className="button button-quiet" type="button" disabled={busy} onClick={() => void invoke<PlayitStatus>("playit_agent_status", { profileId }).then(setStatus).catch((cause: unknown) => setError(String(cause)))}>Refresh status</button>
     </>}
+    {status?.installed && <button className="button button-danger-quiet" type="button" disabled={busy} onClick={() => void remove()}>Delete Playit files</button>}
     {error && <p className="form-error" role="alert">{error}</p>}
   </section>;
 }

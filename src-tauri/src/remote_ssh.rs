@@ -4078,6 +4078,7 @@ const PLAYIT_VERSION: &str = "v1.0.10";
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlayitAgentStatus {
+    installed: bool,
     enabled: bool,
     running: bool,
     claimed: bool,
@@ -4113,12 +4114,24 @@ fn playit_claim_url(output: &str) -> Option<String> {
     (!code.is_empty()).then(|| format!("{prefix}{code}"))
 }
 
+fn playit_file_exists(sftp: &RemoteSftp, path: &str) -> Result<bool, String> {
+    match sftp.lstat_optional(Path::new(path)) {
+        Ok(attrs) if attrs.file_type() == FileType::File => Ok(true),
+        Ok(_) => Err("A Playit runtime file is not a regular file.".into()),
+        Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile => Ok(false),
+        Err(error) => Err(format!("Could not inspect Playit runtime: {error}")),
+    }
+}
+
 fn playit_status_on_host(session: &RemoteConnection, sftp: &RemoteSftp, environment: &ServerEnvironment) -> Result<PlayitAgentStatus, String> {
     let root = playit_runtime(sftp, environment)?;
     let marker = format!("{root}/enabled");
-    let enabled = bridge_file_exists(sftp, &marker)?;
-    if !enabled { return Ok(PlayitAgentStatus { enabled: false, running: false, claimed: false, claim_url: None, claim_setup_running: false, connected: false, needs_attention: false }); }
-    let claimed = bridge_file_exists(sftp, &format!("{root}/playit.toml"))?;
+    let enabled = playit_file_exists(sftp, &marker)?;
+    let installed = enabled || playit_file_exists(sftp, &format!("{root}/playit"))?
+        || playit_file_exists(sftp, &format!("{root}/playit-cli"))?
+        || playit_file_exists(sftp, &format!("{root}/playit.toml"))?;
+    if !enabled { return Ok(PlayitAgentStatus { installed, enabled: false, running: false, claimed: false, claim_url: None, claim_setup_running: false, connected: false, needs_attention: false }); }
+    let claimed = playit_file_exists(sftp, &format!("{root}/playit.toml"))?;
     let (agent_session, setup_session) = playit_session_names(environment.id);
     let pane = execute(session, &format!("tmux display-message -p -t {} '#{{pane_dead}}' 2>/dev/null", shell_quote(&agent_session)))?;
     let running = pane.exit_code == 0 && String::from_utf8_lossy(&pane.stdout).trim() == "0";
@@ -4132,7 +4145,7 @@ fn playit_status_on_host(session: &RemoteConnection, sftp: &RemoteSftp, environm
         let capture = execute(session, &format!("tmux capture-pane -p -t {} -S -60 2>/dev/null", shell_quote(&setup_session)))?;
         if capture.exit_code == 0 { playit_claim_url(&String::from_utf8_lossy(&capture.stdout)) } else { None }
     } else { None };
-    Ok(PlayitAgentStatus { enabled, running, claimed, claim_url, claim_setup_running, connected, needs_attention })
+    Ok(PlayitAgentStatus { installed, enabled, running, claimed, claim_url, claim_setup_running, connected, needs_attention })
 }
 
 fn playit_start_tmux(session: &RemoteConnection, name: &str, root: &str, command: &str) -> Result<(), String> {
@@ -4272,14 +4285,23 @@ pub async fn enable_playit_agent(
             shell_quote(&format!("{root}/playit.toml")), shell_quote(&socket)))?;
         let ready = execute(session, &format!("for i in 1 2 3 4 5 6 7 8 9 10; do test -S {} && exit 0; sleep 1; done; exit 1", shell_quote(&socket)))?;
         if ready.exit_code != 0 { return Err("Playit did not start. Check the agent session on the remote host.".into()); }
-        if !bridge_file_exists(&sftp, &format!("{root}/playit.toml"))? {
+        if !playit_file_exists(&sftp, &format!("{root}/playit.toml"))? {
             playit_start_tmux(session, &setup_session, &root, &format!("exec ./playit-cli --socket-path {} --stdout setup", shell_quote(&socket)))?;
         }
-        if !bridge_file_exists(&sftp, &format!("{root}/enabled"))? {
+        if !playit_file_exists(&sftp, &format!("{root}/enabled"))? {
             sftp.write_file_exclusive(Path::new(&format!("{root}/enabled")), b"enabled\n")?;
         }
         playit_status_on_host(session, &sftp, &environment)
     }).await
+}
+
+fn playit_stop_sessions(session: &RemoteConnection, environment_id: Uuid) -> Result<(), String> {
+    let (agent_session, setup_session) = playit_session_names(environment_id);
+    for name in [setup_session, agent_session] {
+        let result = execute(session, &format!("tmux kill-session -t {} 2>/dev/null", shell_quote(&name)))?;
+        if result.exit_code != 0 && result.exit_code != 1 { return Err(remote_command_error("Could not stop Playit", result)); }
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -4291,13 +4313,31 @@ pub async fn disable_playit_agent(
     run_remote(profile, environment.clone(), Arc::clone(remote_sessions.inner()), move |session, _| {
         let sftp = session.sftp()?;
         let root = playit_runtime(&sftp, &environment)?;
-        let (agent_session, setup_session) = playit_session_names(environment.id);
-        for name in [setup_session, agent_session] {
-            let result = execute(session, &format!("tmux kill-session -t {} 2>/dev/null", shell_quote(&name)))?;
-            if result.exit_code != 0 && result.exit_code != 1 { return Err(remote_command_error("Could not stop Playit", result)); }
-        }
+        playit_stop_sessions(session, environment.id)?;
         let marker = format!("{root}/enabled");
-        if bridge_file_exists(&sftp, &marker)? { sftp.unlink(Path::new(&marker))?; }
+        if playit_file_exists(&sftp, &marker)? { sftp.unlink(Path::new(&marker))?; }
+        playit_status_on_host(session, &sftp, &environment)
+    }).await
+}
+
+#[tauri::command]
+pub async fn delete_playit_agent(
+    profile_id: Uuid, profiles: State<'_, ServerProfileStore>,
+    remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<PlayitAgentStatus, String> {
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    run_remote(profile, environment.clone(), Arc::clone(remote_sessions.inner()), move |session, _| {
+        let sftp = session.sftp()?;
+        let root = playit_runtime(&sftp, &environment)?;
+        playit_stop_sessions(session, environment.id)?;
+        for name in ["enabled", "playit", "playit-cli", "playit.toml"] {
+            let path = format!("{root}/{name}");
+            if playit_file_exists(&sftp, &path)? { sftp.unlink(Path::new(&path))?; }
+        }
+        let socket = format!("{root}/agent.sock");
+        let cleanup = execute(session, &format!("if test -S {}; then rm -- {} || exit 1; fi; rmdir -- {} 2>/dev/null || true",
+            shell_quote(&socket), shell_quote(&socket), shell_quote(&root)))?;
+        if cleanup.exit_code != 0 { return Err(remote_command_error("Could not clean up Playit", cleanup)); }
         playit_status_on_host(session, &sftp, &environment)
     }).await
 }

@@ -146,6 +146,7 @@ pub fn run() {
             remote_ssh::playit_agent_status,
             remote_ssh::enable_playit_agent,
             remote_ssh::disable_playit_agent,
+            remote_ssh::delete_playit_agent,
             remote_ssh::regenerate_remote_world,
             remote_ssh::read_remote_server_file,
             remote_ssh::read_remote_server_log_start,
