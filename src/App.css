@@ -1064,10 +1064,15 @@
 .logs-chat-toggle .property-switch { transform: scale(.82); transform-origin: right center; }
 .logs-header h2 { margin: 0 0 4px; font-size: 20px; }
 .logs-header p { margin: 0; color: var(--app-muted); font-size: 13px; }
-.logs-problems { display: grid; gap: 10px; max-height: 240px; overflow-y: auto; padding: 12px; border: 1px solid var(--app-line); border-radius: 9px; background: var(--app-ground); }
-.logs-problems h3 { margin: 0; font-size: 16px; }
-.logs-problems h3 span { color: var(--app-muted); }
-.logs-problems > p { margin: 0; color: var(--app-muted); font-size: 12px; }
+.logs-problems { border: 1px solid var(--app-line); border-radius: 9px; background: var(--app-ground); }
+.logs-problems summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px; cursor: pointer; font-size: 16px; font-weight: 600; list-style: none; }
+.logs-problems summary::-webkit-details-marker { display: none; }
+.logs-problems summary:focus-visible { outline: 3px solid var(--app-accent); outline-offset: -3px; }
+.logs-problems summary svg { transition: transform .15s ease; }
+.logs-problems:not([open]) summary svg { transform: rotate(-90deg); }
+.logs-problems-count { color: var(--app-muted); }
+.logs-problems-content { display: grid; gap: 10px; max-height: 220px; overflow-y: auto; padding: 0 12px 12px; }
+.logs-problems-content > p { margin: 0; color: var(--app-muted); font-size: 12px; }
 .logs-problem { border: 1px solid var(--app-line); border-radius: 8px; overflow: hidden; }
 .logs-problem-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 10px; color: var(--destructive); background: var(--danger-surface); }
 .logs-problem-heading .button { flex: none; }
