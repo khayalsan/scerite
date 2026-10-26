@@ -6,6 +6,7 @@ Add release notes under **Unreleased** before merging a pull request into `main`
 
 ### Added
 
+- The Server tab can check whether a chosen TCP port is publicly reachable. Remote checks run from the server host, and the result identifies what the check does and does not verify.
 - The Worlds tab can import a ZIP into a new named world folder on local or remote servers without replacing an existing world.
 - Server settings can set Java's active processor count for thread sizing; leaving it blank uses all cores available to the host.
 - Remote Paper and Purpur servers can opt in to a managed Velocity proxy that starts the server when an authenticated player joins and stops it after a configurable idle delay. The proxy keeps the server's public address, multiplayer description, and icon; the backend listens only on the same host.
