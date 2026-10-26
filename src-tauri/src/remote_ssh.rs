@@ -4156,7 +4156,23 @@ fn playit_asset(arch: &str) -> Result<(&'static str, &'static str, &'static str)
 
 async fn playit_download(asset: &str, expected: &str) -> Result<Vec<u8>, String> {
     let url = format!("https://github.com/playit-cloud/playit-agent/releases/download/{PLAYIT_VERSION}/{asset}");
-    let mut response = crate::vanilla_install::client()?.get(url).send().await
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let client = reqwest::Client::builder()
+        .user_agent("Scerite (Playit agent installer)")
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            let url = attempt.url();
+            if attempt.previous().len() >= 5 {
+                return attempt.error("Playit download redirected too many times");
+            }
+            if url.scheme() == "https" && matches!(url.host_str(), Some("github.com" | "release-assets.githubusercontent.com")) {
+                attempt.follow()
+            } else {
+                attempt.error("Playit download redirected to an unexpected host")
+            }
+        }))
+        .build()
+        .map_err(|error| format!("Could not initialize Playit download: {error}"))?;
+    let mut response = client.get(url).send().await
         .map_err(|error| format!("Could not download Playit: {error}"))?
         .error_for_status().map_err(|error| format!("Playit download failed: {error}"))?;
     let mut bytes = Vec::new();
@@ -4288,11 +4304,25 @@ pub async fn disable_playit_agent(
 
 #[cfg(test)]
 mod playit_tests {
-    use super::playit_claim_url;
+    use super::{playit_claim_url, playit_download};
 
     #[test]
     fn extracts_only_the_claim_code_from_console_output() {
         assert_eq!(playit_claim_url("Open https://playit.gg/claim/abc123\r\nNext step"), Some("https://playit.gg/claim/abc123".into()));
         assert_eq!(playit_claim_url("https://playit.gg/account/agents"), None);
+    }
+
+    #[tokio::test]
+    #[ignore = "downloads an official Playit release asset"]
+    async fn follows_release_asset_redirect_and_verifies_checksum() {
+        for (asset, checksum) in [
+            ("playit-linux-amd64", "2df7d9f10227ab312b1ad341853db4e8a8243df5cfcdbae58713a4271711c339"),
+            ("playit-cli-linux-amd64", "6fd54d147ae1d3232b22c1c1f4aa3d13cf16d889e840ca2d3f90b4f50a2e7301"),
+            ("playit-linux-aarch64", "4c0db3e7b3a8158e249441c2f0b73f54e83429395890c7b1ca45fd7a6303d763"),
+            ("playit-cli-linux-aarch64", "b126b4164c03838598c8f33f209d76f6acf1c257d07900c0af2d461b9647099f"),
+        ] {
+            let bytes = playit_download(asset, checksum).await.unwrap();
+            assert!(bytes.starts_with(b"\x7fELF"), "{asset}");
+        }
     }
 }
