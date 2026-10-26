@@ -6,6 +6,7 @@ import type { LucideIcon } from "lucide-react";
 import type { ServerProfile } from "../lib/serverProfiles";
 import { serverFiles } from "../lib/serverFiles";
 import { velocityOnDemand } from "../lib/velocityOnDemand";
+import { PlayitSetupPanel } from "./PlayitSetupPanel";
 
 export type ConnectionMethod = "direct" | "tailscale" | "playit";
 
@@ -135,12 +136,13 @@ export function ConnectionMethodPanel({ profile, method, onBack }: { profile: Se
     </>}
 
     {method === "playit" && <>
+      {remote && <PlayitSetupPanel profileId={profile.id} port={port} />}
       <div className="connection-method-steps">
         <h3>Set up a public tunnel</h3>
         <ol>
-          <li>Install the Playit agent on the computer running this server.</li>
+          <li>{remote ? "Set up the agent above and claim it in your Playit account." : "Install the Playit agent on the computer running this server and claim it in your Playit account."}</li>
           <li>Create a Minecraft Java tunnel pointing to {port === null ? "the server's listening port" : `port ${port}`} on that computer.</li>
-          <li>Keep the agent running and share the address Playit assigns.</li>
+          <li>Share the address Playit assigns. Keep the agent running so players can connect.</li>
         </ol>
       </div>
       {portError && <p className="form-error" role="alert">{portError}</p>}

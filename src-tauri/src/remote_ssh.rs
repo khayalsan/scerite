@@ -43,6 +43,7 @@ use crate::terrain::{self, TerrainRequest, TerrainTile};
 use crate::server_files::validate_server_icon;
 use crate::world_management::{self, WorldBackup, WorldSettings};
 use crate::velocity_download;
+use sha2::{Digest, Sha256};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_FILE_BYTES: u64 = 1024 * 1024;
@@ -4070,4 +4071,228 @@ pub async fn regenerate_remote_world(
         }
         Ok(moved[0].1.clone())
     }).await
+}
+
+const PLAYIT_VERSION: &str = "v1.0.10";
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlayitAgentStatus {
+    enabled: bool,
+    running: bool,
+    claimed: bool,
+    claim_url: Option<String>,
+    claim_setup_running: bool,
+    connected: bool,
+    needs_attention: bool,
+}
+
+fn playit_runtime(sftp: &RemoteSftp, environment: &ServerEnvironment) -> Result<String, String> {
+    let root = remote_root_with_sftp(sftp, &environment.root_directory)?;
+    let runtimes = format!("{root}/runtimes");
+    let playit = format!("{runtimes}/playit");
+    for path in [&runtimes, &playit] {
+        match sftp.lstat_optional(Path::new(path)) {
+            Ok(attrs) if attrs.file_type() == FileType::Dir => {},
+            Ok(_) => return Err("A Playit runtime folder is not a regular directory.".into()),
+            Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile => break,
+            Err(error) => return Err(format!("Could not inspect Playit runtime: {error}")),
+        }
+    }
+    Ok(playit)
+}
+
+fn playit_session_names(environment_id: Uuid) -> (String, String) {
+    (format!("scerite-playit-{}", environment_id.simple()), format!("scerite-playit-setup-{}", environment_id.simple()))
+}
+
+fn playit_claim_url(output: &str) -> Option<String> {
+    let prefix = "https://playit.gg/claim/";
+    let start = output.rfind(prefix)?;
+    let code: String = output[start + prefix.len()..].chars().take_while(|c| c.is_ascii_hexdigit()).take(32).collect();
+    (!code.is_empty()).then(|| format!("{prefix}{code}"))
+}
+
+fn playit_status_on_host(session: &RemoteConnection, sftp: &RemoteSftp, environment: &ServerEnvironment) -> Result<PlayitAgentStatus, String> {
+    let root = playit_runtime(sftp, environment)?;
+    let marker = format!("{root}/enabled");
+    let enabled = bridge_file_exists(sftp, &marker)?;
+    if !enabled { return Ok(PlayitAgentStatus { enabled: false, running: false, claimed: false, claim_url: None, claim_setup_running: false, connected: false, needs_attention: false }); }
+    let claimed = bridge_file_exists(sftp, &format!("{root}/playit.toml"))?;
+    let (agent_session, setup_session) = playit_session_names(environment.id);
+    let pane = execute(session, &format!("tmux display-message -p -t {} '#{{pane_dead}}' 2>/dev/null", shell_quote(&agent_session)))?;
+    let running = pane.exit_code == 0 && String::from_utf8_lossy(&pane.stdout).trim() == "0";
+    let status = if running { execute(session, &format!("{} --socket-path {} status", shell_quote(&format!("{root}/playit-cli")), shell_quote(&format!("{root}/agent.sock"))))? } else { RemoteCommandOutput { stdout: Vec::new(), stderr: Vec::new(), exit_code: 1 } };
+    let phase = String::from_utf8_lossy(&status.stdout);
+    let connected = status.exit_code == 0 && phase.lines().any(|line| line.trim() == "Phase: running");
+    let needs_attention = status.exit_code == 0 && phase.lines().any(|line| matches!(line.trim(), "Phase: invalid secret" | "Phase: disabled over limit" | "Phase: error"));
+    let setup_pane = execute(session, &format!("tmux display-message -p -t {} '#{{pane_dead}}' 2>/dev/null", shell_quote(&setup_session)))?;
+    let claim_setup_running = setup_pane.exit_code == 0 && String::from_utf8_lossy(&setup_pane.stdout).trim() == "0";
+    let claim_url = if running && !claimed && claim_setup_running {
+        let capture = execute(session, &format!("tmux capture-pane -p -t {} -S -60 2>/dev/null", shell_quote(&setup_session)))?;
+        if capture.exit_code == 0 { playit_claim_url(&String::from_utf8_lossy(&capture.stdout)) } else { None }
+    } else { None };
+    Ok(PlayitAgentStatus { enabled, running, claimed, claim_url, claim_setup_running, connected, needs_attention })
+}
+
+fn playit_start_tmux(session: &RemoteConnection, name: &str, root: &str, command: &str) -> Result<(), String> {
+    let create = execute(session, &format!("tmux new-session -d -s {} -c {}", shell_quote(name), shell_quote(root)))?;
+    if create.exit_code != 0 { return Err(remote_command_error("Could not create the Playit session", create)); }
+    let remain = execute(session, &format!("tmux set-window-option -t {} remain-on-exit on", shell_quote(name)))?;
+    if remain.exit_code != 0 { return Err(remote_command_error("Could not keep the Playit session open", remain)); }
+    let launch = execute(session, &format!("tmux send-keys -t {} -l {} && tmux send-keys -t {} Enter",
+        shell_quote(name), shell_quote(command), shell_quote(name)))?;
+    if launch.exit_code != 0 { return Err(remote_command_error("Could not launch Playit", launch)); }
+    Ok(())
+}
+
+fn playit_asset(arch: &str) -> Result<(&'static str, &'static str, &'static str), String> {
+    match arch.trim() {
+        "x86_64" => Ok(("amd64", "2df7d9f10227ab312b1ad341853db4e8a8243df5cfcdbae58713a4271711c339", "6fd54d147ae1d3232b22c1c1f4aa3d13cf16d889e840ca2d3f90b4f50a2e7301")),
+        "aarch64" => Ok(("aarch64", "4c0db3e7b3a8158e249441c2f0b73f54e83429395890c7b1ca45fd7a6303d763", "b126b4164c03838598c8f33f209d76f6acf1c257d07900c0af2d461b9647099f")),
+        _ => Err("Playit setup currently supports x86-64 and ARM64 Linux hosts.".into()),
+    }
+}
+
+async fn playit_download(asset: &str, expected: &str) -> Result<Vec<u8>, String> {
+    let url = format!("https://github.com/playit-cloud/playit-agent/releases/download/{PLAYIT_VERSION}/{asset}");
+    let mut response = crate::vanilla_install::client()?.get(url).send().await
+        .map_err(|error| format!("Could not download Playit: {error}"))?
+        .error_for_status().map_err(|error| format!("Playit download failed: {error}"))?;
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|error| format!("Could not read Playit download: {error}"))? {
+        if bytes.len() + chunk.len() > 8 * 1024 * 1024 { return Err("Playit download exceeded 8 MB.".into()); }
+        bytes.extend_from_slice(&chunk);
+    }
+    if bytes.len() > 8 * 1024 * 1024 || format!("{:x}", Sha256::digest(&bytes)) != expected {
+        return Err("Playit download did not match the published SHA-256 checksum.".into());
+    }
+    Ok(bytes)
+}
+
+fn playit_binary_matches(session: &RemoteConnection, sftp: &RemoteSftp, path: &str, expected: &str) -> Result<bool, String> {
+    match sftp.lstat_optional(Path::new(path)) {
+        Ok(attrs) if attrs.file_type() == FileType::File => {
+            let hash = execute(session, &format!("sha256sum -- {}", shell_quote(path)))?;
+            Ok(remote_hash_matches(&hash, expected))
+        }
+        Ok(_) => return Err("A Playit runtime file is not a regular file.".into()),
+        Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile => Ok(false),
+        Err(error) => return Err(format!("Could not inspect Playit runtime: {error}")),
+    }
+}
+
+fn playit_install_binary(session: &RemoteConnection, sftp: &RemoteSftp, path: &str, bytes: Option<&[u8]>, expected: &str) -> Result<(), String> {
+    if !playit_binary_matches(session, sftp, path, expected)? {
+        let bytes = bytes.ok_or("Playit runtime changed during setup. Try again.")?;
+        if sftp.lstat_optional(Path::new(path)).is_ok() { sftp.unlink(Path::new(path))?; }
+        sftp.write_file_from_reader(Path::new(path), &mut std::io::Cursor::new(bytes))?;
+        if !playit_binary_matches(session, sftp, path, expected)? {
+            let _ = sftp.unlink(Path::new(path));
+            return Err("Uploaded Playit agent failed checksum verification.".into());
+        }
+    }
+    let chmod = execute(session, &format!("chmod 700 -- {}", shell_quote(path)))?;
+    if chmod.exit_code != 0 { return Err(remote_command_error("Could not make Playit executable", chmod)); }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn playit_agent_status(
+    profile_id: Uuid, profiles: State<'_, ServerProfileStore>,
+    remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<PlayitAgentStatus, String> {
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    run_remote(profile, environment.clone(), Arc::clone(remote_sessions.inner()), move |session, _| {
+        let sftp = session.sftp()?;
+        playit_status_on_host(session, &sftp, &environment)
+    }).await
+}
+
+#[tauri::command]
+pub async fn enable_playit_agent(
+    profile_id: Uuid, profiles: State<'_, ServerProfileStore>,
+    remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<PlayitAgentStatus, String> {
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    let sessions = Arc::clone(remote_sessions.inner());
+    let inspect_environment = environment.clone();
+    let (arch, needs_agent, needs_cli) = run_remote(profile.clone(), environment.clone(), Arc::clone(&sessions), move |session, _| {
+        let result = execute(session, "uname -m")?;
+        if result.exit_code != 0 { return Err(remote_command_error("Could not detect the remote architecture", result)); }
+        let machine = String::from_utf8_lossy(&result.stdout).trim().to_owned();
+        let (arch, agent_hash, cli_hash) = playit_asset(&machine)?;
+        let sftp = session.sftp()?;
+        let root = playit_runtime(&sftp, &inspect_environment)?;
+        Ok((arch, !playit_binary_matches(session, &sftp, &format!("{root}/playit"), agent_hash)?,
+            !playit_binary_matches(session, &sftp, &format!("{root}/playit-cli"), cli_hash)?))
+    }).await?;
+    let (arch, agent_hash, cli_hash) = playit_asset(&arch)?;
+    let agent = if needs_agent { Some(playit_download(&format!("playit-linux-{arch}"), agent_hash).await?) } else { None };
+    let cli = if needs_cli { Some(playit_download(&format!("playit-cli-linux-{arch}"), cli_hash).await?) } else { None };
+    run_remote(profile, environment.clone(), sessions, move |session, _| {
+        let sftp = session.sftp()?;
+        let environment_root = remote_root_with_sftp(&sftp, &environment.root_directory)?;
+        let root = ensure_remote_managed_dirs(session, &sftp, &environment_root, &["runtimes", "playit"])?;
+        let socket = format!("{root}/agent.sock");
+        if socket.len() > 100 { return Err("The configured Minecraft root is too long for a Playit socket path.".into()); }
+        let (agent_session, setup_session) = playit_session_names(environment.id);
+        let current = playit_status_on_host(session, &sftp, &environment)?;
+        if current.running {
+            if !current.claimed && !current.claim_setup_running {
+                let _ = execute(session, &format!("tmux kill-session -t {} 2>/dev/null", shell_quote(&setup_session)))?;
+                playit_start_tmux(session, &setup_session, &root, &format!("exec ./playit-cli --socket-path {} --stdout setup", shell_quote(&socket)))?;
+                return playit_status_on_host(session, &sftp, &environment);
+            }
+            return Ok(current);
+        }
+        playit_install_binary(session, &sftp, &format!("{root}/playit"), agent.as_deref(), agent_hash)?;
+        playit_install_binary(session, &sftp, &format!("{root}/playit-cli"), cli.as_deref(), cli_hash)?;
+        let _ = execute(session, &format!("tmux kill-session -t {} 2>/dev/null", shell_quote(&agent_session)))?;
+        let _ = execute(session, &format!("tmux kill-session -t {} 2>/dev/null", shell_quote(&setup_session)))?;
+        let stale_socket = execute(session, &format!("if test -S {}; then rm -- {}; fi", shell_quote(&socket), shell_quote(&socket)))?;
+        if stale_socket.exit_code != 0 { return Err(remote_command_error("Could not clear the old Playit socket", stale_socket)); }
+        playit_start_tmux(session, &agent_session, &root, &format!("umask 077; exec ./playit --secret-path {} --socket-path {}",
+            shell_quote(&format!("{root}/playit.toml")), shell_quote(&socket)))?;
+        let ready = execute(session, &format!("for i in 1 2 3 4 5 6 7 8 9 10; do test -S {} && exit 0; sleep 1; done; exit 1", shell_quote(&socket)))?;
+        if ready.exit_code != 0 { return Err("Playit did not start. Check the agent session on the remote host.".into()); }
+        if !bridge_file_exists(&sftp, &format!("{root}/playit.toml"))? {
+            playit_start_tmux(session, &setup_session, &root, &format!("exec ./playit-cli --socket-path {} --stdout setup", shell_quote(&socket)))?;
+        }
+        if !bridge_file_exists(&sftp, &format!("{root}/enabled"))? {
+            sftp.write_file_exclusive(Path::new(&format!("{root}/enabled")), b"enabled\n")?;
+        }
+        playit_status_on_host(session, &sftp, &environment)
+    }).await
+}
+
+#[tauri::command]
+pub async fn disable_playit_agent(
+    profile_id: Uuid, profiles: State<'_, ServerProfileStore>,
+    remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<PlayitAgentStatus, String> {
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    run_remote(profile, environment.clone(), Arc::clone(remote_sessions.inner()), move |session, _| {
+        let sftp = session.sftp()?;
+        let root = playit_runtime(&sftp, &environment)?;
+        let (agent_session, setup_session) = playit_session_names(environment.id);
+        for name in [setup_session, agent_session] {
+            let result = execute(session, &format!("tmux kill-session -t {} 2>/dev/null", shell_quote(&name)))?;
+            if result.exit_code != 0 && result.exit_code != 1 { return Err(remote_command_error("Could not stop Playit", result)); }
+        }
+        let marker = format!("{root}/enabled");
+        if bridge_file_exists(&sftp, &marker)? { sftp.unlink(Path::new(&marker))?; }
+        playit_status_on_host(session, &sftp, &environment)
+    }).await
+}
+
+#[cfg(test)]
+mod playit_tests {
+    use super::playit_claim_url;
+
+    #[test]
+    fn extracts_only_the_claim_code_from_console_output() {
+        assert_eq!(playit_claim_url("Open https://playit.gg/claim/abc123\r\nNext step"), Some("https://playit.gg/claim/abc123".into()));
+        assert_eq!(playit_claim_url("https://playit.gg/account/agents"), None);
+    }
 }
