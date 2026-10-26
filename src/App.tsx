@@ -15,6 +15,8 @@ import { ServerPropertiesPanel } from "./components/ServerPropertiesPanel";
 import { ServerInstallPanel } from "./components/ServerInstallPanel";
 import { PackagesPanel } from "./components/PackagesPanel";
 import { ServerOverviewPanel } from "./components/ServerOverviewPanel";
+import { ConnectionMethodPanel, connectionMethods } from "./components/ConnectionMethodPanel";
+import type { ConnectionMethod } from "./components/ConnectionMethodPanel";
 import { VelocityOnDemandPanel } from "./components/VelocityOnDemandPanel";
 import { ServerListIcon } from "./components/ServerListIcon";
 import { DisplayCacheSettings } from "./components/DisplayCacheSettings";
@@ -288,6 +290,7 @@ function App() {
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [isRemoving, setIsRemoving] = useState(false);
   const [activeServerTab, setActiveServerTab] = useState<ServerTab>("server");
+  const [activeConnectionMethod, setActiveConnectionMethod] = useState<ConnectionMethod | null>(null);
   const selectedProfile = profiles.find((profile) => profile.id === selectedProfileId);
   const [legacyPackageSupport, setLegacyPackageSupport] = useState<{ profileId: string; support: PackageSupport } | null>(null);
   const packageSupport = packageSupportForSoftware(selectedProfile?.installedSoftware)
@@ -317,6 +320,8 @@ function App() {
       setActiveServerTab("server");
     }
   }, [activeServerTab, packageSupport?.mods, packageSupport?.plugins, selectedProfile?.target.kind]);
+  useEffect(() => { if (activeServerTab !== "server") setActiveConnectionMethod(null); }, [activeServerTab]);
+  useEffect(() => { setActiveConnectionMethod(null); }, [selectedProfileId]);
   const visibleProfiles = !selectedProfileId && environmentFilterId
     ? profiles.filter((profile) => profile.target.kind === "remote" && profile.target.environmentId === environmentFilterId)
     : profiles;
@@ -1220,9 +1225,14 @@ function App() {
               </div>
             </section>
             <nav className="server-tab-list" aria-label="Server sections">
-              <button className={`server-tab${activeServerTab === "server" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "server" ? "page" : undefined} onClick={() => setActiveServerTab("server")}>
-                <Server size={16} aria-hidden="true" /> Server
-              </button>
+              <div className="server-tab-group">
+                <button className={`server-tab${activeServerTab === "server" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "server" && activeConnectionMethod === null ? "page" : undefined} onClick={() => { setActiveServerTab("server"); setActiveConnectionMethod(null); }}>
+                  <Server size={16} aria-hidden="true" /> Server
+                </button>
+                {activeServerTab === "server" && activeConnectionMethod !== null && <div className="server-method-subtabs" role="group" aria-label="Connection methods">
+                  {connectionMethods.map(({ id, title }) => <button key={id} className={`server-tab server-method-subtab${activeConnectionMethod === id ? " server-tab-active" : ""}`} type="button" aria-current={activeConnectionMethod === id ? "page" : undefined} onClick={() => setActiveConnectionMethod(id)}>{title}</button>)}
+                </div>}
+              </div>
               <button className={`server-tab${activeServerTab === "console" ? " server-tab-active" : ""}`} type="button" aria-current={activeServerTab === "console" ? "page" : undefined} onClick={() => { setActiveServerTab("console"); if (consoleProfileId !== selectedProfile.id) toggleConsole(selectedProfile); }}>
                 <Terminal size={16} aria-hidden="true" /> Console
               </button>
@@ -1545,8 +1555,10 @@ function App() {
                   {isDetailPage ? (
                     <div className="server-detail-content">
                       <div className="server-tab-content">
-                        <section className="server-tab-panel" hidden={activeServerTab !== "server"} aria-label="Server overview">
-                          {activeServerTab === "server" && <ServerOverviewPanel profile={profile} environment={target.kind === "remote" ? environments.find((item) => item.id === target.environmentId) : undefined} state={overviewState} />}
+                        <section className="server-tab-panel server-main-tab" hidden={activeServerTab !== "server"} aria-label={activeConnectionMethod ? "Connection setup" : "Server overview"}>
+                          {activeServerTab === "server" && (activeConnectionMethod === null
+                            ? <ServerOverviewPanel profile={profile} environment={target.kind === "remote" ? environments.find((item) => item.id === target.environmentId) : undefined} state={overviewState} onOpenConnectionMethod={setActiveConnectionMethod} />
+                            : <ConnectionMethodPanel key={`${profile.id}-${activeConnectionMethod}`} profile={profile} method={activeConnectionMethod} onBack={() => setActiveConnectionMethod(null)} />)}
                         </section>
                         <section className="server-tab-panel" hidden={activeServerTab !== "console"} aria-label="Server console">
                           {consoleProfileId === profile.id ? (

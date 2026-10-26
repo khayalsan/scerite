@@ -908,6 +908,10 @@
   text-align: left;
 }
 
+.server-tab-group { display: grid; gap: 4px; min-width: 0; }
+.server-method-subtabs { display: grid; gap: 2px; margin-left: 18px; padding-left: 9px; border-left: 1px solid var(--app-line); }
+.server-method-subtab { min-height: 34px; padding-left: 10px; font-size: 12px; }
+
 .server-tab:hover,
 .server-tab-active {
   color: var(--app-accent);
@@ -931,7 +935,7 @@
   flex-direction: column;
 }
 
-.server-detail-shell .server-tab-panel[aria-label="Server overview"]:not([hidden]),
+.server-detail-shell .server-main-tab:not([hidden]),
 .server-detail-shell .server-tab-panel[aria-label="Install Minecraft"]:not([hidden]) {
   min-height: 0;
   flex: 1 1 auto;
@@ -1117,6 +1121,34 @@
 .server-overview-details dd { margin: 0; overflow-wrap: anywhere; font-size: 15px; font-weight: 650; font-variant-numeric: tabular-nums; }
 .server-overview-status-online { color: var(--success, #74c69d); }
 .server-overview-status-offline { color: var(--app-muted); }
+.connection-methods { display: grid; gap: 12px; }
+.connection-methods h3 { margin: 0; font-size: 16px; }
+.connection-method-banners { display: grid; gap: 9px; }
+.connection-method-banner { display: grid; grid-template-columns: 28px minmax(0, 1fr) 18px; align-items: center; gap: 13px; width: 100%; min-height: 72px; padding: 13px 17px; border: 1px solid var(--app-line); border-radius: 10px; color: var(--app-ink); background: var(--app-ground); cursor: pointer; font: inherit; text-align: left; }
+.connection-method-banner:hover { border-color: var(--app-accent); background: var(--app-accent-soft); }
+.connection-method-banner:focus-visible, .connection-method-back:focus-visible { outline: 3px solid var(--app-accent); outline-offset: 2px; }
+.connection-method-banner > svg:first-child { color: var(--app-accent); }
+.connection-method-banner > svg:last-child { color: var(--app-muted); }
+.connection-method-banner > span { display: grid; gap: 3px; min-width: 0; }
+.connection-method-banner strong { font-size: 15px; }
+.connection-method-banner small { color: var(--app-muted); font-size: 12px; }
+.connection-method-page { display: grid; align-content: start; justify-items: start; gap: 22px; max-width: 780px; min-height: 100%; margin: 0 auto; padding: 24px; }
+.connection-method-page header h2 { margin: 0 0 5px; font-size: 22px; }
+.connection-method-page header p { margin: 0; color: var(--app-muted); font-size: 13px; }
+.connection-method-back { display: inline-flex; align-items: center; gap: 7px; min-height: 34px; padding: 0 8px; border: 0; border-radius: 7px; color: var(--app-muted); background: transparent; cursor: pointer; font: inherit; }
+.connection-method-back:hover { color: var(--app-accent); background: var(--app-accent-soft); }
+.connection-method-page .server-reachability, .connection-method-steps { width: 100%; }
+.connection-method-steps { padding-top: 18px; border-top: 1px solid var(--app-line); }
+.connection-method-steps h3 { margin: 0 0 10px; font-size: 16px; }
+.connection-method-steps ol { display: grid; gap: 10px; margin: 0; padding-left: 22px; color: var(--app-muted); font-size: 14px; line-height: 1.5; }
+.connection-method-page > .button { display: inline-flex; align-items: center; gap: 8px; }
+.playit-setup { display: grid; gap: 12px; width: 100%; padding: 18px; border: 1px solid var(--app-line); border-radius: 10px; background: var(--app-ground); }
+.playit-setup p { margin: 0; color: var(--app-muted); font-size: 13px; line-height: 1.5; }
+.playit-setup-heading { display: flex; align-items: start; justify-content: space-between; gap: 14px; }
+.playit-setup-heading h3 { margin: 0 0 4px; font-size: 16px; }
+.playit-setup > .button { justify-self: start; }
+.playit-setup code { color: var(--app-ink); }
+@media (max-width: 640px) { .playit-setup-heading { flex-direction: column; } }
 .server-reachability { padding: 18px; border: 1px solid var(--app-line); border-radius: 10px; background: var(--app-ground); }
 .server-reachability h3 { margin: 0 0 4px; font-size: 16px; }
 .server-reachability p { margin: 0; color: var(--app-muted); font-size: 13px; }
@@ -1136,6 +1168,7 @@
 .server-icon-control .form-error { margin-top: 10px; color: var(--danger, #ff8097); }
 .server-icon-control [role="status"] { margin-top: 10px; color: var(--success, #74c69d); }
 @media (max-width: 640px) { .server-overview { padding: 16px; } .server-overview-details > div { grid-template-columns: 95px minmax(0, 1fr); } }
+@media (max-width: 640px) { .connection-method-page { padding: 16px; } .connection-method-banner { padding: 12px; } }
 
 .install-panel {
   display: grid;
@@ -2430,6 +2463,9 @@
     padding-bottom: 5px;
     border-bottom: 1px solid var(--app-line);
   }
+
+  .server-tab-group { display: flex; flex: none; align-items: center; }
+  .server-method-subtabs { display: flex; flex: none; gap: 4px; margin-left: 0; padding-left: 5px; border-left: 1px solid var(--app-line); }
 
   .server-tab {
     flex: 0 0 auto;
