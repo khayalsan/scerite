@@ -14,6 +14,7 @@ mod modrinth;
 mod modpacks;
 mod server_overview;
 mod server_port;
+mod public_reachability;
 mod world_management;
 mod velocity_download;
 mod terrain;
@@ -115,6 +116,8 @@ pub fn run() {
             server_files::upload_local_server_icon,
             server_files::read_local_server_icon,
             remote_ssh::test_remote_connection,
+            public_reachability::check_local_public_port,
+            remote_ssh::check_remote_public_port,
             remote_ssh::test_remote_connection_draft,
             remote_ssh::discord_bridge_status,
             remote_ssh::enable_discord_bridge,

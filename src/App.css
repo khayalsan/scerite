@@ -1117,6 +1117,15 @@
 .server-overview-details dd { margin: 0; overflow-wrap: anywhere; font-size: 15px; font-weight: 650; font-variant-numeric: tabular-nums; }
 .server-overview-status-online { color: var(--success, #74c69d); }
 .server-overview-status-offline { color: var(--app-muted); }
+.server-reachability { padding: 18px; border: 1px solid var(--app-line); border-radius: 10px; background: var(--app-ground); }
+.server-reachability h3 { margin: 0 0 4px; font-size: 16px; }
+.server-reachability p { margin: 0; color: var(--app-muted); font-size: 13px; }
+.server-reachability-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 16px 0 10px; }
+.server-reachability-actions label { font-size: 13px; font-weight: 600; }
+.server-reachability-actions input { width: 110px; min-height: 40px; padding: 8px 10px; border: 1px solid var(--app-line); border-radius: 8px; color: var(--app-ink); background: var(--app-ground); font: inherit; }
+.server-reachability .server-reachability-success { color: var(--success, #74c69d); }
+.server-reachability .server-reachability-failure { color: var(--destructive); }
+.server-reachability small { display: block; margin-top: 10px; color: var(--app-muted); }
 .server-icon-control { margin-top: 20px; padding: 18px; border: 1px solid var(--app-line); border-radius: 10px; background: var(--app-ground); }
 .server-icon-control h3 { margin: 0 0 4px; font-size: 16px; }
 .server-icon-control p { margin: 0; color: var(--app-muted); font-size: 13px; }

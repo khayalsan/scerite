@@ -38,6 +38,7 @@ use crate::java_runtime::JavaPackage;
 use crate::server_logs::{self, ServerLogSnapshot};
 use crate::server_players::{self, PlayerData, PlayerRosterFiles};
 use crate::server_port;
+use crate::public_reachability;
 use crate::terrain::{self, TerrainRequest, TerrainTile};
 use crate::server_files::validate_server_icon;
 use crate::world_management::{self, WorldBackup, WorldSettings};
@@ -190,6 +191,34 @@ pub async fn test_remote_connection(
         |_, _| Ok(()),
     )
     .await
+}
+
+#[tauri::command]
+pub async fn check_remote_public_port(
+    profile_id: Uuid,
+    port: u16,
+    profiles: State<'_, ServerProfileStore>,
+    remote_sessions: State<'_, Arc<RemoteSessionManager>>,
+) -> Result<bool, String> {
+    let url = public_reachability::checker_url(port)?;
+    let (profile, environment) = require_remote_profile(&profiles, profile_id)?;
+    run_remote(profile, environment, Arc::clone(remote_sessions.inner()), move |session, _| {
+        let url = shell_quote(&url);
+        let command = format!(
+            "if command -v curl >/dev/null 2>&1; then curl --fail --silent --show-error --connect-timeout 3 --max-time 8 --proto '=https' --url {url}; elif command -v wget >/dev/null 2>&1; then wget -S -T 8 -O - {url}; else exit 127; fi"
+        );
+        let result = execute(session, &command)?;
+        if result.exit_code == 127 {
+            return Ok(Err("The remote host needs curl or wget to run the public port check.".into()));
+        }
+        if result.exit_code != 0 {
+            if public_reachability::remote_rate_limited(&result.stderr) {
+                return Ok(Err(public_reachability::RATE_LIMIT_MESSAGE.into()));
+            }
+            return Ok(Err(remote_command_error("Could not reach the connectivity checker from the remote host", result)));
+        }
+        Ok(public_reachability::parse_response(&result.stdout))
+    }).await?
 }
 
 #[tauri::command]
